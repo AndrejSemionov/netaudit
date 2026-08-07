@@ -71,9 +71,9 @@ def _take_snapshot(s: dict) -> None:
     """Один снимок connection tracking — идентичная логика check_mikrotik_sniffer,
     но пишет результат в traffic_history вместо возврата в отчёт."""
     if paramiko is None:
-        raise RuntimeError('paramiko не установлен')
+        raise RuntimeError('paramiko not installed')
     if not s['target_ip']:
-        raise RuntimeError('не указан target_ip')
+        raise RuntimeError('target_ip not specified')
 
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -88,7 +88,7 @@ def _take_snapshot(s: dict) -> None:
         client.close()
 
     if err.strip():
-        raise RuntimeError(f'роутер вернул ошибку: {err.strip()[:300]}')
+        raise RuntimeError(f'router returned an error: {err.strip()[:300]}')
 
     by_dst = defaultdict(lambda: {'connections': 0, 'protocols': set(), 'ports': set()})
     for line in out.splitlines():

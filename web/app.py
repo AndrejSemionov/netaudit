@@ -117,7 +117,7 @@ def api_estimate(req: RunRequest) -> dict:
 @app.post('/api/run')
 def api_run(req: RunRequest) -> dict:
     if not req.checks:
-        raise HTTPException(400, 'не выбрано ни одной проверки')
+        raise HTTPException(400, 'no checks selected')
     selected = [{'id': c.id, 'params': c.params} for c in req.checks]
     mode, est = timing.decide_mode(selected, force_async=req.force_async)
 
@@ -139,7 +139,7 @@ def api_status(task_id: str) -> dict:
     with _tasks_lock:
         task = _tasks.get(task_id)
     if task is None:
-        raise HTTPException(404, 'задача не найдена')
+        raise HTTPException(404, 'task not found')
     return task
 
 
@@ -153,7 +153,7 @@ def api_history() -> list[dict]:
 def api_report(id: int) -> dict:
     r = load_report(id)
     if r is None:
-        raise HTTPException(404, 'отчёт не найден')
+        raise HTTPException(404, 'report not found')
     return r
 
 
@@ -177,9 +177,9 @@ def api_analyze(req: AnalyzeRequest) -> dict:
     elif req.report_id is not None:
         report = load_report(req.report_id)
         if report is None:
-            raise HTTPException(404, 'отчёт не найден')
+            raise HTTPException(404, 'report not found')
     else:
-        raise HTTPException(400, 'нужен report или report_id')
+        raise HTTPException(400, 'report or report_id is required')
     return ai_analyze(report)
 
 
@@ -276,7 +276,7 @@ def api_reputation(list_type: str = '') -> list[dict]:
 @app.post('/api/reputation')
 def api_add_reputation(req: RepListRequest) -> dict:
     if req.list_type not in ('allow', 'block'):
-        raise HTTPException(400, 'list_type должен быть allow или block')
+        raise HTTPException(400, 'list_type must be allow or block')
     rid = storage.rep_add(req.pattern, req.list_type, req.note)
     return {'ok': True, 'id': rid}
 
@@ -299,7 +299,7 @@ _stream_lock = threading.Lock()
 @app.post('/api/stream/start')
 def api_stream_start(req: RunRequest) -> dict:
     if not req.checks:
-        raise HTTPException(400, 'не выбрано ни одной проверки')
+        raise HTTPException(400, 'no checks selected')
     selected = [{'id': c.id, 'params': c.params} for c in req.checks]
     task_id = _uuid.uuid4().hex
     task = streaming.StreamTask(task_id, selected)
@@ -314,7 +314,7 @@ async def api_stream(task_id: str):
     with _stream_lock:
         task = _stream_tasks.get(task_id)
     if task is None:
-        raise HTTPException(404, 'задача не найдена')
+        raise HTTPException(404, 'task not found')
 
     async def event_gen():
         while True:
@@ -340,7 +340,7 @@ def api_stream_stop(task_id: str) -> dict:
     with _stream_lock:
         task = _stream_tasks.get(task_id)
     if task is None:
-        raise HTTPException(404, 'задача не найдена или уже завершена')
+        raise HTTPException(404, 'task not found or already finished')
     task.stop()
     return {'ok': True}
 

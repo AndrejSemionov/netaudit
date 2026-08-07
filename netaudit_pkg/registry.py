@@ -32,7 +32,7 @@ class Registry:
 
     def register(self, spec: CheckSpec) -> None:
         if spec.id in self._checks:
-            raise ValueError(f'Проверка с id={spec.id} уже зарегистрирована')
+            raise ValueError(f'Check with id={spec.id} is already registered')
         self._checks[spec.id] = spec
 
     def get(self, check_id: str) -> CheckSpec | None:
