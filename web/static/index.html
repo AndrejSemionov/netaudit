@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NetAudit — панель аудита</title>
+<title>NetAudit — audit dashboard</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
@@ -142,7 +142,7 @@
     <button class="tab-btn" data-tab="settings" onclick="switchTab('settings')" data-i18n="tab.settings">Настройки</button>
     <button class="tab-btn" data-tab="help" onclick="switchTab('help')" data-i18n="tab.help">Помощь</button>
   </nav>
-  <a href="https://paypal.me/AndrejSemionov" target="_blank" rel="noopener" class="donate-link" title="Поддержать проект" data-i18n="donate">☕ Поддержать</a>
+  <a href="https://paypal.me/AndrejSemionov" target="_blank" rel="noopener" class="donate-link" data-i18n="donate">☕ Поддержать</a>
   <select id="langSel" class="lang-sel" onchange="setLang(this.value)">
     <option value="ru">RU</option>
     <option value="en">EN</option>
@@ -179,11 +179,11 @@
 <div class="tab-page" id="tab-trends">
   <div class="settings-wrap" style="max-width:900px">
     <div class="settings-group">
-      <h2>Динамика потерь по цели</h2>
-      <p class="hint">График максимальных потерь mtr во времени по выбранной цели — из истории прогонов. Виден тренд: деградирует связь или стабильна.</p>
+      <h2 data-i18n="trends.title">Динамика потерь по цели</h2>
+      <p class="hint" data-i18n="trends.hint">График максимальных потерь mtr во времени по выбранной цели — из истории прогонов. Виден тренд: деградирует связь или стабильна.</p>
       <div class="field-row">
         <div class="field">
-          <label>Цель (из истории mtr)</label>
+          <label data-i18n="trends.target">Цель (из истории mtr)</label>
           <select id="trendTarget" onchange="loadTrend()"></select>
         </div>
       </div>
@@ -196,127 +196,127 @@
 <div class="tab-page" id="tab-settings">
   <div class="settings-wrap">
     <div class="settings-group">
-      <h2>Anthropic API</h2>
-      <p class="hint">Ключ для AI-анализа отчётов. Хранится в локальной БД, обратно на экран не отдаётся.</p>
+      <h2 data-i18n="settings.api.title">Anthropic API</h2>
+      <p class="hint" data-i18n="settings.api.hint">Ключ для AI-анализа отчётов. Хранится в локальной БД, обратно на экран не отдаётся.</p>
       <div class="field">
-        <label>API-ключ <span id="keyStatus" class="key-status"></span></label>
-        <input type="password" id="apiKey" placeholder="sk-ant-... (оставь пустым, чтобы не менять)">
+        <label><span data-i18n="settings.api.key.label">API-ключ</span> <span id="keyStatus" class="key-status"></span></label>
+        <input type="password" id="apiKey" data-i18n="settings.api.key.placeholder" placeholder="sk-ant-... (оставь пустым, чтобы не менять)">
       </div>
       <div class="save-row">
-        <button class="ghost btn-sm" onclick="verifyKey()">Проверить ключ</button>
+        <button class="ghost btn-sm" onclick="verifyKey()" data-i18n="settings.verify">Проверить ключ</button>
         <span id="verifyResult" class="key-status"></span>
       </div>
     </div>
 
     <div class="settings-group">
-      <h2>Режим sync / async</h2>
-      <p class="hint">Порог: проверки с оценкой времени ≤ порога идут синхронно (сразу), длиннее — в фоне. EMA — скорость адаптации оценок (0..1).</p>
+      <h2 data-i18n="settings.threshold.title">Режим sync / async</h2>
+      <p class="hint" data-i18n="settings.threshold.hint">Порог: проверки с оценкой времени ≤ порога идут синхронно (сразу), длиннее — в фоне. EMA — скорость адаптации оценок (0..1).</p>
       <div class="field-row">
         <div class="field">
-          <label>Порог синхронности, сек</label>
+          <label data-i18n="settings.sync">Порог синхронности, сек</label>
           <input type="number" step="0.1" id="syncThreshold">
         </div>
         <div class="field">
-          <label>EMA alpha</label>
+          <label data-i18n="settings.ema">EMA alpha</label>
           <input type="number" step="0.05" min="0" max="1" id="emaAlpha">
         </div>
       </div>
     </div>
 
     <div class="settings-group">
-      <h2>Telegram-алерты</h2>
-      <p class="hint">Для будущих фоновых мониторингов: токен бота и chat_id.</p>
+      <h2 data-i18n="settings.tg.title">Telegram-алерты</h2>
+      <p class="hint" data-i18n="settings.tg.hint">Для будущих фоновых мониторингов: токен бота и chat_id.</p>
       <div class="field">
         <label>Bot token <span id="tgStatus" class="key-status"></span></label>
-        <input type="password" id="telegramToken" placeholder="оставь пустым, чтобы не менять">
+        <input type="password" id="telegramToken" data-i18n="settings.tg.token.placeholder" placeholder="оставь пустым, чтобы не менять">
       </div>
       <div class="field">
-        <label>Chat ID</label>
+        <label data-i18n="settings.tg.chatid">Chat ID</label>
         <input type="text" id="telegramChat">
       </div>
     </div>
 
     <div class="save-row" style="margin-bottom:24px">
-      <button class="btn-sm" onclick="saveSettings()">Сохранить настройки</button>
+      <button class="btn-sm" onclick="saveSettings()" data-i18n="settings.save">Сохранить настройки</button>
       <span id="settingsSaved" class="key-status"></span>
     </div>
 
     <div class="settings-group">
-      <h2>История трафика (фоновый сборщик)</h2>
-      <p class="hint">Раз в интервал опрашивает MikroTik и копит снимки соединений устройства в БД — можно "отмотать назад" и посмотреть, куда оно стучалось за прошедший период, а не только в момент запуска проверки вручную.</p>
+      <h2 data-i18n="hc.title">История трафика (фоновый сборщик)</h2>
+      <p class="hint" data-i18n="hc.hint">Раз в интервал опрашивает MikroTik и копит снимки соединений устройства в БД — можно "отмотать назад" и посмотреть, куда оно стучалось за прошедший период, а не только в момент запуска проверки вручную.</p>
       <div class="field">
-        <label><input type="checkbox" id="hcEnabled" style="width:auto;margin-right:6px"> Включить фоновый сбор</label>
+        <label><input type="checkbox" id="hcEnabled" style="width:auto;margin-right:6px"> <span data-i18n="hc.enable">Включить фоновый сбор</span></label>
       </div>
       <div class="field-row">
-        <div class="field"><label>IP роутера</label><input type="text" id="hcRouter"></div>
-        <div class="field"><label>Пользователь</label><input type="text" id="hcUser"></div>
+        <div class="field"><label data-i18n="hc.router">IP роутера</label><input type="text" id="hcRouter"></div>
+        <div class="field"><label data-i18n="hc.user">Пользователь</label><input type="text" id="hcUser"></div>
       </div>
       <div class="field-row">
-        <div class="field"><label>Пароль <span id="hcPwStatus" class="key-status"></span></label><input type="password" id="hcPassword" placeholder="оставь пустым, чтобы не менять"></div>
-        <div class="field"><label>SSH-порт</label><input type="number" id="hcPort"></div>
+        <div class="field"><label><span data-i18n="hc.password">Пароль</span> <span id="hcPwStatus" class="key-status"></span></label><input type="password" id="hcPassword" data-i18n="hc.password.placeholder" placeholder="оставь пустым, чтобы не менять"></div>
+        <div class="field"><label data-i18n="hc.port">SSH-порт</label><input type="number" id="hcPort"></div>
       </div>
       <div class="field-row">
-        <div class="field"><label>IP устройства (телефона)</label><input type="text" id="hcTargetIp" placeholder="192.168.88.50"></div>
-        <div class="field"><label>Интервал опроса, сек</label><input type="number" id="hcInterval"></div>
+        <div class="field"><label data-i18n="hc.target_ip">IP устройства (телефона)</label><input type="text" id="hcTargetIp" placeholder="192.168.88.50"></div>
+        <div class="field"><label data-i18n="hc.interval">Интервал опроса, сек</label><input type="number" id="hcInterval"></div>
       </div>
       <div class="field">
-        <label>Хранить историю, часов</label>
+        <label data-i18n="hc.retention">Хранить историю, часов</label>
         <input type="number" id="hcRetention" style="max-width:120px">
       </div>
       <div class="save-row">
-        <button class="btn-sm" onclick="saveHistoryCapture()">Сохранить</button>
+        <button class="btn-sm" onclick="saveHistoryCapture()" data-i18n="hc.save">Сохранить</button>
         <span id="hcSaved" class="key-status"></span>
         <span id="hcStatus" class="hint" style="margin-left:12px"></span>
       </div>
     </div>
 
     <div class="settings-group">
-      <h2>Посмотреть историю трафика</h2>
+      <h2 data-i18n="hc.query.title">Посмотреть историю трафика</h2>
       <div class="field-row">
-        <div class="field"><label>IP устройства</label><input type="text" id="hcQueryIp" placeholder="192.168.88.50"></div>
-        <div class="field"><label>За последние, часов</label><input type="number" id="hcQueryHours" value="1" step="0.5"></div>
+        <div class="field"><label data-i18n="hc.query.ip">IP устройства</label><input type="text" id="hcQueryIp" placeholder="192.168.88.50"></div>
+        <div class="field"><label data-i18n="hc.query.hours">За последние, часов</label><input type="number" id="hcQueryHours" value="1" step="0.5"></div>
       </div>
       <div class="save-row">
-        <button class="ghost btn-sm" onclick="queryHistoryCapture()">Показать</button>
+        <button class="ghost btn-sm" onclick="queryHistoryCapture()" data-i18n="hc.query.show">Показать</button>
       </div>
       <div id="hcResults" style="margin-top:12px"></div>
     </div>
 
     <div class="settings-group">
-      <h2>Цели по умолчанию</h2>
-      <p class="hint">Часто используемые IP/URL — подставляются в параметры проверок.</p>
+      <h2 data-i18n="targets.title">Цели по умолчанию</h2>
+      <p class="hint" data-i18n="targets.hint">Часто используемые IP/URL — подставляются в параметры проверок.</p>
       <div id="targetsList"></div>
       <div class="field-row" style="margin-top:12px">
-        <div class="field"><label>Метка</label><input type="text" id="newTargetLabel" placeholder="напр. Домашний сервер"></div>
-        <div class="field"><label>Значение</label><input type="text" id="newTargetValue" placeholder="IP или домен"></div>
-        <div class="field" style="flex:0 0 90px"><label>Тип</label>
+        <div class="field"><label data-i18n="targets.label">Метка</label><input type="text" id="newTargetLabel" data-i18n="targets.label.placeholder" placeholder="напр. Домашний сервер"></div>
+        <div class="field"><label data-i18n="targets.value">Значение</label><input type="text" id="newTargetValue" data-i18n="targets.value.placeholder" placeholder="IP или домен"></div>
+        <div class="field" style="flex:0 0 90px"><label data-i18n="targets.type">Тип</label>
           <select id="newTargetKind"><option value="ip">IP</option><option value="url">URL</option></select></div>
         <button class="btn-sm" onclick="addTarget()">＋</button>
       </div>
     </div>
 
     <div class="settings-group">
-      <h2>Списки репутации (для анализа трафика)</h2>
-      <p class="hint">Белый список — адреса/домены, которым доверяешь (не флагятся). Чёрный — заведомо плохие (всегда опасно). Можно IP, подсеть (1.2.3.0/24) или часть домена.</p>
+      <h2 data-i18n="rep.title">Списки репутации (для анализа трафика)</h2>
+      <p class="hint" data-i18n="rep.hint">Белый список — адреса/домены, которым доверяешь (не флагятся). Чёрный — заведомо плохие (всегда опасно). Можно IP, подсеть (1.2.3.0/24) или часть домена.</p>
       <div id="repList"></div>
       <div class="field-row" style="margin-top:12px">
-        <div class="field"><label>Паттерн</label><input type="text" id="newRepPattern" placeholder="185.220.101. или evil.com"></div>
-        <div class="field" style="flex:0 0 120px"><label>Список</label>
-          <select id="newRepType"><option value="block">чёрный</option><option value="allow">белый</option></select></div>
-        <div class="field"><label>Заметка</label><input type="text" id="newRepNote" placeholder="напр. Tor exit"></div>
+        <div class="field"><label data-i18n="rep.pattern">Паттерн</label><input type="text" id="newRepPattern" data-i18n="rep.pattern.placeholder" placeholder="185.220.101. или evil.com"></div>
+        <div class="field" style="flex:0 0 120px"><label data-i18n="rep.list">Список</label>
+          <select id="newRepType"><option value="block" data-i18n="rep.list.block">чёрный</option><option value="allow" data-i18n="rep.list.allow">белый</option></select></div>
+        <div class="field"><label data-i18n="rep.note">Заметка</label><input type="text" id="newRepNote" data-i18n="rep.note.placeholder" placeholder="напр. Tor exit"></div>
         <button class="btn-sm" onclick="addRep()">＋</button>
       </div>
     </div>
 
     <div class="settings-group">
-      <h2>Инструменты системы</h2>
-      <p class="hint">Какие внешние утилиты установлены. Недостающие можно поставить кнопкой (нужны права sudo на сервере). Если sudo с паролем — покажет команду для ручного запуска.</p>
+      <h2 data-i18n="tools.title">Инструменты системы</h2>
+      <p class="hint" data-i18n="tools.hint">Какие внешние утилиты установлены. Недостающие можно поставить кнопкой (нужны права sudo на сервере). Если sudo с паролем — покажет команду для ручного запуска.</p>
       <div id="toolsList"></div>
     </div>
 
     <div class="settings-group">
-      <h2>Пресеты</h2>
-      <p class="hint">Сохранённые наборы проверок. Клик по пресету на вкладке «Аудит» — применяет его.</p>
+      <h2 data-i18n="presets.manage.title">Пресеты</h2>
+      <p class="hint" data-i18n="presets.manage.hint">Сохранённые наборы проверок. Клик по пресету на вкладке «Аудит» — применяет его.</p>
       <div id="presetsManage"></div>
     </div>
   </div>
@@ -672,11 +672,11 @@ function toggleCheck(id, ev) {
 }
 
 function fmtDuration(sec) {
-  if (sec < 60) return `${Math.round(sec)}с`;
-  if (sec < 3600) return `${Math.round(sec / 60)}мин`;
+  if (sec < 60) return `${Math.round(sec)}${t('unit.sec_short')}`;
+  if (sec < 3600) return `${Math.round(sec / 60)}${t('unit.min_short')}`;
   const h = Math.floor(sec / 3600);
   const m = Math.round((sec % 3600) / 60);
-  return m > 0 ? `${h}ч ${m}мин` : `${h}ч`;
+  return m > 0 ? `${h}${t('unit.hour_short')} ${m}${t('unit.min_short')}` : `${h}${t('unit.hour_short')}`;
 }
 
 let estimateTimer = null;
@@ -685,7 +685,7 @@ function updateEstimate() {
   estimateTimer = setTimeout(async () => {
     const checks = getSelected();
     const btn = document.getElementById('runBtn');
-    if (!checks.length) { btn.textContent = 'Запустить аудит'; return; }
+    if (!checks.length) { btn.textContent = t('run.idle'); return; }
     try {
       const forceAsync = document.getElementById('forceAsync').checked;
       const res = await fetch('/api/estimate', {
@@ -693,9 +693,9 @@ function updateEstimate() {
         body: JSON.stringify({ checks, force_async: forceAsync })
       });
       const d = await res.json();
-      const modeLabel = d.mode === 'sync' ? 'сразу' : 'в фоне';
-      btn.textContent = `Запустить · ~${fmtDuration(d.estimate)} · ${modeLabel}`;
-    } catch { btn.textContent = 'Запустить аудит'; }
+      const modeLabel = d.mode === 'sync' ? t('run.mode.sync') : t('run.mode.async');
+      btn.textContent = t('run.estimate').replace('{duration}', fmtDuration(d.estimate)).replace('{mode}', modeLabel);
+    } catch { btn.textContent = t('run.idle'); }
   }, 250);
 }
 
@@ -718,11 +718,11 @@ let STREAM_STATE = null;  // {taskId, es, livePoints, liveChart}
 
 async function runAudit() {
   const checks = getSelected();
-  if (!checks.length) { setStatus('Не выбрано ни одной проверки.'); return; }
+  if (!checks.length) { setStatus(t('run.none_selected')); return; }
   const forceAsync = document.getElementById('forceAsync').checked;
 
   // старт потоковой задачи
-  setStatus('Запуск…');
+  setStatus(t('run.starting'));
   const res = await fetch('/api/stream/start', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ checks, force_async: forceAsync })
@@ -731,13 +731,13 @@ async function runAudit() {
 
   // UI: кнопка запуска -> стоп
   const runBtn = document.getElementById('runBtn');
-  runBtn.textContent = '■ Остановить';
+  runBtn.textContent = t('run.stopbtn');
   runBtn.classList.add('stopbtn');
   runBtn.onclick = () => stopAudit(task_id);
 
   destroyCharts();
   const root = document.getElementById('results');
-  root.innerHTML = '<div class="card" id="liveCard"><h2>Выполняется… <span class="timing" id="liveStatus"></span></h2><div class="chart-box" style="height:300px"><canvas id="liveChart"></canvas></div><div id="liveMeta" class="timing"></div></div>';
+  root.innerHTML = `<div class="card" id="liveCard"><h2>${t('run.running_label')} <span class="timing" id="liveStatus"></span></h2><div class="chart-box" style="height:300px"><canvas id="liveChart"></canvas></div><div id="liveMeta" class="timing"></div></div>`;
 
   STREAM_STATE = { taskId: task_id, series: {}, chart: null, order: [] };
   STREAM_STATE.chart = new Chart(document.getElementById('liveChart'), {
@@ -746,7 +746,7 @@ async function runAudit() {
     options: baseOpts({
       animation: false,
       scales: {
-        x: { type: 'linear', ticks: { color: CHART_COLORS.text, font:{size:10}, callback: v => v + 'с' }, grid: { color: CHART_COLORS.grid }, title: { display: true, text: 'секунды', color: CHART_COLORS.text } },
+        x: { type: 'linear', ticks: { color: CHART_COLORS.text, font:{size:10}, callback: v => v + t('unit.sec_short') }, grid: { color: CHART_COLORS.grid }, title: { display: true, text: t('chart.seconds'), color: CHART_COLORS.text } },
         y: { ticks: { color: CHART_COLORS.text, font:{size:10} }, grid: { color: CHART_COLORS.grid }, beginAtZero: true, title: { display: true, text: 'ms', color: CHART_COLORS.text } }
       }
     })
@@ -759,15 +759,15 @@ async function runAudit() {
   es.onmessage = (e) => {
     const ev = JSON.parse(e.data);
     if (ev.type === 'check_start') {
-      document.getElementById('liveStatus').textContent = ev.label + (ev.streaming ? ' — живой поток' : ' …');
+      document.getElementById('liveStatus').textContent = ev.label + (ev.streaming ? ' — ' + t('run.live') : ' …');
     } else if (ev.type === 'point') {
       addLivePoint(ev, t0);
     } else if (ev.type === 'check_done') {
-      document.getElementById('liveMeta').textContent = 'Проверка завершена: ' + ev.id + (ev.elapsed ? ` (${ev.elapsed}с)` : '');
+      document.getElementById('liveMeta').textContent = t('run.check_done') + ': ' + ev.id + (ev.elapsed ? ` (${ev.elapsed}${t('unit.sec_short')})` : '');
     } else if (ev.type === 'all_done' || ev.type === 'stopped') {
       finishStream(ev);
     } else if (ev.type === 'error') {
-      setStatus('Ошибка: ' + (ev.message || 'неизвестно'));
+      setStatus(t('run.error') + ': ' + (ev.message || t('run.unknown')));
     }
   };
   es.onerror = () => { /* соединение закроется по _end на сервере */ };
@@ -793,7 +793,7 @@ function addLivePoint(ev, t0) {
 }
 
 async function stopAudit(taskId) {
-  setStatus('Останавливаю…');
+  setStatus(t('run.stopping'));
   try { await fetch('/api/stream/' + taskId + '/stop', { method: 'POST' }); } catch(e){}
 }
 
@@ -801,7 +801,7 @@ function finishStream(ev) {
   const s = STREAM_STATE;
   if (s && s.es) s.es.close();
   const runBtn = document.getElementById('runBtn');
-  runBtn.textContent = 'Запустить аудит';
+  runBtn.textContent = t('run.idle');
   runBtn.classList.remove('stopbtn');
   runBtn.onclick = runAudit;
   runBtn.disabled = false;
@@ -810,21 +810,21 @@ function finishStream(ev) {
   LAST_REPORT = report;
   document.getElementById('aiBtn').disabled = false;
   const stopped = ev.type === 'stopped';
-  setStatus((stopped ? 'Остановлено' : 'Готово') + ` за ${report.total_time || '—'}с · ${report.timestamp}`);
+  setStatus((stopped ? t('run.stopped') : t('run.done')) + ` ${report.total_time || '—'}${t('unit.sec_short')} · ${report.timestamp}`);
 
   if (stopped && s && s.chart) {
     // при остановке НЕ стираем живой график — он уже содержит все накопленные точки.
     // только фиксируем заголовок карточки и добавляем итоговую сводку под графиком.
     const liveCard = document.getElementById('liveCard');
     const h = liveCard ? liveCard.querySelector('h2') : null;
-    if (h) h.innerHTML = 'Остановлено — накопленные данные <span class="timing">(график сохранён)</span>';
+    if (h) h.innerHTML = `${t('run.stopped_data')} <span class="timing">${t('run.chart_saved')}</span>`;
     const meta = document.getElementById('liveMeta');
     if (meta) {
       // краткая сводка по хопам из частичного отчёта, если распарсился
       const mtrRes = report.results && report.results.mtr;
       if (mtrRes && mtrRes.hops && mtrRes.hops.length) {
-        meta.innerHTML = 'Средние задержки на момент остановки: ' +
-          mtrRes.hops.map(hh => `${hh.hop}. ${hh.host}: ${hh.avg_ms}мс`).join(' · ');
+        meta.innerHTML = t('run.avg_at_stop') + ' ' +
+          mtrRes.hops.map(hh => `${hh.hop}. ${hh.host}: ${hh.avg_ms}${t('unit.ms_short')}`).join(' · ');
       }
     }
     STREAM_STATE = null;
@@ -840,21 +840,21 @@ async function pollStatus(taskId) {
   const res = await fetch('/api/status/' + taskId);
   const task = await res.json();
   if (task.status === 'running') {
-    setStatus('Выполняется аудит… (проверки идут по очереди)');
+    setStatus(t('run.in_progress'));
     setTimeout(() => pollStatus(taskId), 1000);
   } else if (task.status === 'done') {
     document.getElementById('runBtn').disabled = false;
     LAST_REPORT = task.report;
     document.getElementById('aiBtn').disabled = false;
-    setStatus(`Готово за ${task.report.total_time}с · ${task.report.timestamp}`);
+    setStatus(`${t('run.done')} ${task.report.total_time}${t('unit.sec_short')} · ${task.report.timestamp}`);
     renderReport(task.report);
   } else {
     document.getElementById('runBtn').disabled = false;
-    setStatus('Ошибка: ' + (task.error || 'неизвестно'));
+    setStatus(t('run.error') + ': ' + (task.error || t('run.unknown')));
   }
 }
 
-function setStatus(t) { document.getElementById('status').textContent = t; }
+function setStatus(msg) { document.getElementById('status').textContent = msg; }
 
 let CHART_INSTANCES = [];
 function destroyCharts() { CHART_INSTANCES.forEach(c => { try { c.destroy(); } catch(e){} }); CHART_INSTANCES = []; }
@@ -894,7 +894,7 @@ function baseOpts(extra) {
 }
 
 function renderResult(id, r, canvasId) {
-  if (r.error) return { html: `<span class="pill bad">ошибка</span> <span class="timing">${r.error}</span>` };
+  if (r.error) return { html: `<span class="pill bad">${t('run.error')}</span> <span class="timing">${r.error}</span>` };
 
   // --- mtr: таблица + график потерь по хопам ---
   if (r.hops && r.hops[0] && 'loss_pct' in r.hops[0]) {
@@ -937,7 +937,7 @@ function renderResult(id, r, canvasId) {
 
   // --- arping (L2) ---
   if ('loss_pct' in r && 'mac' in r) {
-    return { html: `<table><tr><th>Target</th><th>Loss</th><th>Avg ms</th><th>MAC</th><th>Отправлено/получено</th></tr>
+    return { html: `<table><tr><th>Target</th><th>Loss</th><th>Avg ms</th><th>MAC</th><th>${t('res.sent_received')}</th></tr>
       <tr><td>${r.target}</td><td><span class="pill ${lossClass(r.loss_pct||0)}">${r.loss_pct}%</span></td><td>${r.avg_ms ?? '—'}</td>
       <td>${r.mac || '—'}</td><td>${r.sent ?? '—'} / ${r.received ?? '—'}</td></tr></table>` };
   }
@@ -946,21 +946,21 @@ function renderResult(id, r, canvasId) {
   if ('protocol' in r || 'days_left' in r) {
     const daysClass = r.days_left < 14 ? 'bad' : (r.days_left < 30 ? 'warn' : 'ok');
     return { html: `<table>
-      <tr><th>Протокол</th><td>${r.protocol||'—'}</td></tr>
-      <tr><th>Шифр</th><td>${r.cipher||'—'}</td></tr>
-      <tr><th>Издатель</th><td>${r.issuer||'—'}</td></tr>
-      <tr><th>Истекает</th><td><span class="pill ${daysClass}">через ${r.days_left} дн.</span> ${r.expires||''}</td></tr>
-      <tr><th>Цепочка</th><td>${r.cert_chain_length||'—'} серт.</td></tr></table>` };
+      <tr><th>${t('res.protocol')}</th><td>${r.protocol||'—'}</td></tr>
+      <tr><th>${t('res.cipher')}</th><td>${r.cipher||'—'}</td></tr>
+      <tr><th>${t('res.issuer')}</th><td>${r.issuer||'—'}</td></tr>
+      <tr><th>${t('res.expires')}</th><td><span class="pill ${daysClass}">${t('res.expires.in').replace('{days}', r.days_left)}</span> ${r.expires||''}</td></tr>
+      <tr><th>${t('res.chain')}</th><td>${t('res.chain.count').replace('{n}', r.cert_chain_length||'—')}</td></tr></table>` };
   }
 
   // --- http: график таймингов по фазам ---
   if ('ttfb_ms' in r) {
-    const labels = ['DNS', 'TCP connect', 'TLS', 'TTFB', 'Итого'];
+    const labels = ['DNS', 'TCP connect', 'TLS', 'TTFB', t('res.total')];
     const vals = [r.dns_ms, r.connect_ms, r.tls_ms, r.ttfb_ms, r.total_ms];
     const html = `<div class="chart-box"><canvas id="${canvasId}"></canvas></div>
-      <p class="timing">HTTP-код: ${r.http_code} · редиректов: ${r.num_redirects}</p>`;
+      <p class="timing">${t('res.http_code')}: ${r.http_code} · ${t('res.redirects')}: ${r.num_redirects}</p>`;
     const chart = () => { const el = document.getElementById(canvasId); if (!el) return null;
-      return new Chart(el, { type: 'bar', data: { labels, datasets: [{ label: 'мс', data: vals,
+      return new Chart(el, { type: 'bar', data: { labels, datasets: [{ label: 'ms', data: vals,
         backgroundColor: [CHART_COLORS.blue, CHART_COLORS.blue, CHART_COLORS.warn, CHART_COLORS.green, CHART_COLORS.text] }] },
         options: baseOpts({ indexAxis: 'y' }) }); };
     return { html, chart };
@@ -969,26 +969,26 @@ function renderResult(id, r, canvasId) {
   // --- security headers ---
   if ('strict-transport-security' in r) {
     const keys = ['strict-transport-security','x-frame-options','x-content-type-options','content-security-policy'];
-    const rows = keys.map(k => `<tr><td>${k}</td><td>${r[k] ? '<span class="pill ok">есть</span>' : '<span class="pill bad">нет</span>'}</td></tr>`).join('');
-    return { html: `<table><tr><th>Заголовок</th><th>Статус</th></tr>${rows}</table>` };
+    const rows = keys.map(k => `<tr><td>${k}</td><td>${r[k] ? `<span class="pill ok">${t('res.present')}</span>` : `<span class="pill bad">${t('res.absent')}</span>`}</td></tr>`).join('');
+    return { html: `<table><tr><th>${t('res.header')}</th><th>${t('res.status')}</th></tr>${rows}</table>` };
   }
 
   // --- ports ---
   if (r.open_ports) {
     const rows = r.open_ports.map(p => `<tr><td>${p.proto}</td><td>${p.local_address}</td></tr>`).join('');
-    return { html: `<table><tr><th>Proto</th><th>Адрес:порт</th></tr>${rows}</table>` };
+    return { html: `<table><tr><th>Proto</th><th>${t('res.addr_port')}</th></tr>${rows}</table>` };
   }
 
   // --- performance: бары CPU/RAM + диски ---
   if ('cpu_pct' in r) {
     const disks = (r.disks||[]).map(d => `<tr><td>${d.mountpoint}</td><td>${d.total_gb} GB</td><td>${d.used_pct}%</td></tr>`).join('');
     const html = `<div class="chart-box" style="height:180px"><canvas id="${canvasId}"></canvas></div>
-      <table style="margin-top:10px"><tr><th>Диск</th><th>Всего</th><th>Занято</th></tr>${disks}</table>`;
+      <table style="margin-top:10px"><tr><th>${t('res.disk')}</th><th>${t('res.disk.total')}</th><th>${t('res.disk.used')}</th></tr>${disks}</table>`;
     const diskLabels = (r.disks||[]).map(d => d.mountpoint);
     const diskVals = (r.disks||[]).map(d => d.used_pct);
     const chart = () => { const el = document.getElementById(canvasId); if (!el) return null;
       return new Chart(el, { type: 'bar',
-        data: { labels: ['CPU', 'RAM', ...diskLabels], datasets: [{ label: '% использования',
+        data: { labels: ['CPU', 'RAM', ...diskLabels], datasets: [{ label: t('res.usage_pct'),
           data: [r.cpu_pct, r.ram_used_pct, ...diskVals],
           backgroundColor: [r.cpu_pct, r.ram_used_pct, ...diskVals].map(v => v > 85 ? CHART_COLORS.bad : (v > 60 ? CHART_COLORS.warn : CHART_COLORS.green)) }] },
         options: baseOpts({ scales: { x: baseOpts().scales.x, y: Object.assign(baseOpts().scales.y, { max: 100 }) } }) }); };
@@ -1015,7 +1015,7 @@ function renderResult(id, r, canvasId) {
 
   // --- server_audit: секции с findings ---
   if (r.sections) {
-    const sevPill = s => ({high:'<span class="pill bad">high</span>', medium:'<span class="pill warn">medium</span>', low:'<span class="pill" style="background:#2a3140;color:#9aa4b4">low</span>', ok:'<span class="pill ok">ok</span>'}[s] || s);
+    const sevPill = s => ({high:'<span class="pill bad">high</span>', medium:'<span class="pill warn">medium</span>', low:`<span class="pill" style="background:#2a3140;color:#9aa4b4">low</span>`, ok:'<span class="pill ok">ok</span>'}[s] || s);
     const secNames = {nginx:'nginx', fail2ban:'Fail2Ban', firewall:'Firewall', sql:'MySQL/MariaDB', ssh:'SSH hardening',
                       spf:'SPF', dkim:'DKIM', dmarc:'DMARC', dnssec:'DNSSEC', dangling_cname:'Dangling CNAME',
                       discovered_services:'Discovered services (TXT)'};
@@ -1023,10 +1023,10 @@ function renderResult(id, r, canvasId) {
     if (r.summary) {
       const s = r.summary;
       html += `<div style="margin-bottom:14px">
-        ${s.high?`<span class="pill bad">⚠ ${s.high} критичных</span> `:''}
-        ${s.medium?`<span class="pill warn">${s.medium} средних</span> `:''}
-        ${s.low?`<span class="pill" style="background:#2a3140;color:#9aa4b4">${s.low} низких</span> `:''}
-        <span class="pill ok">${s.ok} ок</span></div>`;
+        ${s.high?`<span class="pill bad">⚠ ${s.high} ${t('res.severity.high')}</span> `:''}
+        ${s.medium?`<span class="pill warn">${s.medium} ${t('res.severity.medium')}</span> `:''}
+        ${s.low?`<span class="pill" style="background:#2a3140;color:#9aa4b4">${s.low} ${t('res.severity.low')}</span> `:''}
+        <span class="pill ok">${s.ok} ${t('res.severity.ok')}</span></div>`;
     }
     for (const [key, sec] of Object.entries(r.sections)) {
       const name = secNames[key] || key;
@@ -1035,7 +1035,7 @@ function renderResult(id, r, canvasId) {
       const isArray = Array.isArray(sec);
       const secFindings = isArray ? sec : (sec.findings || []);
       if (!isArray && sec.installed === false) {
-        html += `<div style="margin:10px 0"><b>${name}</b> <span class="timing">— не установлен</span>`;
+        html += `<div style="margin:10px 0"><b>${name}</b> <span class="timing">— ${t('res.not_installed')}</span>`;
         if (sec.findings) html += sec.findings.map(f => ` ${sevPill(f.severity)} ${f.title}`).join('');
         html += `</div>`;
         continue;
@@ -1050,16 +1050,16 @@ function renderResult(id, r, canvasId) {
 
   // --- web_security_external / любой findings-результат ---
   if (r.findings && !r.sections) {
-    const sevPill = s => ({critical:'<span class="pill bad">critical</span>', high:'<span class="pill bad">high</span>', medium:'<span class="pill warn">medium</span>', low:'<span class="pill" style="background:#2a3140;color:#9aa4b4">low</span>', ok:'<span class="pill ok">ok</span>'}[s] || s);
+    const sevPill = s => ({critical:'<span class="pill bad">critical</span>', high:'<span class="pill bad">high</span>', medium:'<span class="pill warn">medium</span>', low:`<span class="pill" style="background:#2a3140;color:#9aa4b4">low</span>`, ok:'<span class="pill ok">ok</span>'}[s] || s);
     let html = '';
     if (r.summary) {
       const s = r.summary;
       html += `<div style="margin-bottom:12px">
-        ${s.critical?`<span class="pill bad">⚠ ${s.critical} critical</span> `:''}
-        ${s.high?`<span class="pill bad">⚠ ${s.high} критичных</span> `:''}
-        ${s.medium?`<span class="pill warn">${s.medium} средних</span> `:''}
-        ${s.low?`<span class="pill" style="background:#2a3140;color:#9aa4b4">${s.low} низких</span> `:''}
-        ${s.ok?`<span class="pill ok">${s.ok} ок</span>`:''}</div>`;
+        ${s.critical?`<span class="pill bad">⚠ ${s.critical} ${t('res.severity.critical')}</span> `:''}
+        ${s.high?`<span class="pill bad">⚠ ${s.high} ${t('res.severity.high')}</span> `:''}
+        ${s.medium?`<span class="pill warn">${s.medium} ${t('res.severity.medium')}</span> `:''}
+        ${s.low?`<span class="pill" style="background:#2a3140;color:#9aa4b4">${s.low} ${t('res.severity.low')}</span> `:''}
+        ${s.ok?`<span class="pill ok">${s.ok} ${t('res.severity.ok')}</span>`:''}</div>`;
     }
     html += (r.findings||[]).map(f => {
       const cveLine = f.cve ? `<b>${f.cve}</b>${f.package ? ` <span class="timing">${f.package} ${f.version||''}</span>` : ''}` : (f.package ? `<b>${f.package}</b> <span class="timing">${f.version||''}</span>` : '');
@@ -1072,10 +1072,10 @@ function renderResult(id, r, canvasId) {
   // --- capture: tshark / mikrotik — топ назначений + анализ угроз ---
   if (r.destinations) {
     const d = r.destinations;
-    if (!d.length) return { html: `<span class="pill warn">пусто</span> <span class="timing">трафик не пойман${r.note ? ' · ' + r.note : ''}</span>` };
+    if (!d.length) return { html: `<span class="pill warn">${t('res.empty_traffic')}</span> <span class="timing">${t('res.no_traffic')}${r.note ? ' · ' + r.note : ''}</span>` };
     const isTshark = 'bytes' in (d[0] || {});
     const metric = isTshark ? 'bytes' : 'connections';
-    const metricLabel = isTshark ? 'байт' : 'соединений';
+    const metricLabel = isTshark ? t('res.bytes') : t('res.connections');
     const hasThreat = 'risk_level' in (d[0] || {});
 
     // сводка угроз
@@ -1083,27 +1083,27 @@ function renderResult(id, r, canvasId) {
     if (r.threat_summary) {
       const s = r.threat_summary;
       summaryHtml = `<div style="margin-bottom:12px">
-        ${s.high ? `<span class="pill bad">⚠ ${s.high} опасных</span> ` : ''}
-        ${s.suspicious ? `<span class="pill warn">${s.suspicious} подозрительных</span> ` : ''}
-        <span class="pill ok">${s.ok} нормальных</span></div>`;
+        ${s.high ? `<span class="pill bad">⚠ ${s.high} ${t('res.threat.high')}</span> ` : ''}
+        ${s.suspicious ? `<span class="pill warn">${s.suspicious} ${t('res.threat.suspicious')}</span> ` : ''}
+        <span class="pill ok">${s.ok} ${t('res.threat.ok')}</span></div>`;
     }
 
-    const riskPill = lvl => lvl === 'high' ? '<span class="pill bad">опасно</span>'
-      : (lvl === 'suspicious' ? '<span class="pill warn">подозрительно</span>' : '<span class="pill ok">ok</span>');
+    const riskPill = lvl => lvl === 'high' ? `<span class="pill bad">${t('res.risk.danger')}</span>`
+      : (lvl === 'suspicious' ? `<span class="pill warn">${t('res.risk.suspicious')}</span>` : `<span class="pill ok">${t('res.risk.ok')}</span>`);
 
     const rows = d.slice(0, 50).map(x => {
-      const who = x.host ? `<span style="color:var(--muted)"> ${x.host}</span>` : (hasThreat ? ' <span style="color:var(--warn)">нет DNS</span>' : '');
+      const who = x.host ? `<span style="color:var(--muted)"> ${x.host}</span>` : (hasThreat ? ` <span style="color:var(--warn)">${t('res.no_dns')}</span>` : '');
       const val = isTshark ? fmtBytes(x.bytes) : x.connections;
       const org = x.org ? ` <span style="color:var(--muted)">[${x.org}${x.country ? ', '+x.country : ''}]</span>` : '';
       const reasons = hasThreat && x.reasons ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${x.reasons.join(' · ')}</div>` : '';
       const rowClass = x.risk_level === 'high' ? 'bad' : (x.risk_level === 'suspicious' ? 'warn' : '');
       return `<tr class="${rowClass}"><td>${hasThreat ? riskPill(x.risk_level) + ' ' : ''}${x.ip}${who}${org}${reasons}</td>
-        <td>${val}</td><td>${(x.protocols||[]).join(', ')}</td><td>${isTshark ? (x.packets+' пак.') : ('порты: '+(x.ports||[]).slice(0,6).join(', '))}</td></tr>`;
+        <td>${val}</td><td>${(x.protocols||[]).join(', ')}</td><td>${isTshark ? (x.packets+' '+t('res.packets_short')) : (t('res.ports_short')+': '+(x.ports||[]).slice(0,6).join(', '))}</td></tr>`;
     }).join('');
 
     const header = isTshark
-      ? `<p class="timing">Всего: ${r.total_packets} пакетов · ${fmtBytes(r.total_bytes)} · интерфейс ${r.interface}${r.filter ? ' · фильтр: ' + r.filter : ''}</p>`
-      : `<p class="timing">Устройство ${r.target_ip} через роутер ${r.router} · назначений: ${r.total_destinations}</p>`;
+      ? `<p class="timing">${t('res.total_packets')}: ${r.total_packets} ${t('res.packets')} · ${fmtBytes(r.total_bytes)} · ${t('res.interface')} ${r.interface}${r.filter ? ' · ' + t('res.filter') + ': ' + r.filter : ''}</p>`
+      : `<p class="timing">${t('res.device')} ${r.target_ip} ${t('res.via_router')} ${r.router} · ${t('res.destinations_count')}: ${r.total_destinations}</p>`;
 
     // график: только подозрительные/опасные если анализ включён, иначе топ по объёму
     const chartSource = hasThreat ? d.filter(x => x.risk_level !== 'ok').slice(0, 12) : d.slice(0, 12);
@@ -1111,12 +1111,12 @@ function renderResult(id, r, canvasId) {
     const labels = chartData.map(x => x.host || x.ip);
     const vals = chartData.map(x => x[metric]);
     const colors = hasThreat ? chartData.map(x => x.risk_level === 'high' ? CHART_COLORS.bad : (x.risk_level === 'suspicious' ? CHART_COLORS.warn : CHART_COLORS.blue)) : CHART_COLORS.blue;
-    const chartTitle = hasThreat && chartSource.length ? 'Подозрительные назначения' : 'Топ назначений';
+    const chartTitle = hasThreat && chartSource.length ? t('res.chart.suspicious') : t('res.chart.top');
 
     const html = `${header}${summaryHtml}
       <div class="timing" style="margin-bottom:4px">${chartTitle}:</div>
       <div class="chart-box" style="height:280px"><canvas id="${canvasId}"></canvas></div>
-      <table><tr><th>Назначение</th><th>${metricLabel}</th><th>Протоколы</th><th>Детали</th></tr>${rows}</table>
+      <table><tr><th>${t('res.destination')}</th><th>${metricLabel}</th><th>${t('res.protocols')}</th><th>${t('res.details')}</th></tr>${rows}</table>
       ${r.note ? `<p class="timing" style="margin-top:8px">ℹ️ ${r.note}</p>` : ''}`;
     const chart = () => { const el = document.getElementById(canvasId); if (!el) return null;
       return new Chart(el, { type: 'bar', data: { labels, datasets: [{ label: metricLabel, data: vals, backgroundColor: colors }] },
@@ -1139,11 +1139,11 @@ async function loadHistory() {
   const res = await fetch('/api/history');
   const items = await res.json();
   const root = document.getElementById('results');
-  if (!items.length) { root.innerHTML = '<div class="empty">История пуста</div>'; return; }
-  root.innerHTML = '<div class="card"><h2>История отчётов</h2>' +
-    '<table><tr><th>#</th><th>Время</th><th>Проверки</th><th>Длит.</th><th></th></tr>' +
+  if (!items.length) { root.innerHTML = `<div class="empty">${t('history.empty')}</div>`; return; }
+  root.innerHTML = `<div class="card"><h2>${t('history.title')}</h2>` +
+    `<table><tr><th>${t('history.col.num')}</th><th>${t('history.col.time')}</th><th>${t('history.col.checks')}</th><th>${t('history.col.duration')}</th><th></th></tr>` +
     items.map(it => `<tr><td>${it.id}</td><td>${it.timestamp}</td><td>${(it.checks||[]).join(', ')}</td><td>${it.total_time||'—'}s</td>
-      <td><a href="#" onclick="openReport(${it.id});return false" style="color:var(--accent)">открыть</a></td></tr>`).join('') +
+      <td><a href="#" onclick="openReport(${it.id});return false" style="color:var(--accent)">${t('open')}</a></td></tr>`).join('') +
     '</table></div>';
 }
 
@@ -1152,32 +1152,32 @@ async function openReport(id) {
   const report = await res.json();
   LAST_REPORT = report;
   document.getElementById('aiBtn').disabled = false;
-  setStatus(`Отчёт #${id} от ${report.timestamp} · ${report.total_time}s`);
+  setStatus(`#${id} · ${report.timestamp} · ${report.total_time}s`);
   renderReport(report);
 }
 
 async function analyzeReport() {
   if (!LAST_REPORT) return;
   document.getElementById('aiBtn').disabled = true;
-  setStatus('AI анализирует отчёт…');
+  setStatus(t('ai.analyzing'));
   const res = await fetch('/api/analyze', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ report: LAST_REPORT })
   });
   const a = await res.json();
   document.getElementById('aiBtn').disabled = false;
-  setStatus('AI-анализ готов.');
+  setStatus(t('ai.ready'));
   renderAnalysis(a);
 }
 
 function renderAnalysis(a) {
   const root = document.getElementById('results');
   if (a.error) {
-    root.insertAdjacentHTML('afterbegin', `<div class="card ai-card"><h2>AI-анализ</h2><span class="pill bad">${a.error}</span><div class="timing" style="margin-top:8px">Задай ANTHROPIC_API_KEY на сервере, где запущен netaudit.</div></div>`);
+    root.insertAdjacentHTML('afterbegin', `<div class="card ai-card"><h2>${t('ai.analyze')}</h2><span class="pill bad">${a.error}</span><div class="timing" style="margin-top:8px">${t('ai.need_key')}</div></div>`);
     return;
   }
   if (a.raw) {
-    root.insertAdjacentHTML('afterbegin', `<div class="card ai-card"><h2>AI-анализ</h2><pre>${a.summary}</pre></div>`);
+    root.insertAdjacentHTML('afterbegin', `<div class="card ai-card"><h2>${t('ai.analyze')}</h2><pre>${a.summary}</pre></div>`);
     return;
   }
   const problems = (a.problems||[]).map(p =>
@@ -1185,10 +1185,10 @@ function renderAnalysis(a) {
   const recs = (a.recommendations||[]).sort((x,y)=>(x.priority||9)-(y.priority||9)).map(r =>
     `<div class="rec"><div class="action">${r.priority?r.priority+'. ':''}${r.action}</div><div class="why">${r.why||''}</div></div>`).join('');
   root.insertAdjacentHTML('afterbegin', `<div class="card ai-card">
-    <h2>🤖 AI-анализ: что делать</h2>
+    <h2>🤖 ${t('ai.analyze')}</h2>
     <p>${a.summary||''}</p>
-    ${problems ? '<h4 style="margin:14px 0 6px">Проблемы</h4>'+problems : ''}
-    ${recs ? '<h4 style="margin:14px 0 6px">Рекомендации</h4>'+recs : ''}
+    ${problems ? `<h4 style="margin:14px 0 6px">${t('ai.problems')}</h4>`+problems : ''}
+    ${recs ? `<h4 style="margin:14px 0 6px">${t('ai.recommendations')}</h4>`+recs : ''}
   </div>`);
 }
 
@@ -1205,9 +1205,9 @@ async function loadTrendTargets() {
   const res = await fetch('/api/timeseries/targets');
   const targets = await res.json();
   const sel = document.getElementById('trendTarget');
-  sel.innerHTML = targets.map(t => `<option value="${t}">${t}</option>`).join('');
+  sel.innerHTML = targets.map(tg => `<option value="${tg}">${tg}</option>`).join('');
   if (targets.length) loadTrend();
-  else document.getElementById('trendEmpty').textContent = 'Нет истории mtr. Запусти mtr-проверки, чтобы накопить данные для графика.';
+  else document.getElementById('trendEmpty').textContent = t('trends.no_history');
 }
 async function loadTrend() {
   const target = document.getElementById('trendTarget').value;
@@ -1215,12 +1215,12 @@ async function loadTrend() {
   const res = await fetch('/api/timeseries/mtr?target=' + encodeURIComponent(target));
   const data = await res.json();
   const pts = data.points || [];
-  document.getElementById('trendEmpty').textContent = pts.length < 2 ? 'Мало точек для тренда — нужно несколько прогонов mtr до этой цели.' : '';
+  document.getElementById('trendEmpty').textContent = pts.length < 2 ? t('trends.few_points') : '';
   if (TREND_CHART) { TREND_CHART.destroy(); TREND_CHART = null; }
   const el = document.getElementById('trendChart');
   TREND_CHART = new Chart(el, {
     type: 'line',
-    data: { labels: pts.map(p => p.timestamp), datasets: [{ label: 'Макс. потери %', data: pts.map(p => p.max_loss),
+    data: { labels: pts.map(p => p.timestamp), datasets: [{ label: t('trends.chart.label'), data: pts.map(p => p.max_loss),
       borderColor: CHART_COLORS.bad, backgroundColor: 'rgba(255,92,108,.12)', fill: true, tension: .25, pointRadius: 3 }] },
     options: baseOpts({ scales: { x: baseOpts().scales.x, y: Object.assign(baseOpts().scales.y, { max: 100 }) } })
   });
@@ -1233,9 +1233,9 @@ async function loadSettings() {
   document.getElementById('syncThreshold').value = s.sync_threshold_sec ?? '2.5';
   document.getElementById('emaAlpha').value = s.ema_alpha ?? '0.4';
   document.getElementById('telegramChat').value = s.telegram_chat ?? '';
-  document.getElementById('keyStatus').textContent = (s.anthropic_api_key && s.anthropic_api_key.set) ? '● задан' : '○ не задан';
+  document.getElementById('keyStatus').textContent = (s.anthropic_api_key && s.anthropic_api_key.set) ? t('key.set') : t('key.unset');
   document.getElementById('keyStatus').style.color = (s.anthropic_api_key && s.anthropic_api_key.set) ? 'var(--ok)' : 'var(--muted)';
-  document.getElementById('tgStatus').textContent = (s.telegram_token && s.telegram_token.set) ? '● задан' : '○ не задан';
+  document.getElementById('tgStatus').textContent = (s.telegram_token && s.telegram_token.set) ? t('key.set') : t('key.unset');
   document.getElementById('tgStatus').style.color = (s.telegram_token && s.telegram_token.set) ? 'var(--ok)' : 'var(--muted)';
   loadTargets();
   loadPresetsManage();
@@ -1258,13 +1258,13 @@ async function loadHistoryCapture() {
   const st = await (await fetch('/api/history_capture/status')).json();
   const el = document.getElementById('hcStatus');
   if (!s.enabled) {
-    el.textContent = 'выключен';
+    el.textContent = t('hc.status.off');
   } else if (st.last_error) {
-    el.innerHTML = `<span style="color:var(--bad)">ошибка: ${st.last_error}</span>`;
+    el.innerHTML = `<span style="color:var(--bad)">${t('hc.status.error')}: ${st.last_error}</span>`;
   } else if (st.last_run) {
-    el.textContent = `работает · последний снимок: ${st.last_run.replace('T',' ').slice(0,19)} · всего снимков: ${st.snapshots_taken}`;
+    el.textContent = `${t('hc.status.running')}: ${st.last_run.replace('T',' ').slice(0,19)} · ${t('hc.status.total_snapshots')}: ${st.snapshots_taken}`;
   } else {
-    el.textContent = 'запущен, ждёт первого снимка…';
+    el.textContent = t('hc.status.waiting');
   }
 }
 
@@ -1283,7 +1283,7 @@ async function saveHistoryCapture() {
   await fetch('/api/history_capture/settings', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
   document.getElementById('hcPassword').value = '';
   const el = document.getElementById('hcSaved');
-  el.textContent = '✓ сохранено'; el.style.color = 'var(--ok)';
+  el.textContent = t('saved'); el.style.color = 'var(--ok)';
   setTimeout(() => { el.textContent = ''; loadHistoryCapture(); }, 1200);
 }
 
@@ -1291,13 +1291,13 @@ async function queryHistoryCapture() {
   const ip = document.getElementById('hcQueryIp').value.trim();
   const hours = Number(document.getElementById('hcQueryHours').value) || 1;
   const root = document.getElementById('hcResults');
-  if (!ip) { root.innerHTML = '<div style="color:var(--muted);font-size:13px">Укажи IP устройства</div>'; return; }
-  root.innerHTML = '<div style="color:var(--muted);font-size:13px">Загрузка…</div>';
+  if (!ip) { root.innerHTML = `<div style="color:var(--muted);font-size:13px">${t('hc.query.need_ip')}</div>`; return; }
+  root.innerHTML = `<div style="color:var(--muted);font-size:13px">${t('hc.query.loading')}</div>`;
   const res = await fetch(`/api/history_capture/query?target_ip=${encodeURIComponent(ip)}&hours=${hours}`);
   const data = await res.json();
-  if (!data.rows.length) { root.innerHTML = `<div style="color:var(--muted);font-size:13px">Нет данных за последние ${hours}ч. Убедись, что фоновый сбор включён и уже успел снять хотя бы один снимок.</div>`; return; }
+  if (!data.rows.length) { root.innerHTML = `<div style="color:var(--muted);font-size:13px">${t('hc.query.no_data').replace('{hours}', hours)}</div>`; return; }
   const sevPill = s => ({critical:'<span class="pill bad">critical</span>', high:'<span class="pill bad">high</span>', suspicious:'<span class="pill warn">suspicious</span>', ok:'<span class="pill ok">ok</span>'}[s] || (s||''));
-  root.innerHTML = `<div style="color:var(--muted);font-size:12px;margin-bottom:8px">${data.total} записей</div>` +
+  root.innerHTML = `<div style="color:var(--muted);font-size:12px;margin-bottom:8px">${data.total} ${t('hc.query.records')}</div>` +
     data.rows.map(r => `<div class="list-row"><span class="grow">
       <span style="color:var(--muted);font-family:var(--mono);font-size:11px">${r.seen_at.replace('T',' ').slice(0,19)}</span>
       &nbsp;${sevPill(r.risk_level)}&nbsp;<b>${r.dst_ip}</b>${r.dst_port ? ':'+r.dst_port : ''} <span style="color:var(--muted)">${r.protocol||''}</span>
@@ -1308,12 +1308,12 @@ async function loadRep() {
   const res = await fetch('/api/reputation');
   const items = await res.json();
   const root = document.getElementById('repList');
-  if (!items.length) { root.innerHTML = '<div style="color:var(--muted);font-size:13px">Списки пусты</div>'; return; }
+  if (!items.length) { root.innerHTML = `<div style="color:var(--muted);font-size:13px">${t('rep.empty')}</div>`; return; }
   root.innerHTML = items.map(x =>
     `<div class="list-row">
-      <span class="grow">${x.list_type === 'block' ? '<span class="pill bad">чёрный</span>' : '<span class="pill ok">белый</span>'}
+      <span class="grow">${x.list_type === 'block' ? `<span class="pill bad">${t('rep.list.block')}</span>` : `<span class="pill ok">${t('rep.list.allow')}</span>`}
         <b>${x.pattern}</b> ${x.note ? '<span style="color:var(--muted)">— '+x.note+'</span>' : ''}</span>
-      <button class="btn-danger btn-sm" onclick="delRep(${x.id})">удалить</button></div>`).join('');
+      <button class="btn-danger btn-sm" onclick="delRep(${x.id})">${t('delete')}</button></div>`).join('');
 }
 async function addRep() {
   const pattern = document.getElementById('newRepPattern').value.trim();
@@ -1334,34 +1334,34 @@ async function loadTools() {
   const res = await fetch('/api/tools');
   const list = await res.json();
   const root = document.getElementById('toolsList');
-  root.innerHTML = list.map(t => {
-    const status = t.installed
-      ? `<span class="pill ok">установлен</span>`
-      : `<span class="pill bad">нет</span>`;
-    const usedBy = t.used_by.length ? `<span style="color:var(--muted)">← ${t.used_by.join(', ')}</span>` : '';
-    const installBtn = (!t.installed && t.installable)
-      ? `<button class="btn-sm" onclick="installTool('${t.tool}', this)">установить</button>` : '';
+  root.innerHTML = list.map(tool => {
+    const status = tool.installed
+      ? `<span class="pill ok">${t('tool.installed')}</span>`
+      : `<span class="pill bad">${t('tool.missing')}</span>`;
+    const usedBy = tool.used_by.length ? `<span style="color:var(--muted)">← ${tool.used_by.join(', ')}</span>` : '';
+    const installBtn = (!tool.installed && tool.installable)
+      ? `<button class="btn-sm" onclick="installTool('${tool.tool}', this)">${t('tool.install')}</button>` : '';
     return `<div class="list-row">
-      <span class="grow"><b>${t.tool}</b> ${status} ${usedBy}
-        ${t.package ? `<span style="color:var(--muted);font-size:11px">пакет: ${t.package}</span>` : ''}</span>
+      <span class="grow"><b>${tool.tool}</b> ${status} ${usedBy}
+        ${tool.package ? `<span style="color:var(--muted);font-size:11px">${t('tools.package')}: ${tool.package}</span>` : ''}</span>
       ${installBtn}</div>`;
   }).join('');
 }
 
 async function installTool(tool, btn) {
-  btn.disabled = true; btn.textContent = 'ставлю…';
+  btn.disabled = true; btn.textContent = t('tools.installing');
   const res = await fetch('/api/tools/install', {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tool })
   });
   const r = await res.json();
   if (r.ok) {
-    btn.textContent = r.already ? 'уже есть' : '✓ готово';
+    btn.textContent = r.already ? t('tools.already') : t('tools.done');
     setTimeout(loadTools, 800);
   } else {
-    btn.disabled = false; btn.textContent = 'установить';
+    btn.disabled = false; btn.textContent = t('tool.install');
     const msg = r.manual_command
-      ? `Нужен ручной запуск:\n${r.manual_command}`
-      : `Ошибка: ${r.error}`;
+      ? `${t('tools.manual_needed')}\n${r.manual_command}`
+      : `${t('tools.error')}: ${r.error}`;
     alert(msg);
   }
 }
@@ -1379,7 +1379,7 @@ async function saveSettings() {
 
   await fetch('/api/settings', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ settings }) });
   const el = document.getElementById('settingsSaved');
-  el.textContent = '✓ сохранено'; el.style.color = 'var(--ok)';
+  el.textContent = t('saved'); el.style.color = 'var(--ok)';
   document.getElementById('apiKey').value = '';
   document.getElementById('telegramToken').value = '';
   setTimeout(() => { el.textContent = ''; loadSettings(); }, 1500);
@@ -1388,11 +1388,11 @@ async function saveSettings() {
 async function verifyKey() {
   const key = document.getElementById('apiKey').value;
   const el = document.getElementById('verifyResult');
-  if (!key) { el.textContent = 'введи ключ в поле выше'; el.style.color = 'var(--muted)'; return; }
-  el.textContent = 'проверяю…'; el.style.color = 'var(--muted)';
+  if (!key) { el.textContent = t('key.enter_above'); el.style.color = 'var(--muted)'; return; }
+  el.textContent = t('key.checking'); el.style.color = 'var(--muted)';
   const res = await fetch('/api/settings/verify-key', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ api_key: key }) });
   const r = await res.json();
-  el.textContent = r.ok ? '✓ ключ рабочий' : '✗ ' + (r.error || 'не прошёл');
+  el.textContent = r.ok ? t('key.ok') : '✗ ' + (r.error || t('key.failed'));
   el.style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
 }
 
@@ -1401,10 +1401,10 @@ async function loadTargets() {
   const res = await fetch('/api/targets');
   const targets = await res.json();
   const root = document.getElementById('targetsList');
-  root.innerHTML = targets.length ? targets.map(t =>
-    `<div class="list-row"><span class="grow">${t.label ? t.label + ' — ' : ''}${t.value} <span style="color:var(--muted)">[${t.kind}]</span></span>
-     <button class="btn-danger btn-sm" onclick="delTarget(${t.id})">удалить</button></div>`).join('')
-    : '<div style="color:var(--muted);font-size:13px">Пока пусто</div>';
+  root.innerHTML = targets.length ? targets.map(tg =>
+    `<div class="list-row"><span class="grow">${tg.label ? tg.label + ' — ' : ''}${tg.value} <span style="color:var(--muted)">[${tg.kind}]</span></span>
+     <button class="btn-danger btn-sm" onclick="delTarget(${tg.id})">${t('delete')}</button></div>`).join('')
+    : `<div style="color:var(--muted);font-size:13px">${t('targets.empty')}</div>`;
 }
 async function addTarget() {
   const value = document.getElementById('newTargetValue').value.trim();
@@ -1477,7 +1477,7 @@ async function loadSavedTargetsDatalist() {
   const res = await fetch('/api/targets');
   const targets = await res.json();
   const dl = document.getElementById('savedTargets');
-  dl.innerHTML = targets.map(t => `<option value="${t.value}">${t.label || t.value}</option>`).join('');
+  dl.innerHTML = targets.map(tg => `<option value="${tg.value}">${tg.label || tg.value}</option>`).join('');
 }
 
 // применяет переводы ко всем статичным элементам с data-i18n

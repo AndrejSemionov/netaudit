@@ -1,4 +1,4 @@
-"""История отчётов + AI-анализ. Хранение — через storage (SQLite)."""
+"""Report history + AI analysis. Storage backed by SQLite (storage module)."""
 
 from __future__ import annotations
 
@@ -9,42 +9,36 @@ from .utils import log
 from . import storage
 
 MODEL = 'claude-sonnet-4-6'
+DEFAULT_AI_LANGUAGE = 'en'
 
-
-def save_report(report: dict) -> int:
-    return storage.save_report(report)
-
-
-def list_reports(limit: int = 50) -> list[dict]:
-    return storage.list_reports(limit)
-
-
-def load_report(report_id: int) -> dict | None:
-    return storage.load_report(int(report_id))
-
-
-def _resolve_api_key(explicit: str | None = None) -> str | None:
-    """Приоритет: явно переданный -> настройка в БД -> переменная окружения."""
-    if explicit:
-        return explicit
-    from_db = storage.setting_get('anthropic_api_key')
-    if from_db:
-        return from_db
-    return os.environ.get('ANTHROPIC_API_KEY')
-
-
-def ai_analyze(report: dict, api_key: str | None = None) -> dict:
-    """AI-анализ: проблемы + рекомендации что делать."""
-    api_key = _resolve_api_key(api_key)
-    if not api_key:
-        return {'error': 'API-ключ не задан (настройки -> Anthropic API key, или переменная ANTHROPIC_API_KEY)'}
-
-    try:
-        import httpx
-    except ImportError:
-        return {'error': 'httpx не установлен'}
-
-    prompt = (
+_PROMPT_INSTRUCTIONS = {
+    'en': (
+        "You are a senior network and security engineer. Analyze the JSON network audit "
+        "report and return STRICTLY valid JSON (no markdown, no ```), format:\n"
+        '{"summary": "brief 2-3 sentence summary", '
+        '"problems": [{"severity": "high|medium|low", "title": "...", "detail": "..."}], '
+        '"recommendations": [{"priority": 1, "action": "what exactly to do", "why": "why"}]}\n\n'
+        "Pay special attention to:\n"
+        "- if mtr (ICMP) and tcptraceroute (TCP) disagree - this matters for disputing with the ISP;\n"
+        "- loss at hop 2+ = ISP problem, at hop 1 = local;\n"
+        "- open ports without a firewall, outdated SSL, PermitRootLogin yes, PasswordAuthentication yes - risks;\n"
+        "- high CPU/RAM/disk - performance problems;\n"
+        "- if traffic analysis is present (destinations with risk_level): assess destinations flagged "
+        "high/suspicious, explain where traffic is going and why it's suspicious, but do NOT panic over "
+        "legitimate services (Google, CDN). Direct IP without DNS + unusual port + persistent connections "
+        "= possible C2/spyware;\n"
+        "- if server_audit or web_security_external is present (findings with severity): roll all high/medium "
+        "into prioritized recommendations, explain each finding in plain language and what exactly to fix "
+        "(which directive, where).\n"
+        "- if cve_audit is present (findings with package/version/cve/severity): for each CVE found, check its "
+        "summary against the actual service config if present in the report (e.g. nginx.conf from server_audit) - "
+        "if the vulnerable module/directive isn't in use, explicitly say 'no risk, not applicable'; if it is, "
+        "give a CONCRETE action: 'upgrade nginx to X.Y.Z' (use fixed_versions) or 'workaround without upgrading: "
+        "...'. Don't just restate the raw CVSS score without a conclusion on what to do.\n"
+        "Write in English, concretely and to the point.\n\n"
+        "REPORT:\n{report_json}"
+    ),
+    'ru': (
         "Ты старший сетевой инженер и специалист по безопасности. Проанализируй JSON-отчёт "
         "сетевого аудита и верни СТРОГО валидный JSON (без markdown, без ```), формат:\n"
         '{"summary": "краткое резюме 2-3 предложения", '
@@ -66,8 +60,53 @@ def ai_analyze(report: dict, api_key: str | None = None) -> dict:
         "дай КОНКРЕТНОЕ действие: 'обновить nginx до X.Y.Z' (используй fixed_versions) или 'временный workaround без "
         "обновления: ...'. Не пересказывай голый CVSS-score без вывода что делать.\n"
         "Пиши на русском, конкретно, по делу.\n\n"
-        f"ОТЧЁТ:\n{json.dumps(report, ensure_ascii=False, indent=2)}"
-    )
+        "ОТЧЁТ:\n{report_json}"
+    ),
+}
+
+
+def save_report(report: dict) -> int:
+    return storage.save_report(report)
+
+
+def list_reports(limit: int = 50) -> list[dict]:
+    return storage.list_reports(limit)
+
+
+def load_report(report_id: int) -> dict | None:
+    return storage.load_report(int(report_id))
+
+
+def _resolve_api_key(explicit: str | None = None) -> str | None:
+    """Priority: explicit arg -> DB setting -> environment variable."""
+    if explicit:
+        return explicit
+    from_db = storage.setting_get('anthropic_api_key')
+    if from_db:
+        return from_db
+    return os.environ.get('ANTHROPIC_API_KEY')
+
+
+def _resolve_ai_language(explicit: str | None = None) -> str:
+    """Priority: explicit arg -> DB setting -> default ('en')."""
+    lang = explicit or storage.setting_get('ai_language') or DEFAULT_AI_LANGUAGE
+    return lang if lang in _PROMPT_INSTRUCTIONS else DEFAULT_AI_LANGUAGE
+
+
+def ai_analyze(report: dict, api_key: str | None = None, language: str | None = None) -> dict:
+    """AI analysis: problems + recommendations on what to do."""
+    api_key = _resolve_api_key(api_key)
+    if not api_key:
+        return {'error': 'API key not set (Settings -> Anthropic API key, or ANTHROPIC_API_KEY env var)'}
+
+    try:
+        import httpx
+    except ImportError:
+        return {'error': 'httpx is not installed'}
+
+    lang = _resolve_ai_language(language)
+    report_json = json.dumps(report, ensure_ascii=False, indent=2)
+    prompt = _PROMPT_INSTRUCTIONS[lang].format(report_json=report_json)
 
     try:
         resp = httpx.post(
@@ -90,13 +129,13 @@ def ai_analyze(report: dict, api_key: str | None = None) -> dict:
 
 
 def verify_api_key(api_key: str) -> dict:
-    """Проверяет, что ключ рабочий - минимальный запрос к API."""
+    """Checks that the key works - sends a minimal request to the API."""
     if not api_key:
-        return {'ok': False, 'error': 'пустой ключ'}
+        return {'ok': False, 'error': 'empty key'}
     try:
         import httpx
     except ImportError:
-        return {'ok': False, 'error': 'httpx не установлен'}
+        return {'ok': False, 'error': 'httpx is not installed'}
     try:
         resp = httpx.post(
             'https://api.anthropic.com/v1/messages',
@@ -107,7 +146,7 @@ def verify_api_key(api_key: str) -> dict:
         if resp.status_code == 200:
             return {'ok': True}
         if resp.status_code == 401:
-            return {'ok': False, 'error': 'ключ отклонён (401)'}
+            return {'ok': False, 'error': 'key rejected (401)'}
         return {'ok': False, 'error': f'HTTP {resp.status_code}'}
     except httpx.HTTPError as e:
         return {'ok': False, 'error': str(e)}

@@ -51,6 +51,7 @@ class RunRequest(BaseModel):
 class AnalyzeRequest(BaseModel):
     report_id: int | None = None
     report: dict | None = None
+    language: str | None = None  # 'en' / 'ru' - overrides the ai_language setting for this call
 
 
 class SettingsRequest(BaseModel):
@@ -180,7 +181,7 @@ def api_analyze(req: AnalyzeRequest) -> dict:
             raise HTTPException(404, 'report not found')
     else:
         raise HTTPException(400, 'report or report_id is required')
-    return ai_analyze(report)
+    return ai_analyze(report, language=req.language)
 
 
 # --- Настройки ---
@@ -201,6 +202,8 @@ def api_get_settings() -> dict:
     # значения по умолчанию, если не заданы
     out.setdefault('sync_threshold_sec', str(timing.DEFAULT_SYNC_THRESHOLD_SEC))
     out.setdefault('ema_alpha', str(timing.DEFAULT_EMA_ALPHA))
+    from netaudit_pkg.history import DEFAULT_AI_LANGUAGE
+    out.setdefault('ai_language', DEFAULT_AI_LANGUAGE)
     return out
 
 
