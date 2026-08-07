@@ -254,9 +254,26 @@ const I18N_CHECKS = {
       'да': { en: 'yes' },
     },
   },
+  lynis_audit: {
+    label: { en: 'Lynis security audit (SSH)' },
+    desc: { en: 'Server security audit via Lynis (hardening index + findings) over SSH. Read-only.' },
+    params: {
+      host: { en: 'Host' }, user: { en: 'User' }, port: { en: 'SSH port' },
+      key_path: { en: 'Key path' }, password: { en: 'Password (if no key)' },
+      auto_install: { en: 'Install lynis if missing' },
+    },
+  },
+  dns_audit: {
+    label: { en: 'DNS domain audit' },
+    desc: { en: 'SPF/DKIM/DMARC/DNSSEC + dangling CNAME detection (subdomain takeover). DNS queries only, no server access.' },
+    params: {
+      domain: { en: 'Domain' },
+      subdomains_to_check: { en: 'Subdomains to check for CNAME (comma-separated)' },
+    },
+  },
 };
 
-let CURRENT_LANG = 'ru';
+let CURRENT_LANG = 'en';
 
 const PRESET_NAME_TR = {
   '🌐 Неполадки в сети': { en: '🌐 Network issues' },
@@ -272,9 +289,8 @@ function trPresetName(name) {
 }
 
 function detectLang() {
-  const saved = null; // localStorage недоступен в артефактах; определяем по браузеру
-  const nav = (navigator.language || 'ru').toLowerCase();
-  return nav.startsWith('en') ? 'en' : 'ru';
+  const nav = (navigator.language || 'en').toLowerCase();
+  return nav.startsWith('ru') ? 'ru' : 'en';
 }
 
 function t(key) {
