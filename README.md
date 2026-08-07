@@ -1,36 +1,37 @@
-# NetAudit — модульный универсальный сетевой аудит
+# NetAudit — modular universal network audit
 
 [![Donate](https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/AndrejSemionov)
 
-🇷🇺 Русский · [🇬🇧 English](README.en.md)
+[🇷🇺 Русский](README.md) · 🇬🇧 English
 
-Инструмент диагностики сети, сайтов и серверов. Работает из **консоли** и через **веб-интерфейс**.
-Архитектура модульная: каждая проверка — плагин, регистрируется декоратором и автоматически
-появляется и в CLI, и в вебе. AI-анализ отчёта выдаёт конкретные рекомендации «что делать».
+A diagnostics tool for networks, websites and servers. Works from the **console** and via a
+**web interface**. Modular architecture: every check is a plugin, registered with a decorator
+and automatically appearing both in the CLI and the web. AI analysis of the report gives
+concrete "what to do" recommendations.
 
-> ⚠️ **Используй только на своих системах или с явного разрешения владельца.**
-> Некоторые проверки (SQL-инъекции через sqlmap, захват трафика, порт-сканирование) —
-> активное тестирование безопасности. Без разрешения владельца это может быть незаконно
-> в твоей юрисдикции. Проверка SQL-инъекций требует явного подтверждения авторизации
-> в интерфейсе перед активным сканированием — это не формальность, а реальный барьер.
+> ⚠️ **Use only on your own systems or with the owner's explicit permission.**
+> Some checks (SQL injection via sqlmap, traffic capture, port scanning) are active security
+> testing. Without the owner's permission this may be illegal in your jurisdiction. The SQL
+> injection check requires explicit authorization confirmation in the UI before active
+> scanning — this is a real barrier, not a formality.
 
-## Быстрая установка
+## Quick install
 
 ```bash
 ./install.sh
 ```
 
-Или вручную:
+Or manually:
 ```bash
 sudo apt install mtr-tiny tcptraceroute dnsutils iputils-arping iperf3 -y
 pip install -r requirements.txt --break-system-packages
 ```
 
-## Полная установка на сервер (с нуля)
+## Full server install (from scratch)
 
-Пошагово, для развёртывания на выделенной машине/VM (проверено на Ubuntu 24.04+).
+Step by step, for deploying on a dedicated machine/VM (tested on Ubuntu 24.04+).
 
-### 1. Забрать код и поставить зависимости
+### 1. Get the code and install dependencies
 
 ```bash
 git clone https://github.com/AndrejSemionov/netaudit.git
@@ -41,29 +42,29 @@ chmod +x install.sh
 ./install.sh
 ```
 
-Добавь `~/.local/bin` в PATH (туда pip ставит uvicorn и пр.):
+Add `~/.local/bin` to PATH (pip installs uvicorn etc. there):
 ```bash
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-Проверь, что всё импортируется и проверки видны:
+Verify everything imports and checks are listed:
 ```bash
 python3 -c "import fastapi, uvicorn, psutil, paramiko, httpx; print('OK')"
 python3 netaudit.py list
 ```
 
-### 2. Права для mtr (обязательно)
+### 2. Capabilities for mtr (required)
 
-`mtr` шлёт raw ICMP-пакеты и из-под сервиса без прав зависает. Дай ему capability:
+`mtr` sends raw ICMP packets and hangs when run from a service without privileges. Grant it a capability:
 ```bash
 sudo setcap cap_net_raw+ep $(which mtr)
-getcap $(which mtr)   # должно показать cap_net_raw=ep
+getcap $(which mtr)   # should show cap_net_raw=ep
 ```
 
-### 3. Автозапуск через systemd
+### 3. Autostart via systemd
 
-Создай `/etc/systemd/system/netaudit.service` (замени путь/пользователя под себя):
+Create `/etc/systemd/system/netaudit.service` (adjust the path/user):
 ```ini
 [Unit]
 Description=NetAudit web interface
@@ -82,7 +83,7 @@ Environment=PATH=/home/netaudit/.local/bin:/usr/local/bin:/usr/bin:/bin
 WantedBy=multi-user.target
 ```
 
-`Environment=PATH` обязателен — иначе systemd не найдёт uvicorn/fastapi в `~/.local/bin`.
+`Environment=PATH` is required — otherwise systemd won't find uvicorn/fastapi in `~/.local/bin`.
 
 ```bash
 sudo systemctl daemon-reload
@@ -91,23 +92,23 @@ sudo systemctl start netaudit
 sudo systemctl status netaudit   # active (running)
 ```
 
-### 4. nginx + basic auth (доступ снаружи)
+### 4. nginx + basic auth (external access)
 
-Бэкенд слушает только localhost — наружу выставляем через nginx с паролем:
+The backend listens on localhost only — expose it via nginx with a password:
 ```bash
 sudo apt install -y nginx apache2-utils
-python3 netaudit.py setup-nginx --domain <IP-или-домен> --user admin
-sudo htpasswd -c /etc/nginx/.netaudit_htpasswd admin      # задаёшь пароль
+python3 netaudit.py setup-nginx --domain <IP-or-domain> --user admin
+sudo htpasswd -c /etc/nginx/.netaudit_htpasswd admin      # set a password
 sudo cp netaudit.nginx.conf /etc/nginx/sites-available/netaudit
 sudo ln -s /etc/nginx/sites-available/netaudit /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-Готово — открой `http://<IP-или-домен>`, войди по логину/паролю. Порт 8000 наружу не торчит.
-Конфиг уже включает `proxy_buffering off` — это нужно для живого графика (SSE-поток).
+Done — open `http://<IP-or-domain>`, log in with your username/password. Port 8000 is not exposed.
+The generated config already includes `proxy_buffering off` — needed for the live chart (SSE stream).
 
-### 5. Обновление кода
+### 5. Updating
 
 ```bash
 cd ~/netaudit
@@ -115,361 +116,70 @@ git pull
 find . -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null
 sudo systemctl restart netaudit
 ```
-Затем в браузере жёсткое обновление (Ctrl+Shift+R), т.к. фронтенд кэшируется.
+Then hard-refresh the browser (Ctrl+Shift+R), since the frontend is cached.
 
-### Управление сервисом
+### Service management
 
 ```bash
-sudo systemctl status netaudit      # статус
-sudo systemctl restart netaudit     # перезапуск после обновления
-sudo journalctl -u netaudit -f      # логи в реальном времени
+sudo systemctl status netaudit      # status
+sudo systemctl restart netaudit     # restart after update
+sudo journalctl -u netaudit -f      # live logs
 ```
 
-## Веб-интерфейс
+## Web interface
 
 ```bash
 python3 netaudit.py web
 ```
-Открой http://127.0.0.1:8000 — слева галочками выбираешь проверки и задаёшь параметры,
-жмёшь «Запустить аудит». Проверки с длительностью (mtr, ping, tcptraceroute) рисуют
-**живой график** в реальном времени, любую можно **остановить** кнопкой досрочно.
-Результат рисуется таблицами с подсветкой потерь. Кнопка «AI-анализ: что делать»
-отправляет отчёт в Claude и возвращает список проблем + приоритизированные рекомендации.
+Open http://127.0.0.1:8000 — pick checks with checkboxes on the left and set parameters,
+click "Run audit". Checks with a duration (mtr, ping, tcptraceroute) draw a **live chart**
+in real time, and any of them can be **stopped early** with a button. Results render as tables
+with loss highlighting. The "AI analysis: what to do" button sends the report to Claude and
+returns a list of issues + prioritized recommendations.
 
-Интерфейс на **русском и английском** — переключатель RU/EN в шапке, язык также
-определяется автоматически по браузеру.
+The interface is in **Russian and English** — RU/EN switch in the header, and the language is
+also auto-detected from the browser.
 
-### Умный sync/async (адаптивно)
-
-Система сама решает, выполнять проверку синхронно или в фоне — по реальному времени
-прошлых прогонов. Быстрые проверки (ssl, ports, dig — доли секунды) отдают результат
-сразу в том же запросе, без опроса. Долгие (mtr до далёкого сервера, iperf, ssh-аудит)
-уходят в фон с прогрессом.
-
-Ключевая деталь: решение принимается по паре **проверка + цель**, а не по типу проверки.
-`mtr` до локального шлюза (0.4с) выполнится синхронно, а тот же `mtr` до далёкого сервера
-(20с) — в фоне. Система учится на каждом прогоне (скользящее среднее в `~/.netaudit/timing.json`)
-и со временем оценивает всё точнее. Кнопка запуска заранее показывает оценку: «~1.5с · сразу»
-или «~20с · в фоне». Чекбокс «принудительно в фоне» перекрывает решение для любой проверки.
-
-Первый прогон незнакомой цели использует консервативную seed-оценку (лучше зря уйти в фон,
-чем повесить браузер), дальше подстраивается под факт.
-
-По умолчанию слушает только `127.0.0.1` (снаружи недоступен). Для доступа с других устройств:
+## CLI
 
 ```bash
-python3 netaudit.py setup-nginx --domain audit.example.com --user admin
-```
-Скрипт сгенерирует конфиг nginx с basic auth и напечатает пошаговые команды (htpasswd, copy,
-enable, reload). Бэкенд при этом остаётся на localhost, наружу торчит только nginx с паролем.
-
-## Консоль
-
-```bash
-python3 netaudit.py list                             # все проверки и их параметры
-python3 netaudit.py run mtr ping                      # выполнить (параметры по умолчанию)
-python3 netaudit.py run mtr --target 5.20.136.3        # с параметром
-python3 netaudit.py run ssl http --url https://example.com
-python3 netaudit.py run ports firewall performance      # локальная безопасность + ресурсы
-python3 netaudit.py run mtr ping --ai                    # + AI-анализ после прогона
-python3 netaudit.py history                               # список сохранённых отчётов
-python3 netaudit.py analyze ~/.netaudit/history/report_X.json  # AI-анализ отчёта
+python3 netaudit.py list                 # list all checks
+python3 netaudit.py run mtr --target 8.8.8.8   # run a check
+python3 netaudit.py history              # past reports
+python3 netaudit.py install <tool>       # install a missing tool (nmap, tshark, ...)
 ```
 
-Один и тот же движок и проверки — в консоли и вебе, отчёты пишутся в общую историю
-`~/.netaudit/history/`, так что можно запустить из CLI, а открыть и проанализировать в вебе.
+## Checks
 
-## Доступные проверки
+20 checks across 6 categories: network (mtr, tcptraceroute, ping, dig, arping),
+site (ssl, http, security headers, external web audit, SQL injection, DNS audit),
+security (open ports, firewall), performance (CPU/RAM/disk, iperf3), server via SSH
+(audit, full security audit, Lynis hardening audit), traffic capture (tshark, MikroTik)
+with threat scoring of destinations.
 
-| Категория | Проверки |
-|---|---|
-| Сеть | mtr (ICMP), tcptraceroute (TCP), ping, dig, arping |
-| Сайт | ssl (openssl s_client), http (curl-тайминги по фазам), security_headers |
-| Безопасность | ports (ss), firewall (ufw/nft) |
-| Производительность | performance (CPU/RAM/диск), iperf (пропускная способность) |
-| Сервер | ssh_audit (readonly-аудит удалённого сервера) |
+**Lynis audit** (`lynis_audit`, SSH) — runs `lynis audit system` on the remote host and parses
+`/var/log/lynis-report.dat`: hardening index (0–100), warnings mapped to `high` severity,
+suggestions mapped to `low`. Can auto-install lynis via a checkbox. Read-only, same as all
+other SSH-based checks; full coverage requires passwordless sudo (or root) on the target.
 
-**tcptraceroute** — ключевой для споров с ISP: идёт TCP SYN-пакетами (как веб-трафик),
-опровергает отговорку «у нас просто ICMP так настроен».
+**DNS audit** (`dns_audit`, DNS-only) — SPF (lookup-count limit, `+all` risk), DKIM (common
+selector probing), DMARC (policy, missing reports), DNSSEC (signed zone + DS chain), and
+dangling CNAME detection (subdomain takeover risk) across a configurable subdomain list.
 
-## AI-анализ
+## Security
 
-Нужен ключ Anthropic:
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-```
-Возвращает структурированный разбор: `summary`, список `problems` (severity high/medium/low)
-и `recommendations` (приоритет + что сделать + почему). Работает и из веба (кнопка), и из CLI
-(`--ai` или `analyze`).
+- The web listens on localhost by default; external access only via nginx + basic auth (+ HTTPS via certbot).
+- All external commands run through `subprocess` without `shell=True`, argument lists only.
+- SSH checks are read-only, they change nothing on the remote server.
+- The Anthropic API key is read from an environment variable / local DB, never stored in code or reports.
 
-## Захват и анализ трафика
+## Support the project
 
-Категория «Захват трафика» — два плагина, отвечают на вопрос «куда уходят пакеты устройства»:
-
-**tshark_capture** — пассивный захват движком Wireshark (`tshark`) на интерфейсе машины.
-Параметры: интерфейс, длительность, BPF-фильтр (напр. `host 192.168.88.55`). Выдаёт топ
-назначений по объёму трафика, с обратным DNS и разбивкой по протоколам.
-⚠️ Нужен root (захват требует CAP_NET_RAW). Видит только трафик, физически проходящий через
-эту машину — то есть её собственный или зеркалированный на неё порт свитча.
-
-**mikrotik_sniffer** — трафик конкретного устройства (телефона) через роутер MikroTik по SSH.
-Параметры: IP роутера, логин/пароль, IP устройства. Читает таблицу connection tracking и
-показывает, на какие адреса у устройства активные соединения (по протоколам и портам).
-Ключевое преимущество: роутер — точка, через которую проходит ВЕСЬ трафик устройства, поэтому
-ничего зеркалировать не надо. Для анализа трафика телефона это правильный путь.
-
-Оба показывают дашборд «топ назначений» (график по объёму + таблица с обратным DNS).
-
-**Важное ограничение:** TLS не расшифровывается. Видно КУДА (IP/домен), СКОЛЬКО и по каким
-портам/протоколам — но не содержимое. Подозрительное выявляется по адресам назначения и
-объёму/частоте, а не по тому, что внутри пакетов. Это инструмент анализа трафика, не детектор
-шпионского ПО на самом устройстве — последнее требует осмотра приложений/разрешений на телефоне.
-
-## Security-аудит сервера и сайта
-
-Универсальная платформа под задачи клиентов — запускаешь нужный набор проверок под конкретный запрос.
-
-**server_audit** (SSH, изнутри) — полный security-аудит сервера в одном подключении:
-- **nginx**: server_tokens, устаревшие TLS 1.0/1.1, security-заголовки в конфиге, autoindex, версия
-- **Fail2Ban**: активные jail, покрытие SSH, количество банов, или предупреждение что не установлен
-- **firewall**: реальный разбор ufw/nftables/iptables, детект «фактически открыт» (ACCEPT без правил)
-- **MySQL/MariaDB**: слушает ли на 0.0.0.0 (доступ извне), bind-address в конфиге
-- **SSH hardening**: PermitRootLogin, PasswordAuthentication, PermitEmptyPasswords, порт, MaxAuthTries
-
-**web_security_external** (снаружи, без доступа) — аудит сайта с точки зрения атакующего:
-- security-заголовки, утечка версии сервера
-- поддержка устаревших TLS 1.0/1.1
-- доступность чувствительных путей: `.git/config`, `.env`, `wp-config.php.bak`, `server-status`, бэкапы SQL и т.д.
-
-Каждая находка имеет severity (high/medium/low/ok) и объяснение что исправить. Сводка сверху,
-цветная разметка в дашборде. AI-анализ собирает все high/medium в приоритетные рекомендации
-с конкретикой (какую директиву, где).
-
-### Lynis-аудит
-
-Плагин `lynis_audit` — подключение готового инструмента [Lynis](https://cisofy.com/lynis/)
-вместо ручных проверок с нуля. По SSH запускает `lynis audit system` на целевом сервере и
-парсит машиночитаемый отчёт (`/var/log/lynis-report.dat`):
-
-- **hardening index** (0–100) — общая оценка защищённости системы
-- **warnings** → маппятся в severity `high` (реальные проблемы: root-логин по SSH,
-  небезопасные разрешения, отсутствующие ограничения)
-- **suggestions** → маппятся в severity `low` (рекомендации по улучшению: sysctl, umask и т.д.)
-
-Если `lynis` не установлен на сервере — можно поставить одной галкой («Установить lynis,
-если отсутствует») или вручную: `apt install lynis -y`.
-
-Для полного покрытия нужен passwordless sudo (или запуск под root) — без него часть проверок
-Lynis пропускает, о чём плагин честно предупреждает в результате (`warning` в ответе).
-Как и все остальные security-проверки — readonly, ничего на сервере не меняет.
-
-### DNS-аудит
-
-Плагин `dns_audit` — проверка DNS-конфигурации домена, только через `dig`, без доступа к серверу:
-
-- **SPF**: наличие записи, превышение лимита 10 DNS-lookup (RFC 7208 — превышение ломает
-  всю проверку у приёмников), опасные `+all`/`?all` в конце
-- **DKIM**: перебор частых селекторов (`default`, `google`, `selector1` и т.д. — сам протокол
-  не публикует список селекторов нигде в DNS, так что это эвристика)
-- **DMARC**: наличие записи, политика (`p=none/quarantine/reject`), отдельно отмечается
-  `p=none` без отчётов (`rua=`) — типичная недоделанная настройка без защиты
-- **DNSSEC**: подписана ли зона (DNSKEY), замкнута ли цепочка доверия (DS-запись у регистратора)
-- **Висящие CNAME**: перебор заданных поддоменов, поиск CNAME, указывающих на нерезолвящиеся
-  цели — классический риск subdomain takeover, особенно на публичных платформах
-  (GitHub Pages, Heroku, S3, Netlify, Vercel и т.д. — распознаются по имени и подсвечиваются
-  отдельно как `high`)
-- **Обнаруженные сервисы**: verification-токены в TXT-записях (`google-site-verification=`,
-  `atlassian-domain-verification=`, `MS=`, `docusign=` и т.д.) выдают, какими сторонними
-  сервисами пользуется владелец домена — полезно для профилирования инфраструктуры цели
-  при разведке. Информационная секция (severity `low`), не угроза сама по себе.
-
-Список поддоменов для проверки CNAME задаётся вручную (через запятую) — DNS не даёт способа
-перечислить все существующие поддомены зоны без zone transfer, так что проверяются только
-явно указанные.
-
-### Проверка SQL-инъекций
-
-Плагин `sql_injection` — два уровня:
-
-**Пассивный (всегда доступен)** — находит точки ввода, где инъекция теоретически возможна:
-GET-параметры в URL и поля форм на странице. Ничего не атакует, только разведка. Безопасно.
-
-**Активный через sqlmap (требует подтверждения)** — реальное тестирование индустриальным
-инструментом sqlmap: находит уязвимые параметры, типы инъекций (boolean/time-based blind и т.д.),
-определяет СУБД.
-
-⚠️ **Обязательный барьер авторизации.** Активное сканирование НЕ запускается без явного
-подтверждения в параметре «Авторизация на тест» → «да — я владелец / есть письменное разрешение».
-Без подтверждения плагин делает только пассивную разведку и выводит предупреждение. Это защита:
-тестировать SQL-инъекции на чужом сайте без разрешения незаконно (в ЕС/Литве — противоправный
-доступ), даже «просто для проверки». Барьер реальный, не косметический — sqlmap физически не
-запустится.
-
-sqlmap ставится кнопкой в «Настройки → Инструменты» или `python3 netaudit.py install sqlmap`.
-
-## Готовые пресеты (создаются при первом запуске)
-
-Под типовые задачи — один клик вместо расстановки галочек:
-- **🌐 Неполадки в сети** — mtr + tcptraceroute + ping + dig
-- **🔒 Аудит сайта (снаружи)** — ssl + web_security_external + security_headers
-- **🖥️ Аудит сервера (SSH)** — полный server_audit
-- **📡 Куда уходит трафик** — mikrotik_sniffer с анализом угроз
-
-Впиши цель/хост/URL в параметры и запускай. Свои пресеты добавляются кнопкой «Сохранить как пресет».
-
-## Обнаружение подозрительного трафика
-
-Плагины захвата (`tshark_capture`, `mikrotik_sniffer`) автоматически оценивают каждое
-назначение и помечают уровнем риска: **ok / подозрительно / опасно**. Параметр «Анализ угроз»:
-`да` (эвристики), `да+whois` (+ определение организации/страны по ASN), `нет`.
-
-Сигналы оценки:
-- **Репутация**: чёрный список пользователя → всегда опасно; белый список и известные сервисы
-  (Google, Cloudflare, Apple, Telegram и т.д.) → риск снят; ASN/организация через whois.
-- **Поведение**: прямой IP без обратного DNS (частый признак malware/C2), нестандартные порты,
-  известные «плохие» порты (4444 Metasploit, 6667 IRC-C2, 31337 и т.д.), незашифрованный HTTP
-  к неизвестному адресу, аномально много соединений к одному адресу (маячок/beacon).
-- **Итог оценивает AI** — кнопка «AI-анализ» объясняет, куда уходит трафик, что подозрительно
-  и почему, не паникуя по легитимным сервисам.
-
-В дашборде подозрительные назначения подсвечиваются, график показывает именно их (не тонут
-в общем объёме). Сводка сверху: сколько опасных / подозрительных / нормальных.
-
-**Белый и чёрный списки** настраиваются в «Настройки → Списки репутации»: IP, подсеть
-(`185.220.101.0/24`) или часть домена. Белый — кому доверяешь (свои серверы, рабочие сервисы),
-чёрный — заведомо плохие адреса.
-
-**Как это отвечает на «пакеты уходят не туда»:** видишь список всех адресов назначения с
-пометкой риска. Легитимное (Google, CDN, твои серверы) — зелёное. Прямой IP на странном порту
-с постоянными соединениями — красное, с объяснением почему. Это и есть выявление трафика,
-уходящего туда, куда не должен. Напоминание: TLS-содержимое не видно, оценка по адресам и
-поведению, а не по содержимому пакетов.
-
-## Управление инструментами
-
-Вкладка «Настройки» → блок «Инструменты системы»:
-- Список всех внешних утилит (mtr, openssl, dig, iperf3...) со статусом установлен/нет и тем, какие проверки их используют.
-- Кнопка «установить» для недостающих — ставит через `apt` по белому списку (нужны права sudo на сервере; если sudo с паролем — покажет команду для ручного запуска).
-
-Из консоли то же самое:
-```bash
-python3 netaudit.py tools           # статус всех инструментов
-python3 netaudit.py install mtr     # установить конкретный
-```
-
-### Выбор инструмента внутри проверки
-
-Некоторые проверки умеют работать разными инструментами — выбор в выпадающем списке параметра:
-- **ssl**: `auto` / `openssl` (полные данные: протокол, шифр, цепочка) / `python` (без внешних зависимостей, базовые данные)
-- **http**: `auto` / `curl` (раздельные тайминги по фазам) / `python` (httpx, суммарное время)
-
-`auto` = использовать внешний инструмент если установлен, иначе откатиться на встроенный Python.
-В результате видно поле `tool_used` — каким инструментом реально выполнено.
-
-## Инфографика и графики
-
-Каждый тип проверки визуализируется, не только таблицей:
-
-- **mtr** — бары потерь по хопам (красные если >10%) + таблица
-- **tcptraceroute** — линия задержек по хопам
-- **http** — горизонтальные бары таймингов по фазам (DNS / TCP connect / TLS / TTFB / итого)
-- **performance** — бары загрузки CPU / RAM / дисков с цветом по порогам (>85% красный)
-- **iperf** — бары upload / download
-- **ssl** — индикатор срока сертификата с цветом (< 14 дн. красный)
-
-Вкладка **«Динамика»** строит график потерь mtr по выбранной цели во времени из истории
-в БД — виден тренд: деградирует ли связь. Накопил несколько прогонов до `5.20.136.3` —
-получил кривую потерь по дням, наглядный аргумент для провайдера.
-
-Цели по умолчанию (из настроек) подставляются в поля проверок через автодополнение —
-начни вводить в поле target/url, появятся сохранённые.
-
-## Настройки через веб
-
-Вкладка «Настройки» в интерфейсе — всё управляется без правки кода:
-
-- **Anthropic API** — ключ для AI-анализа. Хранится в локальной БД, обратно на экран не отдаётся (маскируется). Кнопка «Проверить ключ» делает тестовый запрос и говорит, рабочий ли он.
-- **Режим sync/async** — порог синхронности (сек) и EMA alpha (скорость адаптации оценок времени).
-- **Telegram-алерты** — токен бота и chat_id (для будущих фоновых мониторингов).
-- **Цели по умолчанию** — список часто используемых IP/URL.
-- **Пресеты** — сохранённые наборы проверок. На вкладке «Аудит» клик по пресету применяет его; кнопка «Сохранить как пресет» запоминает текущий выбор.
-
-Приоритет API-ключа: настройка в БД → переменная окружения `ANTHROPIC_API_KEY`.
-
-## Хранилище (SQLite)
-
-Всё персистентное — в `~/.netaudit/netaudit.db` (SQLite, WAL-режим). История отчётов, статистика
-тайминга, настройки, пресеты и цели. Схема версионируется (`PRAGMA user_version`), новые поля
-добавляются миграцией в `storage.py::MIGRATIONS` без потери данных. CLI и веб пишут в одну БД —
-прогон из консоли виден в истории веба и наоборот.
-
-Весь SQL изолирован в `storage.py`: остальной код вызывает функции (`save_report`, `timing_get`,
-`preset_save`…) и не знает про БД. Если история дорастёт до тяжёлой аналитики, есть `query_reports()`
-с фильтрами по проверке и дате — основа для отчётов вида «все прогоны mtr до 5.20.136.3 с потерями».
-
-## Как добавить свою проверку (модульность)
-
-Создай функцию с декоратором в любом файле внутри `netaudit_pkg/checks/`:
-
-```python
-from ..registry import register
-from ..utils import run_cmd, tool_available
-
-@register(
-    id='whois', label='WHOIS', category='site',
-    params=[{'name': 'domain', 'type': 'text', 'label': 'Домен', 'default': 'example.com'}],
-    required_tools=['whois'],
-    description='Информация о регистрации домена.',
-)
-def check_whois(domain: str = 'example.com') -> dict:
-    if not tool_available('whois'):
-        return {'error': 'whois не установлен'}
-    code, out, err = run_cmd(['whois', domain], timeout=15)
-    return {'domain': domain, 'raw': out.strip()}
-```
-
-Добавь импорт в `netaudit_pkg/checks/__init__.py` — и всё. Проверка сразу появится
-в `list`, в CLI `run`, и галочкой в веб-интерфейсе с полями параметров. Больше ничего
-менять не нужно — ни бэкенд, ни фронтенд.
-
-## Структура
-
-```
-netaudit.py                  — CLI + запуск веба + setup-nginx
-requirements.txt
-install.sh
-netaudit_pkg/
-  registry.py                 — реестр проверок (ядро модульности)
-  engine.py                    — движок выполнения с таймингом
-  timing.py                     — адаптивный sync/async (учится на реальном времени)
-  storage.py                     — слой SQLite (история, тайминг, настройки, пресеты, цели)
-  utils.py                        — run_cmd, tool_available
-  history.py                       — отчёты + AI-анализ + проверка ключа
-  checks/
-    __init__.py                   — импортирует все модули проверок
-    network.py                     — mtr, tcptraceroute, ping, dig, arping
-    site.py                         — ssl, http, security_headers
-    system.py                        — ports, firewall, performance, ssh_audit, iperf
-web/
-  app.py                            — FastAPI: /api/checks /api/run /api/status /api/analyze /api/history
-  static/index.html                  — веб-интерфейс (одностраничный)
-```
-
-## Безопасность
-
-- Веб по умолчанию только на localhost; наружу — только через nginx + basic auth (+ HTTPS через certbot).
-- Все внешние команды через `subprocess` без `shell=True`, только списки аргументов.
-- SSH-проверки — readonly, ничего не меняют на удалённом сервере.
-- API-ключ Anthropic берётся из переменной окружения, не хранится в коде/отчётах.
-
-## Поддержать проект
-
-Если инструмент оказался полезен — можно угостить автора кофе:
+If you find the tool useful, you can buy the author a coffee:
 [paypal.me/AndrejSemionov](https://paypal.me/AndrejSemionov)
 
-## Лицензия
+## License
 
-AGPL-3.0. Можно свободно использовать, менять и распространять — в том числе коммерчески,
-но если разворачиваешь изменённую версию как сетевой сервис, обязан открыть исходники
-своих изменений пользователям этого сервиса. См. файл `LICENSE`.
-
+AGPL-3.0. Free to use, modify and distribute — including commercially — but if you deploy a
+modified version as a network service, you must make your changes' source available to the
+users of that service. See the `LICENSE` file.
