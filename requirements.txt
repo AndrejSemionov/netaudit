@@ -1,0 +1,5 @@
+psutil>=5.9
+httpx>=0.24
+paramiko>=3.0
+fastapi>=0.100
+uvicorn[standard]>=0.23

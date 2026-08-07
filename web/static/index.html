@@ -1,0 +1,1521 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NetAudit — панель аудита</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #131824;
+    --panel-2: #1a2030;
+    --border: #232b3d;
+    --text: #d7dae0;
+    --muted: #7b8494;
+    --accent: #4d9fff;
+    --accent-dim: #26456e;
+    --ok: #37d67a;
+    --warn: #ffb454;
+    --bad: #ff5c6c;
+    --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 14px;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 14px;
+    padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  header h1 { margin: 0; font-size: 18px; letter-spacing: 0.5px; }
+  header .sub { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+  .layout { display: grid; grid-template-columns: 380px 1fr; min-height: calc(100vh - 57px); }
+  .sidebar { border-right: 1px solid var(--border); padding: 20px; overflow-y: auto; background: var(--panel); }
+  .main { padding: 24px; overflow-y: auto; }
+  .cat { margin-bottom: 20px; }
+  .cat h3 {
+    margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--muted); font-family: var(--mono);
+  }
+  .check {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 8px; transition: border-color .15s;
+  }
+  .check.sel { border-color: var(--accent-dim); }
+  .check.disabled { opacity: .5; }
+  .check-head { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .check-head input { accent-color: var(--accent); width: 16px; height: 16px; }
+  .check-head .label { font-weight: 500; flex: 1; }
+  .check-head .missing { font-size: 10px; color: var(--bad); font-family: var(--mono); }
+  .check .desc { color: var(--muted); font-size: 12px; margin: 4px 0 0 24px; }
+  .params { margin: 8px 0 0 24px; display: none; flex-direction: column; gap: 6px; }
+  .check.sel .params { display: flex; }
+  .params label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .params input, .params select {
+    flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 5px 8px; border-radius: 5px; font-family: var(--mono); font-size: 12px;
+  }
+  .run-bar {
+    position: sticky; bottom: 0; background: var(--panel); padding-top: 12px; margin-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+  button {
+    background: var(--accent); color: #06121f; border: none; padding: 10px 18px;
+    border-radius: 7px; font-weight: 600; cursor: pointer; font-size: 14px; width: 100%;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent-dim); }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 16px; }
+  .toolbar button { width: auto; }
+  .status {
+    font-family: var(--mono); font-size: 13px; color: var(--muted);
+    padding: 12px 0; min-height: 20px;
+  }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+  .card h2 { margin: 0 0 12px; font-size: 15px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+  th { background: var(--panel-2); color: var(--muted); font-weight: 500; font-family: var(--mono); font-size: 11px; }
+  td { font-family: var(--mono); }
+  tr.bad td { background: rgba(255,92,108,.12); color: var(--bad); }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 5px; font-size: 11px; font-family: var(--mono); }
+  .pill.ok { background: rgba(55,214,122,.15); color: var(--ok); }
+  .pill.warn { background: rgba(255,180,84,.15); color: var(--warn); }
+  .pill.bad { background: rgba(255,92,108,.15); color: var(--bad); }
+  pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; font-size: 12px; font-family: var(--mono); white-space: pre-wrap; word-break: break-word; }
+  .empty { color: var(--muted); text-align: center; padding: 60px 20px; font-family: var(--mono); }
+  .ai-card { border-color: var(--accent-dim); }
+  .rec { border-left: 2px solid var(--accent); padding: 8px 0 8px 12px; margin-bottom: 10px; }
+  .rec .action { font-weight: 600; }
+  .rec .why { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .timing { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+  .sev-high { color: var(--bad); } .sev-medium { color: var(--warn); } .sev-low { color: var(--muted); }
+  .tabs-nav { margin-left: auto; display: flex; gap: 4px; }
+  .donate-link { margin-left: 14px; font-size: 13px; color: var(--muted); text-decoration: none;
+    padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); white-space: nowrap; }
+  .donate-link:hover { color: #ffb454; border-color: #ffb454; }
+  .lang-sel { margin-left: 8px; background: var(--card); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 6px; font-size: 12px; cursor: pointer; }
+  .tab-btn { width: auto; background: transparent; color: var(--muted); border: 1px solid transparent; padding: 6px 14px; font-weight: 500; }
+  .tab-btn.active { color: var(--text); border-color: var(--border); background: var(--panel-2); }
+  .tab-page { display: none; }
+  .tab-page.active { display: block; }
+  .settings-wrap { max-width: 760px; padding: 24px; }
+  .settings-group { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin-bottom: 18px; }
+  .settings-group h2 { margin: 0 0 4px; font-size: 15px; }
+  .settings-group .hint { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+  .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+  .field label { font-size: 13px; color: var(--muted); }
+  .field input, .field select {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 8px 10px; border-radius: 6px; font-family: var(--mono); font-size: 13px;
+  }
+  .field-row { display: flex; gap: 8px; align-items: flex-end; }
+  .field-row .field { flex: 1; margin-bottom: 0; }
+  .btn-sm { width: auto; padding: 8px 14px; font-size: 13px; }
+  .btn-danger { background: transparent; color: var(--bad); border: 1px solid rgba(255,92,108,.3); }
+  .list-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; }
+  .list-row .grow { flex: 1; }
+  .key-status { font-size: 12px; font-family: var(--mono); margin-left: 8px; }
+  .save-row { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+  .preset-chip {
+    display: inline-flex; align-items: center; gap: 6px; background: var(--panel-2);
+    border: 1px solid var(--accent-dim); border-radius: 20px; padding: 4px 12px; margin: 0 6px 6px 0;
+    cursor: pointer; font-size: 13px;
+  }
+  .preset-chip .del { color: var(--muted); font-size: 15px; }
+  button.stopbtn { background: var(--bad); color: #fff; }
+  .chart-box { height: 240px; margin: 4px 0 14px; }
+  .chart-box canvas { max-height: 240px; }
+  @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } .sidebar { border-right: none; border-bottom: 1px solid var(--border); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>NetAudit</h1>
+  <span class="sub" data-i18n="app.sub">универсальный сетевой аудит</span>
+  <nav class="tabs-nav">
+    <button class="tab-btn active" data-tab="audit" onclick="switchTab('audit')" data-i18n="tab.audit">Аудит</button>
+    <button class="tab-btn" data-tab="trends" onclick="switchTab('trends')" data-i18n="tab.trends">Динамика</button>
+    <button class="tab-btn" data-tab="settings" onclick="switchTab('settings')" data-i18n="tab.settings">Настройки</button>
+    <button class="tab-btn" data-tab="help" onclick="switchTab('help')" data-i18n="tab.help">Помощь</button>
+  </nav>
+  <a href="https://paypal.me/AndrejSemionov" target="_blank" rel="noopener" class="donate-link" title="Поддержать проект" data-i18n="donate">☕ Поддержать</a>
+  <select id="langSel" class="lang-sel" onchange="setLang(this.value)">
+    <option value="ru">RU</option>
+    <option value="en">EN</option>
+  </select>
+</header>
+
+<div class="tab-page active" id="tab-audit">
+<datalist id="savedTargets"></datalist>
+<div class="layout">
+  <aside class="sidebar">
+    <div id="presetBar" style="margin-bottom:16px"></div>
+    <div id="checkList"></div>
+    <div class="run-bar">
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:8px">
+        <input type="checkbox" id="forceAsync" style="accent-color:var(--accent)">
+        <span data-i18n="force.async">принудительно выполнять в фоне</span>
+      </label>
+      <button id="runBtn" onclick="runAudit()" data-i18n="run">Запустить аудит</button>
+      <button class="ghost btn-sm" style="width:100%;margin-top:8px" onclick="saveCurrentAsPreset()" data-i18n="save.preset">Сохранить как пресет</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="toolbar">
+      <button class="ghost" onclick="loadHistory()" data-i18n="history">История</button>
+      <button class="ghost" id="aiBtn" onclick="analyzeReport()" disabled data-i18n="ai.analyze">AI-анализ: что делать</button>
+    </div>
+    <div class="status" id="status" data-i18n="select.hint">Выбери проверки слева и запусти аудит.</div>
+    <div id="results"><div class="empty" data-i18n="report.here">Здесь появится отчёт</div></div>
+  </main>
+</div>
+</div>
+
+<div class="tab-page" id="tab-trends">
+  <div class="settings-wrap" style="max-width:900px">
+    <div class="settings-group">
+      <h2>Динамика потерь по цели</h2>
+      <p class="hint">График максимальных потерь mtr во времени по выбранной цели — из истории прогонов. Виден тренд: деградирует связь или стабильна.</p>
+      <div class="field-row">
+        <div class="field">
+          <label>Цель (из истории mtr)</label>
+          <select id="trendTarget" onchange="loadTrend()"></select>
+        </div>
+      </div>
+      <div class="chart-box" style="height:320px;margin-top:16px"><canvas id="trendChart"></canvas></div>
+      <div id="trendEmpty" style="color:var(--muted);font-size:13px"></div>
+    </div>
+  </div>
+</div>
+
+<div class="tab-page" id="tab-settings">
+  <div class="settings-wrap">
+    <div class="settings-group">
+      <h2>Anthropic API</h2>
+      <p class="hint">Ключ для AI-анализа отчётов. Хранится в локальной БД, обратно на экран не отдаётся.</p>
+      <div class="field">
+        <label>API-ключ <span id="keyStatus" class="key-status"></span></label>
+        <input type="password" id="apiKey" placeholder="sk-ant-... (оставь пустым, чтобы не менять)">
+      </div>
+      <div class="save-row">
+        <button class="ghost btn-sm" onclick="verifyKey()">Проверить ключ</button>
+        <span id="verifyResult" class="key-status"></span>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <h2>Режим sync / async</h2>
+      <p class="hint">Порог: проверки с оценкой времени ≤ порога идут синхронно (сразу), длиннее — в фоне. EMA — скорость адаптации оценок (0..1).</p>
+      <div class="field-row">
+        <div class="field">
+          <label>Порог синхронности, сек</label>
+          <input type="number" step="0.1" id="syncThreshold">
+        </div>
+        <div class="field">
+          <label>EMA alpha</label>
+          <input type="number" step="0.05" min="0" max="1" id="emaAlpha">
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <h2>Telegram-алерты</h2>
+      <p class="hint">Для будущих фоновых мониторингов: токен бота и chat_id.</p>
+      <div class="field">
+        <label>Bot token <span id="tgStatus" class="key-status"></span></label>
+        <input type="password" id="telegramToken" placeholder="оставь пустым, чтобы не менять">
+      </div>
+      <div class="field">
+        <label>Chat ID</label>
+        <input type="text" id="telegramChat">
+      </div>
+    </div>
+
+    <div class="save-row" style="margin-bottom:24px">
+      <button class="btn-sm" onclick="saveSettings()">Сохранить настройки</button>
+      <span id="settingsSaved" class="key-status"></span>
+    </div>
+
+    <div class="settings-group">
+      <h2>История трафика (фоновый сборщик)</h2>
+      <p class="hint">Раз в интервал опрашивает MikroTik и копит снимки соединений устройства в БД — можно "отмотать назад" и посмотреть, куда оно стучалось за прошедший период, а не только в момент запуска проверки вручную.</p>
+      <div class="field">
+        <label><input type="checkbox" id="hcEnabled" style="width:auto;margin-right:6px"> Включить фоновый сбор</label>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>IP роутера</label><input type="text" id="hcRouter"></div>
+        <div class="field"><label>Пользователь</label><input type="text" id="hcUser"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Пароль <span id="hcPwStatus" class="key-status"></span></label><input type="password" id="hcPassword" placeholder="оставь пустым, чтобы не менять"></div>
+        <div class="field"><label>SSH-порт</label><input type="number" id="hcPort"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>IP устройства (телефона)</label><input type="text" id="hcTargetIp" placeholder="192.168.88.50"></div>
+        <div class="field"><label>Интервал опроса, сек</label><input type="number" id="hcInterval"></div>
+      </div>
+      <div class="field">
+        <label>Хранить историю, часов</label>
+        <input type="number" id="hcRetention" style="max-width:120px">
+      </div>
+      <div class="save-row">
+        <button class="btn-sm" onclick="saveHistoryCapture()">Сохранить</button>
+        <span id="hcSaved" class="key-status"></span>
+        <span id="hcStatus" class="hint" style="margin-left:12px"></span>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <h2>Посмотреть историю трафика</h2>
+      <div class="field-row">
+        <div class="field"><label>IP устройства</label><input type="text" id="hcQueryIp" placeholder="192.168.88.50"></div>
+        <div class="field"><label>За последние, часов</label><input type="number" id="hcQueryHours" value="1" step="0.5"></div>
+      </div>
+      <div class="save-row">
+        <button class="ghost btn-sm" onclick="queryHistoryCapture()">Показать</button>
+      </div>
+      <div id="hcResults" style="margin-top:12px"></div>
+    </div>
+
+    <div class="settings-group">
+      <h2>Цели по умолчанию</h2>
+      <p class="hint">Часто используемые IP/URL — подставляются в параметры проверок.</p>
+      <div id="targetsList"></div>
+      <div class="field-row" style="margin-top:12px">
+        <div class="field"><label>Метка</label><input type="text" id="newTargetLabel" placeholder="напр. Домашний сервер"></div>
+        <div class="field"><label>Значение</label><input type="text" id="newTargetValue" placeholder="IP или домен"></div>
+        <div class="field" style="flex:0 0 90px"><label>Тип</label>
+          <select id="newTargetKind"><option value="ip">IP</option><option value="url">URL</option></select></div>
+        <button class="btn-sm" onclick="addTarget()">＋</button>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <h2>Списки репутации (для анализа трафика)</h2>
+      <p class="hint">Белый список — адреса/домены, которым доверяешь (не флагятся). Чёрный — заведомо плохие (всегда опасно). Можно IP, подсеть (1.2.3.0/24) или часть домена.</p>
+      <div id="repList"></div>
+      <div class="field-row" style="margin-top:12px">
+        <div class="field"><label>Паттерн</label><input type="text" id="newRepPattern" placeholder="185.220.101. или evil.com"></div>
+        <div class="field" style="flex:0 0 120px"><label>Список</label>
+          <select id="newRepType"><option value="block">чёрный</option><option value="allow">белый</option></select></div>
+        <div class="field"><label>Заметка</label><input type="text" id="newRepNote" placeholder="напр. Tor exit"></div>
+        <button class="btn-sm" onclick="addRep()">＋</button>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <h2>Инструменты системы</h2>
+      <p class="hint">Какие внешние утилиты установлены. Недостающие можно поставить кнопкой (нужны права sudo на сервере). Если sudo с паролем — покажет команду для ручного запуска.</p>
+      <div id="toolsList"></div>
+    </div>
+
+    <div class="settings-group">
+      <h2>Пресеты</h2>
+      <p class="hint">Сохранённые наборы проверок. Клик по пресету на вкладке «Аудит» — применяет его.</p>
+      <div id="presetsManage"></div>
+    </div>
+  </div>
+</div>
+
+<div class="tab-page" id="tab-help">
+  <div class="settings-wrap" style="max-width:900px">
+
+    <div class="lang-block lang-ru">
+      <div class="settings-group">
+        <h2>Как пользоваться NetAudit</h2>
+        <p class="hint">По каждой проверке: что делает, как запустить из интерфейса, и команда для запуска напрямую в терминале (если проверка — обёртка над системной утилитой).</p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Установка всех инструментов сразу</h2>
+        <p class="hint">Одной командой на сервере, где крутится NetAudit — поставит все системные утилиты, которые используют проверки:</p>
+        <p class="hint"><code>sudo apt install -y mtr-tiny tcptraceroute traceroute iputils-ping dnsutils iputils-arping iperf3 curl openssl iproute2 nmap whois tshark</code></p>
+        <p class="hint">Можно и по одной, соответствие проверка → пакет:<br>
+        MTR → <code>mtr-tiny</code> · TCP-трассировка → <code>tcptraceroute</code> · Ping → <code>iputils-ping</code> ·
+        DNS (dig) → <code>dnsutils</code> · ARPing → <code>iputils-arping</code> · iperf3 → <code>iperf3</code> ·
+        Заголовки безопасности / внешний web-аудит → <code>curl</code> · SSL-сертификат → <code>openssl</code> ·
+        Открытые порты → <code>iproute2</code> · Захват трафика (tshark) → <code>tshark</code> ·
+        Универсальный перехват (ARP) → <code>dsniff</code> и <code>iputils-arping</code>.<br>
+        Всё это также видно и ставится по кнопке во вкладке «Настройки» → «Инструменты системы».</p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Сеть</h2>
+        <p class="hint"><b>Ping</b> — проверка доступности хоста и задержки.<br>
+        UI: категория «Сеть» → Ping → задай Target (IP/домен) и Count → «Запустить аудит».<br>
+        Установка: <code>sudo apt install iputils-ping</code> (обычно уже стоит по умолчанию)<br>
+        Терминал: <code>ping -c 10 8.8.8.8</code></p>
+
+        <p class="hint"><b>MTR (ICMP-трассировка)</b> — трассировка маршрута с потерями пакетов на каждом хопе, лучше обычного traceroute для диагностики нестабильной связи.<br>
+        UI: Target + Duration (сек) → «Запустить аудит».<br>
+        Установка: <code>sudo apt install mtr-tiny</code><br>
+        Терминал: <code>mtr -r -c 10 8.8.8.8</code></p>
+
+        <p class="hint"><b>TCP-трассировка</b> — как traceroute, но по TCP на конкретный порт, полезно когда ICMP блокируют файрволы по пути.<br>
+        UI: Target + Port + Max hops.<br>
+        Установка: <code>sudo apt install tcptraceroute</code><br>
+        Терминал: <code>sudo tcptraceroute 8.8.8.8 80</code> (нужен root)</p>
+
+        <p class="hint"><b>DNS (dig)</b> — DNS-запрос конкретного типа записи.<br>
+        UI: Hostname + Record type (A/AAAA/MX/TXT и т.д.).<br>
+        Установка: <code>sudo apt install dnsutils</code><br>
+        Терминал: <code>dig google.com A</code></p>
+
+        <p class="hint"><b>ARPing</b> — проверка устройства на L2-уровне локальной сети (работает даже если ICMP заблокирован).<br>
+        UI: Target (IP в локалке) + Count.<br>
+        Установка: <code>sudo apt install iputils-arping</code><br>
+        Терминал: <code>sudo arping -c 5 192.168.88.1</code> (требует root)</p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Сайт</h2>
+        <p class="hint"><b>HTTP-тайминги</b> — время ответа, DNS/TCP/TLS-хендшейк разбитый по фазам.<br>
+        UI: URL + метод.<br>
+        Установка: не нужна, работает через встроенный HTTP-клиент Python.<br>
+        Эквивалент: <code>curl -w "@curl-format.txt" -o /dev/null -s https://example.com</code></p>
+
+        <p class="hint"><b>SSL/TLS сертификат</b> — срок действия, издатель, цепочка доверия.<br>
+        UI: URL.<br>
+        Установка: <code>sudo apt install openssl</code> (обычно уже стоит)<br>
+        Терминал: <code>echo | openssl s_client -connect example.com:443 2>/dev/null | openssl x509 -noout -dates -issuer</code></p>
+
+        <p class="hint"><b>Заголовки безопасности</b> — проверка CSP, HSTS, X-Frame-Options и т.д.<br>
+        UI: URL.<br>
+        Установка: <code>sudo apt install curl</code><br>
+        Терминал: <code>curl -sI https://example.com</code></p>
+
+        <p class="hint"><b>Внешний web-аудит (без доступа)</b> — комбинированная проверка сайта снаружи: заголовки, SSL, базовые сигналы — без SSH-доступа к серверу.<br>
+        UI: URL.<br>
+        Установка: <code>sudo apt install curl</code></p>
+
+        <p class="hint"><b>Проверка SQL-инъекций</b> — пассивное сканирование точек ввода (форм, параметров URL) на признаки уязвимости. Пассивный режим ничего не эксплуатирует, только проверяет реакцию.<br>
+        UI: URL + режим (пассив/актив) + краулинг (да/нет).<br>
+        Установка: не нужна, работает без внешних утилит. Используй только на своих сайтах — сканирование чужих без разрешения может быть незаконно.</p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Сервер (нужен SSH-доступ)</h2>
+        <p class="hint"><b>Security-аудит сервера (SSH)</b> — комплексная проверка: firewall, MySQL/MariaDB, SSH-хардининг и другое, всё через один SSH-коннект.<br>
+        UI: Host + User + Port + Key path (или Password) → «Запустить аудит».<br>
+        Установка: не нужна на машине с NetAudit (использует <code>paramiko</code>, ставится вместе с самим NetAudit); на целевом сервере ничего ставить не нужно, читает только уже существующие конфиги.<br>
+        Ручной эквивалент по частям: <code>ssh user@host 'nft list ruleset; grep bind-address /etc/mysql/*'</code></p>
+
+        <p class="hint"><b>SSH-аудит сервера</b> — конфигурация самого SSH-демона: PermitRootLogin, PasswordAuthentication, версия протокола и т.д.<br>
+        UI: те же параметры подключения.<br>
+        Терминал: <code>ssh user@host 'sudo sshd -T'</code></p>
+
+        <p class="hint"><b>CVE-аудит установленного ПО (SSH)</b> — определяет версии nginx/ssh/mysql/php/ядра/wordpress и сверяет с базой уязвимостей OSV.dev.<br>
+        UI: Host + User + Port + Key path. Запускай вместе с «Security-аудит сервера», чтобы AI-анализ мог сопоставить найденные CVE с реальным конфигом и сказать, что действительно нужно обновить.<br>
+        Установка: <code>pip install httpx --break-system-packages</code> (нужно на машине с NetAudit, если ловишь <code>ModuleNotFoundError: httpx</code>)<br>
+        Ручной запуск в Python (на машине с NetAudit): <code>python3 -c "from netaudit_pkg.checks.cve_audit import check_cve_audit; print(check_cve_audit(host='1.2.3.4', user='root'))"</code></p>
+
+        <p class="hint"><b>Firewall</b> / <b>Открытые порты</b> — состояние firewall и список слушающих портов на локальной машине (где крутится NetAudit), не по SSH.<br>
+        Установка: <code>sudo apt install iproute2</code> (обычно уже стоит)<br>
+        Терминал (аналог «Открытые порты»): <code>ss -tlnp</code></p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Захват трафика</h2>
+        <p class="hint"><b>Трафик устройства через MikroTik</b> — снимок текущих соединений устройства (телефона) через SSH к MikroTik, показывает куда идёт трафик прямо сейчас.<br>
+        UI: IP роутера + User + Password + IP устройства + SSH-порт → «Запустить аудит».<br>
+        Установка: не нужна, MikroTik сам умеет отдавать эти данные по SSH из коробки.<br>
+        Ручной эквивалент на самом MikroTik: <code>/ip firewall connection print terse where src-address~"192.168.88.3"</code></p>
+
+        <p class="hint"><b>Захват трафика (tshark)</b> — пассивный захват пакетов движком Wireshark на интерфейсе машины, где крутится NetAudit. Нужен root.<br>
+        UI: интерфейс + длительность + BPF-фильтр (напр. <code>host 192.168.88.55</code>).<br>
+        Установка: <code>sudo apt install tshark</code> (спросит «Should non-superusers be able to capture packets?» — можно Yes, если нужен запуск не только под root)<br>
+        Терминал: <code>sudo tshark -i any -a duration:15</code></p>
+
+        <p class="hint"><b>Универсальный перехват (ARP + tshark)</b> — работает с ЛЮБЫМ роутером, не только MikroTik. Через ARP-spoofing перенаправляет трафик устройства через машину с NetAudit на время захвата. Специально <b>не вынесен в кнопку интерфейса</b> — требует root без ограничений и является активным вмешательством в сеть (MITM), поэтому запускается только вручную с явным вводом sudo-пароля каждый раз.<br>
+        Установка: <code>sudo apt install dsniff iputils-arping tshark</code><br>
+        <code>cd ~/netaudit && sudo python3 -c "
+from netaudit_pkg.checks.capture import check_arp_capture
+import json
+print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168.88.1', interface='enp0s3', duration=30), indent=2, ensure_ascii=False))
+"</code><br>
+        Замени <code>enp0s3</code> на свой сетевой интерфейс (узнать: <code>ip -br addr</code>), <code>target_ip</code> — IP устройства, <code>gateway_ip</code> — IP роутера. Использовать только на своей сети/устройствах.</p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Производительность</h2>
+        <p class="hint"><b>CPU / RAM / диск</b> — снимок загрузки ресурсов локальной машины.<br>
+        UI: без параметров, просто запускается.<br>
+        Установка: не нужна, использует библиотеку <code>psutil</code> (ставится вместе с NetAudit).</p>
+
+        <p class="hint"><b>iperf3 пропускная способность</b> — измерение реальной скорости сети между двумя точками. Нужен запущенный iperf3-сервер на удалённой стороне.<br>
+        UI: Server (IP другой стороны) + Port + Duration.<br>
+        Установка: <code>sudo apt install iperf3</code> — на обеих сторонах (и на машине с NetAudit, и на удалённом сервере)<br>
+        Терминал (на сервере): <code>iperf3 -s</code>; (на клиенте): <code>iperf3 -c 1.2.3.4 -t 10</code></p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Остальные разделы интерфейса</h2>
+        <p class="hint"><b>Вкладка «Динамика»</b> — график изменения потерь пакетов (mtr) по выбранной цели во времени, из истории прошлых прогонов.</p>
+        <p class="hint"><b>Вкладка «Настройки»</b> → Anthropic API — ключ для кнопки «AI-анализ: что делать»; История трафика — фоновый сборщик снимков через MikroTik (настраивается там же, работает без кнопки, копит историю в БД); Списки репутации — свои белый/чёрный списки для оценки трафика; Инструменты системы — что установлено, можно доставить недостающее прямо из интерфейса; Пресеты — сохранённые наборы проверок.</p>
+        <p class="hint"><b>Пресеты на вкладке «Аудит»</b> — отметь нужные проверки, нажми «Сохранить как пресет», потом применяй одним кликом сверху над списком проверок.</p>
+      </div>
+    </div>
+
+    <div class="lang-block lang-en" style="display:none">
+      <div class="settings-group">
+        <h2>How to use NetAudit</h2>
+        <p class="hint">For every check: what it does, how to run it from the interface, and the terminal command to run it directly (where the check is a wrapper around a system utility).</p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Install everything at once</h2>
+        <p class="hint">One command on the server running NetAudit — installs all the system utilities the checks use:</p>
+        <p class="hint"><code>sudo apt install -y mtr-tiny tcptraceroute traceroute iputils-ping dnsutils iputils-arping iperf3 curl openssl iproute2 nmap whois tshark</code></p>
+        <p class="hint">Or one at a time, check → package:<br>
+        MTR → <code>mtr-tiny</code> · TCP trace → <code>tcptraceroute</code> · Ping → <code>iputils-ping</code> ·
+        DNS (dig) → <code>dnsutils</code> · ARPing → <code>iputils-arping</code> · iperf3 → <code>iperf3</code> ·
+        Security headers / external web audit → <code>curl</code> · SSL certificate → <code>openssl</code> ·
+        Open ports → <code>iproute2</code> · Traffic capture (tshark) → <code>tshark</code> ·
+        Universal capture (ARP) → <code>dsniff</code> and <code>iputils-arping</code>.<br>
+        All of this is also visible and installable with one click under the "Settings" tab → "System tools".</p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Network</h2>
+        <p class="hint"><b>Ping</b> — host reachability and latency check.<br>
+        UI: "Network" category → Ping → set Target (IP/domain) and Count → "Run Audit".<br>
+        Install: <code>sudo apt install iputils-ping</code> (usually already installed by default)<br>
+        Terminal: <code>ping -c 10 8.8.8.8</code></p>
+
+        <p class="hint"><b>MTR (ICMP trace)</b> — route trace with packet loss per hop, better than plain traceroute for diagnosing unstable links.<br>
+        UI: Target + Duration (sec) → "Run Audit".<br>
+        Install: <code>sudo apt install mtr-tiny</code><br>
+        Terminal: <code>mtr -r -c 10 8.8.8.8</code></p>
+
+        <p class="hint"><b>TCP trace</b> — like traceroute but over TCP to a specific port, useful when firewalls along the path block ICMP.<br>
+        UI: Target + Port + Max hops.<br>
+        Install: <code>sudo apt install tcptraceroute</code><br>
+        Terminal: <code>sudo tcptraceroute 8.8.8.8 80</code> (needs root)</p>
+
+        <p class="hint"><b>DNS (dig)</b> — DNS lookup for a specific record type.<br>
+        UI: Hostname + Record type (A/AAAA/MX/TXT etc).<br>
+        Install: <code>sudo apt install dnsutils</code><br>
+        Terminal: <code>dig google.com A</code></p>
+
+        <p class="hint"><b>ARPing</b> — checks a device at the L2 level of the local network (works even if ICMP is blocked).<br>
+        UI: Target (IP on the LAN) + Count.<br>
+        Install: <code>sudo apt install iputils-arping</code><br>
+        Terminal: <code>sudo arping -c 5 192.168.88.1</code> (requires root)</p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Site</h2>
+        <p class="hint"><b>HTTP timings</b> — response time broken down by DNS/TCP/TLS handshake phases.<br>
+        UI: URL + method.<br>
+        Install: none needed, runs through the built-in Python HTTP client.<br>
+        Equivalent: <code>curl -w "@curl-format.txt" -o /dev/null -s https://example.com</code></p>
+
+        <p class="hint"><b>SSL/TLS certificate</b> — expiry, issuer, trust chain.<br>
+        UI: URL.<br>
+        Install: <code>sudo apt install openssl</code> (usually already installed)<br>
+        Terminal: <code>echo | openssl s_client -connect example.com:443 2>/dev/null | openssl x509 -noout -dates -issuer</code></p>
+
+        <p class="hint"><b>Security headers</b> — checks CSP, HSTS, X-Frame-Options, etc.<br>
+        UI: URL.<br>
+        Install: <code>sudo apt install curl</code><br>
+        Terminal: <code>curl -sI https://example.com</code></p>
+
+        <p class="hint"><b>External web audit (no access)</b> — combined outside-in check: headers, SSL, basic signals — without SSH access to the server.<br>
+        UI: URL.<br>
+        Install: <code>sudo apt install curl</code></p>
+
+        <p class="hint"><b>SQL injection check</b> — passive scan of input points (forms, URL parameters) for signs of vulnerability. Passive mode doesn't exploit anything, only checks the response.<br>
+        UI: URL + mode (passive/active) + crawl (yes/no).<br>
+        Install: none needed, works without external utilities. Only use on your own sites — scanning others without permission may be illegal.</p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Server (requires SSH access)</h2>
+        <p class="hint"><b>Server security audit (SSH)</b> — combined check: firewall, MySQL/MariaDB, SSH hardening and more, all over one SSH connection.<br>
+        UI: Host + User + Port + Key path (or Password) → "Run Audit".<br>
+        Install: none needed on the NetAudit machine (uses <code>paramiko</code>, installed alongside NetAudit itself); nothing needs to be installed on the target server either, it only reads existing configs.<br>
+        Manual equivalent, piece by piece: <code>ssh user@host 'nft list ruleset; grep bind-address /etc/mysql/*'</code></p>
+
+        <p class="hint"><b>SSH server audit</b> — the SSH daemon's own configuration: PermitRootLogin, PasswordAuthentication, protocol version, etc.<br>
+        UI: same connection parameters.<br>
+        Terminal: <code>ssh user@host 'sudo sshd -T'</code></p>
+
+        <p class="hint"><b>CVE audit of installed software (SSH)</b> — detects versions of nginx/ssh/mysql/php/kernel/wordpress and cross-checks them against the OSV.dev vulnerability database.<br>
+        UI: Host + User + Port + Key path. Run it together with "Server security audit" so the AI analysis can cross-reference found CVEs with the actual config and tell you what really needs updating.<br>
+        Install: <code>pip install httpx --break-system-packages</code> (needed on the NetAudit machine if you hit <code>ModuleNotFoundError: httpx</code>)<br>
+        Manual run in Python (on the machine running NetAudit): <code>python3 -c "from netaudit_pkg.checks.cve_audit import check_cve_audit; print(check_cve_audit(host='1.2.3.4', user='root'))"</code></p>
+
+        <p class="hint"><b>Firewall</b> / <b>Open ports</b> — firewall state and listening ports on the local machine (running NetAudit itself), not over SSH.<br>
+        Install: <code>sudo apt install iproute2</code> (usually already installed)<br>
+        Terminal (equivalent of "Open ports"): <code>ss -tlnp</code></p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Traffic capture</h2>
+        <p class="hint"><b>Device traffic via MikroTik</b> — a snapshot of a device's (phone's) current connections via SSH to MikroTik, shows where traffic is going right now.<br>
+        UI: Router IP + User + Password + Device IP + SSH port → "Run Audit".<br>
+        Install: none needed, MikroTik can already return this data over SSH out of the box.<br>
+        Manual equivalent on the MikroTik itself: <code>/ip firewall connection print terse where src-address~"192.168.88.3"</code></p>
+
+        <p class="hint"><b>Traffic capture (tshark)</b> — passive packet capture with the Wireshark engine on the interface of the machine running NetAudit. Requires root.<br>
+        UI: interface + duration + BPF filter (e.g. <code>host 192.168.88.55</code>).<br>
+        Install: <code>sudo apt install tshark</code> (it will ask "Should non-superusers be able to capture packets?" — Yes is fine if you need to run it without root too)<br>
+        Terminal: <code>sudo tshark -i any -a duration:15</code></p>
+
+        <p class="hint"><b>Universal capture (ARP + tshark)</b> — works with ANY router, not just MikroTik. Uses ARP-spoofing to redirect the device's traffic through the NetAudit machine for the duration of the capture. Deliberately <b>not exposed as a UI button</b> — it requires unrestricted root and is an active network intervention (MITM), so it's run manually only, with an explicit sudo password each time.<br>
+        Install: <code>sudo apt install dsniff iputils-arping tshark</code><br>
+        <code>cd ~/netaudit && sudo python3 -c "
+from netaudit_pkg.checks.capture import check_arp_capture
+import json
+print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168.88.1', interface='enp0s3', duration=30), indent=2, ensure_ascii=False))
+"</code><br>
+        Replace <code>enp0s3</code> with your network interface (find it with <code>ip -br addr</code>), <code>target_ip</code> with the device's IP, <code>gateway_ip</code> with the router's IP. Only use on your own network/devices.</p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Performance</h2>
+        <p class="hint"><b>CPU / RAM / disk</b> — a snapshot of local machine resource usage.<br>
+        UI: no parameters, just run it.<br>
+        Install: none needed, uses the <code>psutil</code> library (installed alongside NetAudit).</p>
+
+        <p class="hint"><b>iperf3 bandwidth</b> — measures actual network throughput between two points. Requires an iperf3 server running on the remote side.<br>
+        UI: Server (the other side's IP) + Port + Duration.<br>
+        Install: <code>sudo apt install iperf3</code> — on both sides (the NetAudit machine and the remote server)<br>
+        Terminal (on the server): <code>iperf3 -s</code>; (on the client): <code>iperf3 -c 1.2.3.4 -t 10</code></p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Other parts of the interface</h2>
+        <p class="hint"><b>"Trends" tab</b> — a chart of packet loss (mtr) over time for a chosen target, from the history of past runs.</p>
+        <p class="hint"><b>"Settings" tab</b> → Anthropic API — key for the "AI analysis: what to do" button; Traffic history — a background snapshot collector via MikroTik (configured there, runs without a button, builds up history in the DB); Reputation lists — your own allow/block lists for traffic scoring; System tools — what's installed, missing ones can be installed right from the interface; Presets — your saved check sets.</p>
+        <p class="hint"><b>Presets on the "Audit" tab</b> — tick the checks you want, click "Save as preset", then apply it later with one click above the check list.</p>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/static/i18n.js"></script>
+<script>
+let CHECKS = [];
+let LAST_REPORT = null;
+
+async function loadChecks() {
+  const res = await fetch('/api/checks');
+  CHECKS = await res.json();
+  return renderCheckList();
+}
+
+function renderCheckList() {
+  const byCat = {};
+  CHECKS.forEach(c => { (byCat[c.category] ||= []).push(c); });
+  const catNames = { network: t('cat.network'), site: t('cat.site'), security: t('cat.security'), performance: t('cat.performance'), server: t('cat.server'), capture: t('cat.capture') };
+
+  const container = document.getElementById('checkList');
+  container.innerHTML = '';
+  for (const [cat, checks] of Object.entries(byCat)) {
+    const catEl = document.createElement('div');
+    catEl.className = 'cat';
+    catEl.innerHTML = `<h3>${catNames[cat] || cat}</h3>`;
+    checks.forEach(c => {
+      const tr = tCheck(c);
+      const disabled = c.missing_tools.length > 0;
+      const paramsHtml = c.params.map(p => {
+        const isTarget = ['target','url','hostname','host','server'].includes(p.name);
+        const plabel = tr.paramLabel(p);
+        if (p.type === 'select') {
+          const opts = (p.options || []).map(o => `<option value="${o}" ${o === p.default ? 'selected' : ''}>${tr.optLabel(o)}</option>`).join('');
+          return `<label>${plabel}<select data-check="${c.id}" data-param="${p.name}">${opts}</select></label>`;
+        }
+        const listAttr = isTarget ? 'list="savedTargets"' : '';
+        return `<label>${plabel}<input ${listAttr} data-check="${c.id}" data-param="${p.name}" type="${p.type === 'number' ? 'number' : (p.type === 'password' ? 'password' : 'text')}" value="${p.default ?? ''}"></label>`;
+      }).join('');
+      const el = document.createElement('div');
+      el.className = 'check' + (disabled ? ' disabled' : '');
+      el.dataset.id = c.id;
+      el.innerHTML = `
+        <div class="check-head" onclick="toggleCheck('${c.id}', event)">
+          <input type="checkbox" ${disabled ? 'disabled' : ''} onclick="event.stopPropagation(); toggleCheck('${c.id}', event)">
+          <span class="label">${tr.label}</span>
+          ${disabled ? `<span class="missing">${t('missing')}: ${c.missing_tools.join(',')}</span>` : ''}
+        </div>
+        <div class="desc">${tr.description || ''}</div>
+        <div class="params">${paramsHtml}</div>`;
+      catEl.appendChild(el);
+    });
+    container.appendChild(catEl);
+  }
+
+  // живой пересчёт оценки при изменении любого параметра (цель, продолжительность и т.п.) —
+  // делегируем на контейнер, чтобы не навешивать слушатель на каждое поле по отдельности
+  container.addEventListener('input', (ev) => {
+    if (ev.target.matches('input[data-param], select[data-param]')) updateEstimate();
+  });
+  container.addEventListener('change', (ev) => {
+    if (ev.target.matches('input[data-param], select[data-param]')) updateEstimate();
+  });
+}
+
+function toggleCheck(id, ev) {
+  const el = document.querySelector(`.check[data-id="${id}"]`);
+  if (el.classList.contains('disabled')) return;
+  const cb = el.querySelector('input[type=checkbox]');
+  if (ev && ev.target !== cb) cb.checked = !cb.checked;
+  el.classList.toggle('sel', cb.checked);
+  updateEstimate();
+}
+
+function fmtDuration(sec) {
+  if (sec < 60) return `${Math.round(sec)}с`;
+  if (sec < 3600) return `${Math.round(sec / 60)}мин`;
+  const h = Math.floor(sec / 3600);
+  const m = Math.round((sec % 3600) / 60);
+  return m > 0 ? `${h}ч ${m}мин` : `${h}ч`;
+}
+
+let estimateTimer = null;
+function updateEstimate() {
+  clearTimeout(estimateTimer);
+  estimateTimer = setTimeout(async () => {
+    const checks = getSelected();
+    const btn = document.getElementById('runBtn');
+    if (!checks.length) { btn.textContent = 'Запустить аудит'; return; }
+    try {
+      const forceAsync = document.getElementById('forceAsync').checked;
+      const res = await fetch('/api/estimate', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ checks, force_async: forceAsync })
+      });
+      const d = await res.json();
+      const modeLabel = d.mode === 'sync' ? 'сразу' : 'в фоне';
+      btn.textContent = `Запустить · ~${fmtDuration(d.estimate)} · ${modeLabel}`;
+    } catch { btn.textContent = 'Запустить аудит'; }
+  }, 250);
+}
+
+function getSelected() {
+  const selected = [];
+  document.querySelectorAll('.check.sel').forEach(el => {
+    const id = el.dataset.id;
+    const params = {};
+    el.querySelectorAll('input[data-param], select[data-param]').forEach(inp => {
+      let v = inp.value;
+      if (inp.type === 'number') v = Number(v);
+      params[inp.dataset.param] = v;
+    });
+    selected.push({ id, params });
+  });
+  return selected;
+}
+
+let STREAM_STATE = null;  // {taskId, es, livePoints, liveChart}
+
+async function runAudit() {
+  const checks = getSelected();
+  if (!checks.length) { setStatus('Не выбрано ни одной проверки.'); return; }
+  const forceAsync = document.getElementById('forceAsync').checked;
+
+  // старт потоковой задачи
+  setStatus('Запуск…');
+  const res = await fetch('/api/stream/start', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ checks, force_async: forceAsync })
+  });
+  const { task_id } = await res.json();
+
+  // UI: кнопка запуска -> стоп
+  const runBtn = document.getElementById('runBtn');
+  runBtn.textContent = '■ Остановить';
+  runBtn.classList.add('stopbtn');
+  runBtn.onclick = () => stopAudit(task_id);
+
+  destroyCharts();
+  const root = document.getElementById('results');
+  root.innerHTML = '<div class="card" id="liveCard"><h2>Выполняется… <span class="timing" id="liveStatus"></span></h2><div class="chart-box" style="height:300px"><canvas id="liveChart"></canvas></div><div id="liveMeta" class="timing"></div></div>';
+
+  STREAM_STATE = { taskId: task_id, series: {}, chart: null, order: [] };
+  STREAM_STATE.chart = new Chart(document.getElementById('liveChart'), {
+    type: 'line',
+    data: { datasets: [] },
+    options: baseOpts({
+      animation: false,
+      scales: {
+        x: { type: 'linear', ticks: { color: CHART_COLORS.text, font:{size:10}, callback: v => v + 'с' }, grid: { color: CHART_COLORS.grid }, title: { display: true, text: 'секунды', color: CHART_COLORS.text } },
+        y: { ticks: { color: CHART_COLORS.text, font:{size:10} }, grid: { color: CHART_COLORS.grid }, beginAtZero: true, title: { display: true, text: 'ms', color: CHART_COLORS.text } }
+      }
+    })
+  });
+
+  const es = new EventSource('/api/stream/' + task_id);
+  STREAM_STATE.es = es;
+  const t0 = Date.now();
+
+  es.onmessage = (e) => {
+    const ev = JSON.parse(e.data);
+    if (ev.type === 'check_start') {
+      document.getElementById('liveStatus').textContent = ev.label + (ev.streaming ? ' — живой поток' : ' …');
+    } else if (ev.type === 'point') {
+      addLivePoint(ev, t0);
+    } else if (ev.type === 'check_done') {
+      document.getElementById('liveMeta').textContent = 'Проверка завершена: ' + ev.id + (ev.elapsed ? ` (${ev.elapsed}с)` : '');
+    } else if (ev.type === 'all_done' || ev.type === 'stopped') {
+      finishStream(ev);
+    } else if (ev.type === 'error') {
+      setStatus('Ошибка: ' + (ev.message || 'неизвестно'));
+    }
+  };
+  es.onerror = () => { /* соединение закроется по _end на сервере */ };
+}
+
+const LIVE_COLORS = ['#4d9fff','#37d67a','#ffb454','#ff5c6c','#b18cff','#4de0d6','#ff8fc7','#a0d468'];
+function addLivePoint(ev, t0) {
+  const s = STREAM_STATE;
+  // ключ серии: для mtr/tcptraceroute — хоп, для ping — единая линия
+  const key = ev.check === 'ping' ? 'ping' : `${ev.hop}. ${ev.host}`;
+  if (!(key in s.series)) {
+    const color = LIVE_COLORS[s.order.length % LIVE_COLORS.length];
+    const ds = { label: key, data: [], borderColor: color, backgroundColor: color, tension: 0.25, pointRadius: 1.5, borderWidth: 1.5 };
+    s.series[key] = ds;
+    s.order.push(key);
+    s.chart.data.datasets.push(ds);
+  }
+  if (ev.ms != null) {
+    const tsec = Math.round((Date.now() - t0) / 1000);
+    s.series[key].data.push({ x: tsec, y: ev.ms });
+  }
+  s.chart.update('none');
+}
+
+async function stopAudit(taskId) {
+  setStatus('Останавливаю…');
+  try { await fetch('/api/stream/' + taskId + '/stop', { method: 'POST' }); } catch(e){}
+}
+
+function finishStream(ev) {
+  const s = STREAM_STATE;
+  if (s && s.es) s.es.close();
+  const runBtn = document.getElementById('runBtn');
+  runBtn.textContent = 'Запустить аудит';
+  runBtn.classList.remove('stopbtn');
+  runBtn.onclick = runAudit;
+  runBtn.disabled = false;
+
+  const report = ev.report;
+  LAST_REPORT = report;
+  document.getElementById('aiBtn').disabled = false;
+  const stopped = ev.type === 'stopped';
+  setStatus((stopped ? 'Остановлено' : 'Готово') + ` за ${report.total_time || '—'}с · ${report.timestamp}`);
+
+  if (stopped && s && s.chart) {
+    // при остановке НЕ стираем живой график — он уже содержит все накопленные точки.
+    // только фиксируем заголовок карточки и добавляем итоговую сводку под графиком.
+    const liveCard = document.getElementById('liveCard');
+    const h = liveCard ? liveCard.querySelector('h2') : null;
+    if (h) h.innerHTML = 'Остановлено — накопленные данные <span class="timing">(график сохранён)</span>';
+    const meta = document.getElementById('liveMeta');
+    if (meta) {
+      // краткая сводка по хопам из частичного отчёта, если распарсился
+      const mtrRes = report.results && report.results.mtr;
+      if (mtrRes && mtrRes.hops && mtrRes.hops.length) {
+        meta.innerHTML = 'Средние задержки на момент остановки: ' +
+          mtrRes.hops.map(hh => `${hh.hop}. ${hh.host}: ${hh.avg_ms}мс`).join(' · ');
+      }
+    }
+    STREAM_STATE = null;
+    return;  // график остаётся на экране как есть
+  }
+
+  // штатное завершение — полноценный финальный рендер
+  renderReport(report);
+  STREAM_STATE = null;
+}
+
+async function pollStatus(taskId) {
+  const res = await fetch('/api/status/' + taskId);
+  const task = await res.json();
+  if (task.status === 'running') {
+    setStatus('Выполняется аудит… (проверки идут по очереди)');
+    setTimeout(() => pollStatus(taskId), 1000);
+  } else if (task.status === 'done') {
+    document.getElementById('runBtn').disabled = false;
+    LAST_REPORT = task.report;
+    document.getElementById('aiBtn').disabled = false;
+    setStatus(`Готово за ${task.report.total_time}с · ${task.report.timestamp}`);
+    renderReport(task.report);
+  } else {
+    document.getElementById('runBtn').disabled = false;
+    setStatus('Ошибка: ' + (task.error || 'неизвестно'));
+  }
+}
+
+function setStatus(t) { document.getElementById('status').textContent = t; }
+
+let CHART_INSTANCES = [];
+function destroyCharts() { CHART_INSTANCES.forEach(c => { try { c.destroy(); } catch(e){} }); CHART_INSTANCES = []; }
+
+function renderReport(report) {
+  destroyCharts();
+  const root = document.getElementById('results');
+  root.innerHTML = '';
+  const pending = [];  // графики рисуем после вставки в DOM
+  for (const [id, result] of Object.entries(report.results)) {
+    const meta = report.meta[id] || { label: id };
+    const timing = report.timing[id];
+    const card = document.createElement('div');
+    card.className = 'card';
+    const canvasId = 'chart_' + id + '_' + Math.random().toString(36).slice(2, 7);
+    const { html, chart } = renderResult(id, result, canvasId);
+    card.innerHTML = `<h2>${meta.label} <span class="timing">${timing}s</span></h2>` + html;
+    root.appendChild(card);
+    if (chart) pending.push(chart);
+  }
+  // рисуем графики после того как canvas'ы в DOM
+  requestAnimationFrame(() => pending.forEach(fn => { const c = fn(); if (c) CHART_INSTANCES.push(c); }));
+}
+
+function lossClass(v) { return v > 10 ? 'bad' : (v > 2 ? 'warn' : 'ok'); }
+
+const CHART_COLORS = { blue: '#4d9fff', green: '#37d67a', warn: '#ffb454', bad: '#ff5c6c', grid: '#232b3d', text: '#7b8494' };
+function baseOpts(extra) {
+  return Object.assign({
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { labels: { color: CHART_COLORS.text, font: { size: 11 } } } },
+    scales: {
+      x: { ticks: { color: CHART_COLORS.text, font: { size: 10 } }, grid: { color: CHART_COLORS.grid } },
+      y: { ticks: { color: CHART_COLORS.text, font: { size: 10 } }, grid: { color: CHART_COLORS.grid }, beginAtZero: true }
+    }
+  }, extra || {});
+}
+
+function renderResult(id, r, canvasId) {
+  if (r.error) return { html: `<span class="pill bad">ошибка</span> <span class="timing">${r.error}</span>` };
+
+  // --- mtr: таблица + график потерь по хопам ---
+  if (r.hops && r.hops[0] && 'loss_pct' in r.hops[0]) {
+    const rows = r.hops.map(h =>
+      `<tr class="${h.loss_pct > 10 ? 'bad' : ''}"><td>${h.hop}</td><td>${h.host}</td>
+       <td><span class="pill ${lossClass(h.loss_pct)}">${h.loss_pct}%</span></td>
+       <td>${h.avg_ms}</td><td>${h.worst_ms}</td></tr>`).join('');
+    const labels = r.hops.map(h => `${h.hop}. ${h.host}`);
+    const loss = r.hops.map(h => h.loss_pct);
+    const html = `<div class="chart-box"><canvas id="${canvasId}"></canvas></div>
+      <table><tr><th>Hop</th><th>Host</th><th>Loss</th><th>Avg ms</th><th>Worst ms</th></tr>${rows}</table>`;
+    const chart = () => {
+      const el = document.getElementById(canvasId); if (!el) return null;
+      return new Chart(el, { type: 'bar', data: { labels, datasets: [{ label: 'Loss %', data: loss,
+        backgroundColor: loss.map(v => v > 10 ? CHART_COLORS.bad : (v > 2 ? CHART_COLORS.warn : CHART_COLORS.blue)) }] },
+        options: baseOpts() });
+    };
+    return { html, chart };
+  }
+
+  // --- tcptraceroute: таблица + график задержек ---
+  if (r.hops && r.hops[0] && 'ms' in r.hops[0]) {
+    const rows = r.hops.map(h => `<tr><td>${h.hop}</td><td>${h.host}</td><td>${h.ms}</td></tr>`).join('');
+    const labels = r.hops.map(h => `${h.hop}. ${h.host}`);
+    const ms = r.hops.map(h => h.ms);
+    const html = `<div class="chart-box"><canvas id="${canvasId}"></canvas></div>
+      <table><tr><th>Hop</th><th>Host</th><th>ms</th></tr>${rows}</table>`;
+    const chart = () => { const el = document.getElementById(canvasId); if (!el) return null;
+      return new Chart(el, { type: 'line', data: { labels, datasets: [{ label: 'RTT ms', data: ms,
+        borderColor: CHART_COLORS.green, backgroundColor: 'rgba(55,214,122,.1)', fill: true, tension: .3 }] },
+        options: baseOpts() }); };
+    return { html, chart };
+  }
+
+  // --- ping ---
+  if ('loss_pct' in r && 'avg_ms' in r && 'worst_ms' in r) {
+    return { html: `<table><tr><th>Target</th><th>Loss</th><th>Avg ms</th><th>Worst ms</th></tr>
+      <tr><td>${r.target}</td><td><span class="pill ${lossClass(r.loss_pct||0)}">${r.loss_pct}%</span></td><td>${r.avg_ms}</td><td>${r.worst_ms}</td></tr></table>` };
+  }
+
+  // --- arping (L2) ---
+  if ('loss_pct' in r && 'mac' in r) {
+    return { html: `<table><tr><th>Target</th><th>Loss</th><th>Avg ms</th><th>MAC</th><th>Отправлено/получено</th></tr>
+      <tr><td>${r.target}</td><td><span class="pill ${lossClass(r.loss_pct||0)}">${r.loss_pct}%</span></td><td>${r.avg_ms ?? '—'}</td>
+      <td>${r.mac || '—'}</td><td>${r.sent ?? '—'} / ${r.received ?? '—'}</td></tr></table>` };
+  }
+
+  // --- ssl: индикатор срока ---
+  if ('protocol' in r || 'days_left' in r) {
+    const daysClass = r.days_left < 14 ? 'bad' : (r.days_left < 30 ? 'warn' : 'ok');
+    return { html: `<table>
+      <tr><th>Протокол</th><td>${r.protocol||'—'}</td></tr>
+      <tr><th>Шифр</th><td>${r.cipher||'—'}</td></tr>
+      <tr><th>Издатель</th><td>${r.issuer||'—'}</td></tr>
+      <tr><th>Истекает</th><td><span class="pill ${daysClass}">через ${r.days_left} дн.</span> ${r.expires||''}</td></tr>
+      <tr><th>Цепочка</th><td>${r.cert_chain_length||'—'} серт.</td></tr></table>` };
+  }
+
+  // --- http: график таймингов по фазам ---
+  if ('ttfb_ms' in r) {
+    const labels = ['DNS', 'TCP connect', 'TLS', 'TTFB', 'Итого'];
+    const vals = [r.dns_ms, r.connect_ms, r.tls_ms, r.ttfb_ms, r.total_ms];
+    const html = `<div class="chart-box"><canvas id="${canvasId}"></canvas></div>
+      <p class="timing">HTTP-код: ${r.http_code} · редиректов: ${r.num_redirects}</p>`;
+    const chart = () => { const el = document.getElementById(canvasId); if (!el) return null;
+      return new Chart(el, { type: 'bar', data: { labels, datasets: [{ label: 'мс', data: vals,
+        backgroundColor: [CHART_COLORS.blue, CHART_COLORS.blue, CHART_COLORS.warn, CHART_COLORS.green, CHART_COLORS.text] }] },
+        options: baseOpts({ indexAxis: 'y' }) }); };
+    return { html, chart };
+  }
+
+  // --- security headers ---
+  if ('strict-transport-security' in r) {
+    const keys = ['strict-transport-security','x-frame-options','x-content-type-options','content-security-policy'];
+    const rows = keys.map(k => `<tr><td>${k}</td><td>${r[k] ? '<span class="pill ok">есть</span>' : '<span class="pill bad">нет</span>'}</td></tr>`).join('');
+    return { html: `<table><tr><th>Заголовок</th><th>Статус</th></tr>${rows}</table>` };
+  }
+
+  // --- ports ---
+  if (r.open_ports) {
+    const rows = r.open_ports.map(p => `<tr><td>${p.proto}</td><td>${p.local_address}</td></tr>`).join('');
+    return { html: `<table><tr><th>Proto</th><th>Адрес:порт</th></tr>${rows}</table>` };
+  }
+
+  // --- performance: бары CPU/RAM + диски ---
+  if ('cpu_pct' in r) {
+    const disks = (r.disks||[]).map(d => `<tr><td>${d.mountpoint}</td><td>${d.total_gb} GB</td><td>${d.used_pct}%</td></tr>`).join('');
+    const html = `<div class="chart-box" style="height:180px"><canvas id="${canvasId}"></canvas></div>
+      <table style="margin-top:10px"><tr><th>Диск</th><th>Всего</th><th>Занято</th></tr>${disks}</table>`;
+    const diskLabels = (r.disks||[]).map(d => d.mountpoint);
+    const diskVals = (r.disks||[]).map(d => d.used_pct);
+    const chart = () => { const el = document.getElementById(canvasId); if (!el) return null;
+      return new Chart(el, { type: 'bar',
+        data: { labels: ['CPU', 'RAM', ...diskLabels], datasets: [{ label: '% использования',
+          data: [r.cpu_pct, r.ram_used_pct, ...diskVals],
+          backgroundColor: [r.cpu_pct, r.ram_used_pct, ...diskVals].map(v => v > 85 ? CHART_COLORS.bad : (v > 60 ? CHART_COLORS.warn : CHART_COLORS.green)) }] },
+        options: baseOpts({ scales: { x: baseOpts().scales.x, y: Object.assign(baseOpts().scales.y, { max: 100 }) } }) }); };
+    return { html, chart };
+  }
+
+  // --- ssh audit ---
+  if (r.checks) {
+    return { html: Object.entries(r.checks).map(([k,v]) => `<h4 style="margin:10px 0 4px;color:var(--muted);font-family:var(--mono);font-size:12px">${k}</h4><pre>${v}</pre>`).join('') };
+  }
+
+  // --- iperf: бары up/down ---
+  if (r.upload || r.download) {
+    const up = (r.upload||{}).mbps, down = (r.download||{}).mbps;
+    const fmt = d => d.error ? `<span class="pill bad">${d.error}</span>` : `<span class="pill ok">${d.mbps} Mbps</span>`;
+    const html = `<div class="chart-box" style="height:160px"><canvas id="${canvasId}"></canvas></div>
+      <table><tr><th>Upload</th><td>${fmt(r.upload||{})}</td></tr><tr><th>Download</th><td>${fmt(r.download||{})}</td></tr></table>`;
+    const chart = () => { const el = document.getElementById(canvasId); if (!el || (up==null && down==null)) return null;
+      return new Chart(el, { type: 'bar', data: { labels: ['Upload', 'Download'],
+        datasets: [{ label: 'Mbps', data: [up||0, down||0], backgroundColor: [CHART_COLORS.blue, CHART_COLORS.green] }] },
+        options: baseOpts({ indexAxis: 'y' }) }); };
+    return { html, chart };
+  }
+
+  // --- server_audit: секции с findings ---
+  if (r.sections) {
+    const sevPill = s => ({high:'<span class="pill bad">high</span>', medium:'<span class="pill warn">medium</span>', low:'<span class="pill" style="background:#2a3140;color:#9aa4b4">low</span>', ok:'<span class="pill ok">ok</span>'}[s] || s);
+    const secNames = {nginx:'nginx', fail2ban:'Fail2Ban', firewall:'Firewall', sql:'MySQL/MariaDB', ssh:'SSH hardening',
+                      spf:'SPF', dkim:'DKIM', dmarc:'DMARC', dnssec:'DNSSEC', dangling_cname:'Висящие CNAME'};
+    let html = '';
+    if (r.summary) {
+      const s = r.summary;
+      html += `<div style="margin-bottom:14px">
+        ${s.high?`<span class="pill bad">⚠ ${s.high} критичных</span> `:''}
+        ${s.medium?`<span class="pill warn">${s.medium} средних</span> `:''}
+        ${s.low?`<span class="pill" style="background:#2a3140;color:#9aa4b4">${s.low} низких</span> `:''}
+        <span class="pill ok">${s.ok} ок</span></div>`;
+    }
+    for (const [key, sec] of Object.entries(r.sections)) {
+      const name = secNames[key] || key;
+      // секция может быть либо объектом {findings, version, installed} (server_audit),
+      // либо сразу массивом findings (dns_audit) — поддерживаем оба формата
+      const isArray = Array.isArray(sec);
+      const secFindings = isArray ? sec : (sec.findings || []);
+      if (!isArray && sec.installed === false) {
+        html += `<div style="margin:10px 0"><b>${name}</b> <span class="timing">— не установлен</span>`;
+        if (sec.findings) html += sec.findings.map(f => ` ${sevPill(f.severity)} ${f.title}`).join('');
+        html += `</div>`;
+        continue;
+      }
+      const ver = (!isArray && sec.version) ? ` <span class="timing">${sec.version}</span>` : '';
+      const findings = secFindings.map(f =>
+        `<div style="padding:5px 0"><span>${sevPill(f.severity)}</span> ${f.title}${f.detail?`<div style="font-size:12px;color:var(--muted);margin:2px 0 0 4px">${f.detail}</div>`:''}</div>`).join('');
+      html += `<div style="margin:14px 0 6px"><b>${name}</b>${ver}</div>${findings}`;
+    }
+    return { html };
+  }
+
+  // --- web_security_external / любой findings-результат ---
+  if (r.findings && !r.sections) {
+    const sevPill = s => ({critical:'<span class="pill bad">critical</span>', high:'<span class="pill bad">high</span>', medium:'<span class="pill warn">medium</span>', low:'<span class="pill" style="background:#2a3140;color:#9aa4b4">low</span>', ok:'<span class="pill ok">ok</span>'}[s] || s);
+    let html = '';
+    if (r.summary) {
+      const s = r.summary;
+      html += `<div style="margin-bottom:12px">
+        ${s.critical?`<span class="pill bad">⚠ ${s.critical} critical</span> `:''}
+        ${s.high?`<span class="pill bad">⚠ ${s.high} критичных</span> `:''}
+        ${s.medium?`<span class="pill warn">${s.medium} средних</span> `:''}
+        ${s.low?`<span class="pill" style="background:#2a3140;color:#9aa4b4">${s.low} низких</span> `:''}
+        ${s.ok?`<span class="pill ok">${s.ok} ок</span>`:''}</div>`;
+    }
+    html += (r.findings||[]).map(f => {
+      const cveLine = f.cve ? `<b>${f.cve}</b>${f.package ? ` <span class="timing">${f.package} ${f.version||''}</span>` : ''}` : (f.package ? `<b>${f.package}</b> <span class="timing">${f.version||''}</span>` : '');
+      const fixed = (f.fixed_versions && f.fixed_versions.length) ? `<div style="font-size:12px;color:var(--muted);margin:2px 0 0 4px">fixed in: ${f.fixed_versions.join(', ')}</div>` : '';
+      return `<div style="padding:5px 0">${sevPill(f.severity)} ${cveLine || f.title}${f.title && cveLine ? `<div style="font-size:12px;color:var(--muted);margin:2px 0 0 4px">${f.title}</div>` : ''}${f.detail?`<div style="font-size:12px;color:var(--muted);margin:2px 0 0 4px">${f.detail}</div>`:''}${fixed}</div>`;
+    }).join('');
+    return { html };
+  }
+
+  // --- capture: tshark / mikrotik — топ назначений + анализ угроз ---
+  if (r.destinations) {
+    const d = r.destinations;
+    if (!d.length) return { html: `<span class="pill warn">пусто</span> <span class="timing">трафик не пойман${r.note ? ' · ' + r.note : ''}</span>` };
+    const isTshark = 'bytes' in (d[0] || {});
+    const metric = isTshark ? 'bytes' : 'connections';
+    const metricLabel = isTshark ? 'байт' : 'соединений';
+    const hasThreat = 'risk_level' in (d[0] || {});
+
+    // сводка угроз
+    let summaryHtml = '';
+    if (r.threat_summary) {
+      const s = r.threat_summary;
+      summaryHtml = `<div style="margin-bottom:12px">
+        ${s.high ? `<span class="pill bad">⚠ ${s.high} опасных</span> ` : ''}
+        ${s.suspicious ? `<span class="pill warn">${s.suspicious} подозрительных</span> ` : ''}
+        <span class="pill ok">${s.ok} нормальных</span></div>`;
+    }
+
+    const riskPill = lvl => lvl === 'high' ? '<span class="pill bad">опасно</span>'
+      : (lvl === 'suspicious' ? '<span class="pill warn">подозрительно</span>' : '<span class="pill ok">ok</span>');
+
+    const rows = d.slice(0, 50).map(x => {
+      const who = x.host ? `<span style="color:var(--muted)"> ${x.host}</span>` : (hasThreat ? ' <span style="color:var(--warn)">нет DNS</span>' : '');
+      const val = isTshark ? fmtBytes(x.bytes) : x.connections;
+      const org = x.org ? ` <span style="color:var(--muted)">[${x.org}${x.country ? ', '+x.country : ''}]</span>` : '';
+      const reasons = hasThreat && x.reasons ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${x.reasons.join(' · ')}</div>` : '';
+      const rowClass = x.risk_level === 'high' ? 'bad' : (x.risk_level === 'suspicious' ? 'warn' : '');
+      return `<tr class="${rowClass}"><td>${hasThreat ? riskPill(x.risk_level) + ' ' : ''}${x.ip}${who}${org}${reasons}</td>
+        <td>${val}</td><td>${(x.protocols||[]).join(', ')}</td><td>${isTshark ? (x.packets+' пак.') : ('порты: '+(x.ports||[]).slice(0,6).join(', '))}</td></tr>`;
+    }).join('');
+
+    const header = isTshark
+      ? `<p class="timing">Всего: ${r.total_packets} пакетов · ${fmtBytes(r.total_bytes)} · интерфейс ${r.interface}${r.filter ? ' · фильтр: ' + r.filter : ''}</p>`
+      : `<p class="timing">Устройство ${r.target_ip} через роутер ${r.router} · назначений: ${r.total_destinations}</p>`;
+
+    // график: только подозрительные/опасные если анализ включён, иначе топ по объёму
+    const chartSource = hasThreat ? d.filter(x => x.risk_level !== 'ok').slice(0, 12) : d.slice(0, 12);
+    const chartData = chartSource.length ? chartSource : d.slice(0, 12);
+    const labels = chartData.map(x => x.host || x.ip);
+    const vals = chartData.map(x => x[metric]);
+    const colors = hasThreat ? chartData.map(x => x.risk_level === 'high' ? CHART_COLORS.bad : (x.risk_level === 'suspicious' ? CHART_COLORS.warn : CHART_COLORS.blue)) : CHART_COLORS.blue;
+    const chartTitle = hasThreat && chartSource.length ? 'Подозрительные назначения' : 'Топ назначений';
+
+    const html = `${header}${summaryHtml}
+      <div class="timing" style="margin-bottom:4px">${chartTitle}:</div>
+      <div class="chart-box" style="height:280px"><canvas id="${canvasId}"></canvas></div>
+      <table><tr><th>Назначение</th><th>${metricLabel}</th><th>Протоколы</th><th>Детали</th></tr>${rows}</table>
+      ${r.note ? `<p class="timing" style="margin-top:8px">ℹ️ ${r.note}</p>` : ''}`;
+    const chart = () => { const el = document.getElementById(canvasId); if (!el) return null;
+      return new Chart(el, { type: 'bar', data: { labels, datasets: [{ label: metricLabel, data: vals, backgroundColor: colors }] },
+        options: baseOpts({ indexAxis: 'y' }) }); };
+    return { html, chart };
+  }
+
+  // --- dig / firewall / прочее ---
+  return { html: `<pre>${JSON.stringify(r, null, 2)}</pre>` };
+}
+
+function fmtBytes(b) {
+  if (b == null) return '—';
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(2) + ' MB';
+}
+
+async function loadHistory() {
+  const res = await fetch('/api/history');
+  const items = await res.json();
+  const root = document.getElementById('results');
+  if (!items.length) { root.innerHTML = '<div class="empty">История пуста</div>'; return; }
+  root.innerHTML = '<div class="card"><h2>История отчётов</h2>' +
+    '<table><tr><th>#</th><th>Время</th><th>Проверки</th><th>Длит.</th><th></th></tr>' +
+    items.map(it => `<tr><td>${it.id}</td><td>${it.timestamp}</td><td>${(it.checks||[]).join(', ')}</td><td>${it.total_time||'—'}s</td>
+      <td><a href="#" onclick="openReport(${it.id});return false" style="color:var(--accent)">открыть</a></td></tr>`).join('') +
+    '</table></div>';
+}
+
+async function openReport(id) {
+  const res = await fetch('/api/report?id=' + id);
+  const report = await res.json();
+  LAST_REPORT = report;
+  document.getElementById('aiBtn').disabled = false;
+  setStatus(`Отчёт #${id} от ${report.timestamp} · ${report.total_time}s`);
+  renderReport(report);
+}
+
+async function analyzeReport() {
+  if (!LAST_REPORT) return;
+  document.getElementById('aiBtn').disabled = true;
+  setStatus('AI анализирует отчёт…');
+  const res = await fetch('/api/analyze', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ report: LAST_REPORT })
+  });
+  const a = await res.json();
+  document.getElementById('aiBtn').disabled = false;
+  setStatus('AI-анализ готов.');
+  renderAnalysis(a);
+}
+
+function renderAnalysis(a) {
+  const root = document.getElementById('results');
+  if (a.error) {
+    root.insertAdjacentHTML('afterbegin', `<div class="card ai-card"><h2>AI-анализ</h2><span class="pill bad">${a.error}</span><div class="timing" style="margin-top:8px">Задай ANTHROPIC_API_KEY на сервере, где запущен netaudit.</div></div>`);
+    return;
+  }
+  if (a.raw) {
+    root.insertAdjacentHTML('afterbegin', `<div class="card ai-card"><h2>AI-анализ</h2><pre>${a.summary}</pre></div>`);
+    return;
+  }
+  const problems = (a.problems||[]).map(p =>
+    `<div class="rec"><div class="action sev-${p.severity}">[${p.severity}] ${p.title}</div><div class="why">${p.detail}</div></div>`).join('');
+  const recs = (a.recommendations||[]).sort((x,y)=>(x.priority||9)-(y.priority||9)).map(r =>
+    `<div class="rec"><div class="action">${r.priority?r.priority+'. ':''}${r.action}</div><div class="why">${r.why||''}</div></div>`).join('');
+  root.insertAdjacentHTML('afterbegin', `<div class="card ai-card">
+    <h2>🤖 AI-анализ: что делать</h2>
+    <p>${a.summary||''}</p>
+    ${problems ? '<h4 style="margin:14px 0 6px">Проблемы</h4>'+problems : ''}
+    ${recs ? '<h4 style="margin:14px 0 6px">Рекомендации</h4>'+recs : ''}
+  </div>`);
+}
+
+// ---- Вкладки ----
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-page').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+  if (name === 'settings') loadSettings();
+  if (name === 'trends') loadTrendTargets();
+}
+
+let TREND_CHART = null;
+async function loadTrendTargets() {
+  const res = await fetch('/api/timeseries/targets');
+  const targets = await res.json();
+  const sel = document.getElementById('trendTarget');
+  sel.innerHTML = targets.map(t => `<option value="${t}">${t}</option>`).join('');
+  if (targets.length) loadTrend();
+  else document.getElementById('trendEmpty').textContent = 'Нет истории mtr. Запусти mtr-проверки, чтобы накопить данные для графика.';
+}
+async function loadTrend() {
+  const target = document.getElementById('trendTarget').value;
+  if (!target) return;
+  const res = await fetch('/api/timeseries/mtr?target=' + encodeURIComponent(target));
+  const data = await res.json();
+  const pts = data.points || [];
+  document.getElementById('trendEmpty').textContent = pts.length < 2 ? 'Мало точек для тренда — нужно несколько прогонов mtr до этой цели.' : '';
+  if (TREND_CHART) { TREND_CHART.destroy(); TREND_CHART = null; }
+  const el = document.getElementById('trendChart');
+  TREND_CHART = new Chart(el, {
+    type: 'line',
+    data: { labels: pts.map(p => p.timestamp), datasets: [{ label: 'Макс. потери %', data: pts.map(p => p.max_loss),
+      borderColor: CHART_COLORS.bad, backgroundColor: 'rgba(255,92,108,.12)', fill: true, tension: .25, pointRadius: 3 }] },
+    options: baseOpts({ scales: { x: baseOpts().scales.x, y: Object.assign(baseOpts().scales.y, { max: 100 }) } })
+  });
+}
+
+// ---- Настройки ----
+async function loadSettings() {
+  const res = await fetch('/api/settings');
+  const s = await res.json();
+  document.getElementById('syncThreshold').value = s.sync_threshold_sec ?? '2.5';
+  document.getElementById('emaAlpha').value = s.ema_alpha ?? '0.4';
+  document.getElementById('telegramChat').value = s.telegram_chat ?? '';
+  document.getElementById('keyStatus').textContent = (s.anthropic_api_key && s.anthropic_api_key.set) ? '● задан' : '○ не задан';
+  document.getElementById('keyStatus').style.color = (s.anthropic_api_key && s.anthropic_api_key.set) ? 'var(--ok)' : 'var(--muted)';
+  document.getElementById('tgStatus').textContent = (s.telegram_token && s.telegram_token.set) ? '● задан' : '○ не задан';
+  document.getElementById('tgStatus').style.color = (s.telegram_token && s.telegram_token.set) ? 'var(--ok)' : 'var(--muted)';
+  loadTargets();
+  loadPresetsManage();
+  loadTools();
+  loadRep();
+  loadHistoryCapture();
+}
+
+async function loadHistoryCapture() {
+  const res = await fetch('/api/history_capture/settings');
+  const s = await res.json();
+  document.getElementById('hcEnabled').checked = !!s.enabled;
+  document.getElementById('hcRouter').value = s.router ?? '192.168.88.1';
+  document.getElementById('hcUser').value = s.user ?? 'admin';
+  document.getElementById('hcPort').value = s.port ?? 22;
+  document.getElementById('hcTargetIp').value = s.target_ip ?? '';
+  document.getElementById('hcInterval').value = s.interval_sec ?? 60;
+  document.getElementById('hcRetention').value = s.retention_hours ?? 24;
+
+  const st = await (await fetch('/api/history_capture/status')).json();
+  const el = document.getElementById('hcStatus');
+  if (!s.enabled) {
+    el.textContent = 'выключен';
+  } else if (st.last_error) {
+    el.innerHTML = `<span style="color:var(--bad)">ошибка: ${st.last_error}</span>`;
+  } else if (st.last_run) {
+    el.textContent = `работает · последний снимок: ${st.last_run.replace('T',' ').slice(0,19)} · всего снимков: ${st.snapshots_taken}`;
+  } else {
+    el.textContent = 'запущен, ждёт первого снимка…';
+  }
+}
+
+async function saveHistoryCapture() {
+  const body = {
+    enabled: document.getElementById('hcEnabled').checked,
+    router: document.getElementById('hcRouter').value.trim(),
+    user: document.getElementById('hcUser').value.trim(),
+    port: Number(document.getElementById('hcPort').value) || 22,
+    target_ip: document.getElementById('hcTargetIp').value.trim(),
+    interval_sec: Number(document.getElementById('hcInterval').value) || 60,
+    retention_hours: Number(document.getElementById('hcRetention').value) || 24,
+  };
+  const pw = document.getElementById('hcPassword').value;
+  if (pw) body.password = pw;
+  await fetch('/api/history_capture/settings', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  document.getElementById('hcPassword').value = '';
+  const el = document.getElementById('hcSaved');
+  el.textContent = '✓ сохранено'; el.style.color = 'var(--ok)';
+  setTimeout(() => { el.textContent = ''; loadHistoryCapture(); }, 1200);
+}
+
+async function queryHistoryCapture() {
+  const ip = document.getElementById('hcQueryIp').value.trim();
+  const hours = Number(document.getElementById('hcQueryHours').value) || 1;
+  const root = document.getElementById('hcResults');
+  if (!ip) { root.innerHTML = '<div style="color:var(--muted);font-size:13px">Укажи IP устройства</div>'; return; }
+  root.innerHTML = '<div style="color:var(--muted);font-size:13px">Загрузка…</div>';
+  const res = await fetch(`/api/history_capture/query?target_ip=${encodeURIComponent(ip)}&hours=${hours}`);
+  const data = await res.json();
+  if (!data.rows.length) { root.innerHTML = `<div style="color:var(--muted);font-size:13px">Нет данных за последние ${hours}ч. Убедись, что фоновый сбор включён и уже успел снять хотя бы один снимок.</div>`; return; }
+  const sevPill = s => ({critical:'<span class="pill bad">critical</span>', high:'<span class="pill bad">high</span>', suspicious:'<span class="pill warn">suspicious</span>', ok:'<span class="pill ok">ok</span>'}[s] || (s||''));
+  root.innerHTML = `<div style="color:var(--muted);font-size:12px;margin-bottom:8px">${data.total} записей</div>` +
+    data.rows.map(r => `<div class="list-row"><span class="grow">
+      <span style="color:var(--muted);font-family:var(--mono);font-size:11px">${r.seen_at.replace('T',' ').slice(0,19)}</span>
+      &nbsp;${sevPill(r.risk_level)}&nbsp;<b>${r.dst_ip}</b>${r.dst_port ? ':'+r.dst_port : ''} <span style="color:var(--muted)">${r.protocol||''}</span>
+      </span></div>`).join('');
+}
+
+async function loadRep() {
+  const res = await fetch('/api/reputation');
+  const items = await res.json();
+  const root = document.getElementById('repList');
+  if (!items.length) { root.innerHTML = '<div style="color:var(--muted);font-size:13px">Списки пусты</div>'; return; }
+  root.innerHTML = items.map(x =>
+    `<div class="list-row">
+      <span class="grow">${x.list_type === 'block' ? '<span class="pill bad">чёрный</span>' : '<span class="pill ok">белый</span>'}
+        <b>${x.pattern}</b> ${x.note ? '<span style="color:var(--muted)">— '+x.note+'</span>' : ''}</span>
+      <button class="btn-danger btn-sm" onclick="delRep(${x.id})">удалить</button></div>`).join('');
+}
+async function addRep() {
+  const pattern = document.getElementById('newRepPattern').value.trim();
+  if (!pattern) return;
+  const list_type = document.getElementById('newRepType').value;
+  const note = document.getElementById('newRepNote').value.trim();
+  await fetch('/api/reputation', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ pattern, list_type, note }) });
+  document.getElementById('newRepPattern').value = '';
+  document.getElementById('newRepNote').value = '';
+  loadRep();
+}
+async function delRep(id) {
+  await fetch('/api/reputation/' + id, { method: 'DELETE' });
+  loadRep();
+}
+
+async function loadTools() {
+  const res = await fetch('/api/tools');
+  const list = await res.json();
+  const root = document.getElementById('toolsList');
+  root.innerHTML = list.map(t => {
+    const status = t.installed
+      ? `<span class="pill ok">установлен</span>`
+      : `<span class="pill bad">нет</span>`;
+    const usedBy = t.used_by.length ? `<span style="color:var(--muted)">← ${t.used_by.join(', ')}</span>` : '';
+    const installBtn = (!t.installed && t.installable)
+      ? `<button class="btn-sm" onclick="installTool('${t.tool}', this)">установить</button>` : '';
+    return `<div class="list-row">
+      <span class="grow"><b>${t.tool}</b> ${status} ${usedBy}
+        ${t.package ? `<span style="color:var(--muted);font-size:11px">пакет: ${t.package}</span>` : ''}</span>
+      ${installBtn}</div>`;
+  }).join('');
+}
+
+async function installTool(tool, btn) {
+  btn.disabled = true; btn.textContent = 'ставлю…';
+  const res = await fetch('/api/tools/install', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tool })
+  });
+  const r = await res.json();
+  if (r.ok) {
+    btn.textContent = r.already ? 'уже есть' : '✓ готово';
+    setTimeout(loadTools, 800);
+  } else {
+    btn.disabled = false; btn.textContent = 'установить';
+    const msg = r.manual_command
+      ? `Нужен ручной запуск:\n${r.manual_command}`
+      : `Ошибка: ${r.error}`;
+    alert(msg);
+  }
+}
+
+async function saveSettings() {
+  const settings = {
+    sync_threshold_sec: document.getElementById('syncThreshold').value,
+    ema_alpha: document.getElementById('emaAlpha').value,
+    telegram_chat: document.getElementById('telegramChat').value,
+  };
+  const key = document.getElementById('apiKey').value;
+  if (key) settings.anthropic_api_key = key;
+  const tg = document.getElementById('telegramToken').value;
+  if (tg) settings.telegram_token = tg;
+
+  await fetch('/api/settings', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ settings }) });
+  const el = document.getElementById('settingsSaved');
+  el.textContent = '✓ сохранено'; el.style.color = 'var(--ok)';
+  document.getElementById('apiKey').value = '';
+  document.getElementById('telegramToken').value = '';
+  setTimeout(() => { el.textContent = ''; loadSettings(); }, 1500);
+}
+
+async function verifyKey() {
+  const key = document.getElementById('apiKey').value;
+  const el = document.getElementById('verifyResult');
+  if (!key) { el.textContent = 'введи ключ в поле выше'; el.style.color = 'var(--muted)'; return; }
+  el.textContent = 'проверяю…'; el.style.color = 'var(--muted)';
+  const res = await fetch('/api/settings/verify-key', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ api_key: key }) });
+  const r = await res.json();
+  el.textContent = r.ok ? '✓ ключ рабочий' : '✗ ' + (r.error || 'не прошёл');
+  el.style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
+}
+
+// ---- Цели ----
+async function loadTargets() {
+  const res = await fetch('/api/targets');
+  const targets = await res.json();
+  const root = document.getElementById('targetsList');
+  root.innerHTML = targets.length ? targets.map(t =>
+    `<div class="list-row"><span class="grow">${t.label ? t.label + ' — ' : ''}${t.value} <span style="color:var(--muted)">[${t.kind}]</span></span>
+     <button class="btn-danger btn-sm" onclick="delTarget(${t.id})">удалить</button></div>`).join('')
+    : '<div style="color:var(--muted);font-size:13px">Пока пусто</div>';
+}
+async function addTarget() {
+  const value = document.getElementById('newTargetValue').value.trim();
+  if (!value) return;
+  const label = document.getElementById('newTargetLabel').value.trim();
+  const kind = document.getElementById('newTargetKind').value;
+  await fetch('/api/targets', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ value, label, kind }) });
+  document.getElementById('newTargetValue').value = '';
+  document.getElementById('newTargetLabel').value = '';
+  loadTargets(); loadSavedTargetsDatalist();
+}
+async function delTarget(id) {
+  await fetch('/api/targets/' + id, { method: 'DELETE' });
+  loadTargets(); loadSavedTargetsDatalist();
+}
+
+// ---- Пресеты ----
+async function loadPresetBar() {
+  const res = await fetch('/api/presets');
+  const presets = await res.json();
+  const bar = document.getElementById('presetBar');
+  if (!presets.length) { bar.innerHTML = ''; return; }
+  bar.innerHTML = `<div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);font-family:var(--mono);margin-bottom:6px">${t('presets.bar.title')}</div>` +
+    presets.map(p => `<span class="preset-chip" onclick="applyPreset(${p.id})">${trPresetName(p.name)}</span>`).join('');
+  window._presets = presets;
+}
+async function applyPreset(id) {
+  const p = (window._presets || []).find(x => x.id === id);
+  if (!p) return;
+  // снять всё
+  document.querySelectorAll('.check.sel').forEach(el => { el.querySelector('input[type=checkbox]').checked = false; el.classList.remove('sel'); });
+  // выставить по пресету
+  p.checks.forEach(c => {
+    const el = document.querySelector(`.check[data-id="${c.id}"]`);
+    if (!el || el.classList.contains('disabled')) return;
+    el.querySelector('input[type=checkbox]').checked = true;
+    el.classList.add('sel');
+    Object.entries(c.params || {}).forEach(([k, v]) => {
+      const inp = el.querySelector(`input[data-param="${k}"]`);
+      if (inp) inp.value = v;
+    });
+  });
+  updateEstimate();
+  setStatus(`${t('preset.applied')}${trPresetName(p.name)}`);
+}
+async function saveCurrentAsPreset() {
+  const checks = getSelected();
+  if (!checks.length) { setStatus(t('preset.select.first')); return; }
+  const name = prompt(t('preset.name.prompt'));
+  if (!name) return;
+  await fetch('/api/presets', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ name, checks }) });
+  loadPresetBar();
+  setStatus(t('preset.saved').replace('{name}', name));
+}
+async function loadPresetsManage() {
+  const res = await fetch('/api/presets');
+  const presets = await res.json();
+  const root = document.getElementById('presetsManage');
+  root.innerHTML = presets.length ? presets.map(p =>
+    `<div class="list-row"><span class="grow">${trPresetName(p.name)} <span style="color:var(--muted)">(${p.checks.map(c=>c.id).join(', ')})</span></span>
+     <button class="btn-danger btn-sm" onclick="delPreset(${p.id})">${t('preset.delete')}</button></div>`).join('')
+    : `<div style="color:var(--muted);font-size:13px">${t('preset.none')}</div>`;
+}
+async function delPreset(id) {
+  await fetch('/api/presets/' + id, { method: 'DELETE' });
+  loadPresetsManage(); loadPresetBar();
+}
+
+async function loadSavedTargetsDatalist() {
+  const res = await fetch('/api/targets');
+  const targets = await res.json();
+  const dl = document.getElementById('savedTargets');
+  dl.innerHTML = targets.map(t => `<option value="${t.value}">${t.label || t.value}</option>`).join('');
+}
+
+// применяет переводы ко всем статичным элементам с data-i18n
+function applyStaticI18n() {
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    const val = t(key);
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+      el.placeholder = val;
+    } else {
+      el.textContent = val;
+    }
+  });
+  document.documentElement.lang = CURRENT_LANG;
+}
+
+// переключение языка: применяет статику + перерисовывает динамические части
+function setLang(lang) {
+  CURRENT_LANG = (lang === 'en') ? 'en' : 'ru';
+  const sel = document.getElementById('langSel');
+  if (sel) sel.value = CURRENT_LANG;
+  applyStaticI18n();
+  if (CHECKS.length) renderCheckList();
+  // двуязычные блоки инструкции (вкладка "Помощь") — не через data-i18n
+  // из-за объёма текста, переключаются целиком по классу
+  document.querySelectorAll('.lang-ru').forEach(el => { el.style.display = (CURRENT_LANG === 'ru') ? '' : 'none'; });
+  document.querySelectorAll('.lang-en').forEach(el => { el.style.display = (CURRENT_LANG === 'en') ? '' : 'none'; });
+  // перерисовать открытые вкладки, если функции доступны
+  try { if (typeof loadPresetBar === 'function') loadPresetBar(); } catch(e){}
+  try { if (typeof loadPresetsManage === 'function' && document.getElementById('presetsManage')) loadPresetsManage(); } catch(e){}
+  const status = document.getElementById('status');
+  if (status && status.getAttribute('data-i18n')) status.textContent = t('select.hint');
+}
+
+// стартовая инициализация языка (автоопределение по браузеру)
+CURRENT_LANG = detectLang();
+
+document.getElementById('forceAsync').addEventListener('change', updateEstimate);
+loadChecks().then(() => { loadPresetBar(); loadSavedTargetsDatalist(); setLang(CURRENT_LANG); });
+</script>
+</body>
+</html>
