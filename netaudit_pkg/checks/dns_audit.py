@@ -34,6 +34,8 @@ TXT_SERVICE_PATTERNS = [
     (r'apple-domain-verification=', 'Apple (Business Manager)'),
     (r'shopify-verification-code=', 'Shopify'),
     (r'hubspot-developer-verification=', 'HubSpot'),
+    (r'AFDVERIFICATION=|AFDVALIDATION=', 'Azure Front Door'),
+    (r'MSFT=', 'Microsoft (generic)'),
     (r'v=spf1', None),   # уже разбирается отдельно как SPF, не дублируем
     (r'v=DMARC1', None),  # уже разбирается отдельно как DMARC
 ]
