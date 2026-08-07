@@ -1017,7 +1017,8 @@ function renderResult(id, r, canvasId) {
   if (r.sections) {
     const sevPill = s => ({high:'<span class="pill bad">high</span>', medium:'<span class="pill warn">medium</span>', low:'<span class="pill" style="background:#2a3140;color:#9aa4b4">low</span>', ok:'<span class="pill ok">ok</span>'}[s] || s);
     const secNames = {nginx:'nginx', fail2ban:'Fail2Ban', firewall:'Firewall', sql:'MySQL/MariaDB', ssh:'SSH hardening',
-                      spf:'SPF', dkim:'DKIM', dmarc:'DMARC', dnssec:'DNSSEC', dangling_cname:'Висящие CNAME'};
+                      spf:'SPF', dkim:'DKIM', dmarc:'DMARC', dnssec:'DNSSEC', dangling_cname:'Висящие CNAME',
+                      discovered_services:'Обнаруженные сервисы (TXT)'};
     let html = '';
     if (r.summary) {
       const s = r.summary;

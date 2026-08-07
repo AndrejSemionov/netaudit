@@ -20,6 +20,24 @@ COMMON_DKIM_SELECTORS = [
     'dkim', 'mail', 's1', 's2', 'smtp', 'mx',
 ]
 
+# verification-токены в TXT-записях домена выдают, какими сторонними сервисами
+# пользуется владелец — полезно для профилирования инфраструктуры цели
+# (Atlassian/Jira, Google Workspace, DocuSign, MS 365, Facebook Business и т.д.)
+TXT_SERVICE_PATTERNS = [
+    (r'google-site-verification=', 'Google (Search Console / Workspace)'),
+    (r'atlassian-domain-verification=', 'Atlassian (Jira/Confluence)'),
+    (r'docusign=', 'DocuSign'),
+    (r'MS=ms\d+', 'Microsoft 365'),
+    (r'facebook-domain-verification=', 'Facebook Business'),
+    (r'stripe-verification=', 'Stripe'),
+    (r'zoom-domain-verification=', 'Zoom'),
+    (r'apple-domain-verification=', 'Apple (Business Manager)'),
+    (r'shopify-verification-code=', 'Shopify'),
+    (r'hubspot-developer-verification=', 'HubSpot'),
+    (r'v=spf1', None),   # уже разбирается отдельно как SPF, не дублируем
+    (r'v=DMARC1', None),  # уже разбирается отдельно как DMARC
+]
+
 
 def _finding(severity, title, detail=''):
     return {'severity': severity, 'title': title, 'detail': detail}
@@ -212,6 +230,30 @@ def _check_dangling_cnames(domain: str, subdomains: list[str]) -> list[dict]:
 
 
 # ===========================================================================
+# Обнаруженные сторонние сервисы (через verification-токены в TXT)
+# ===========================================================================
+
+def _check_discovered_services(domain: str) -> list[dict]:
+    txts = _dig_txt(domain)
+    found = []
+    for txt in txts:
+        for pattern, label in TXT_SERVICE_PATTERNS:
+            if label is None:
+                continue  # SPF/DMARC — не дублируем, у них своя секция
+            if re.search(pattern, txt, re.IGNORECASE):
+                found.append(label)
+
+    if not found:
+        return [_finding('ok', 'сторонних verification-токенов в TXT не обнаружено')]
+
+    findings = []
+    for label in sorted(set(found)):
+        findings.append(_finding('low', f'обнаружен сервис: {label}',
+                                 'verification-токен в TXT-записи — раскрывает используемую инфраструктуру'))
+    return findings
+
+
+# ===========================================================================
 # Комбинированная проверка
 # ===========================================================================
 
@@ -240,6 +282,7 @@ def check_dns_audit(domain: str = 'example.com', subdomains_to_check: str = 'www
         'dmarc': _check_dmarc(domain),
         'dnssec': _check_dnssec(domain),
         'dangling_cname': _check_dangling_cnames(domain, subs),
+        'discovered_services': _check_discovered_services(domain),
     }
 
     counts = {'high': 0, 'medium': 0, 'low': 0, 'ok': 0}
