@@ -75,16 +75,16 @@ def cmd_run(args):
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
     if args.ai:
-        log.info('AI-анализ...')
+        log.info('Running AI analysis...')
         analysis = ai_analyze(report)
-        print('\n=== AI-АНАЛИЗ ===')
+        print('\n=== AI ANALYSIS ===')
         print(json.dumps(analysis, ensure_ascii=False, indent=2))
 
 
 def cmd_history(args):
     items = list_reports()
     if not items:
-        print('История пуста.')
+        print('No reports yet.')
         return
     for it in items:
         print(f"#{it['id']}  {it['timestamp']}  [{', '.join(it['checks'])}]  {it['total_time']}s")
@@ -93,7 +93,7 @@ def cmd_history(args):
 def cmd_analyze(args):
     report = load_report(int(args.id))
     if report is None:
-        print(f'Отчёт #{args.id} не найден.')
+        print(f'Report #{args.id} not found.')
         return
     analysis = ai_analyze(report)
     print(json.dumps(analysis, ensure_ascii=False, indent=2))
@@ -104,7 +104,7 @@ def cmd_tools(args):
     for t in toolsmod.tools_status():
         mark = '✓' if t['installed'] else '✗'
         used = f" ← {', '.join(t['used_by'])}" if t['used_by'] else ''
-        pkg = f" (пакет: {t['package']})" if t['package'] and not t['installed'] else ''
+        pkg = f" (package: {t['package']})" if t['package'] and not t['installed'] else ''
         print(f"{mark} {t['tool']:15}{pkg}{used}")
 
 
@@ -112,11 +112,11 @@ def cmd_install(args):
     from netaudit_pkg import tools as toolsmod
     r = toolsmod.install_tool(args.tool)
     if r.get('ok'):
-        print(f"✓ {args.tool}: " + ('уже установлен' if r.get('already') else 'установлен'))
+        print(f"✓ {args.tool}: " + ('already installed' if r.get('already') else 'installed'))
     else:
         print(f"✗ {r.get('error')}")
         if r.get('manual_command'):
-            print(f"  Ручной запуск: {r['manual_command']}")
+            print(f"  Manual install: {r['manual_command']}")
 
 
 def cmd_web(args):
@@ -173,52 +173,52 @@ server {{
 """
     out_path = project_dir / 'netaudit.nginx.conf'
     out_path.write_text(conf)
-    print(f'Конфиг nginx сохранён: {out_path}\n')
-    print('Дальнейшие шаги:')
+    print(f'nginx config saved: {out_path}\n')
+    print('Next steps:')
     print(f'  1. sudo apt install nginx apache2-utils -y')
     print(f'  2. sudo htpasswd -c /etc/nginx/.netaudit_htpasswd {args.user}')
     print(f'  3. sudo cp {out_path} /etc/nginx/sites-available/netaudit')
     print(f'  4. sudo ln -s /etc/nginx/sites-available/netaudit /etc/nginx/sites-enabled/')
     print(f'  5. sudo nginx -t && sudo systemctl reload nginx')
     print(f'  6. python3 netaudit.py web --host 127.0.0.1 --port {args.backend_port}')
-    print(f'\nПотом открой http://{args.domain} (спросит логин/пароль).')
+    print(f'\nThen open http://{args.domain} (will prompt for login/password).')
 
 
 def build_parser():
-    p = argparse.ArgumentParser(prog='netaudit', description='Модульный универсальный сетевой аудит.')
+    p = argparse.ArgumentParser(prog='netaudit', description='Modular universal network audit.')
     sub = p.add_subparsers(dest='command', required=True)
 
-    p_list = sub.add_parser('list', help='Показать все доступные проверки')
+    p_list = sub.add_parser('list', help='Show all available checks')
     p_list.set_defaults(func=cmd_list)
 
-    p_run = sub.add_parser('run', help='Выполнить проверки')
-    p_run.add_argument('checks', nargs='+', help='ID проверок (см. list)')
-    p_run.add_argument('--ai', action='store_true', help='AI-анализ после прогона')
+    p_run = sub.add_parser('run', help='Run checks')
+    p_run.add_argument('checks', nargs='+', help='Check IDs (see list)')
+    p_run.add_argument('--ai', action='store_true', help='AI analysis after the run')
     p_run.set_defaults(func=cmd_run)
 
-    p_hist = sub.add_parser('history', help='Список отчётов')
+    p_hist = sub.add_parser('history', help='List reports')
     p_hist.set_defaults(func=cmd_history)
 
-    p_an = sub.add_parser('analyze', help='AI-анализ отчёта по id (см. history)')
-    p_an.add_argument('id', help='ID отчёта из history')
+    p_an = sub.add_parser('analyze', help='AI analysis of a report by id (see history)')
+    p_an.add_argument('id', help='Report ID from history')
     p_an.set_defaults(func=cmd_analyze)
 
-    p_tools = sub.add_parser('tools', help='Статус внешних инструментов')
+    p_tools = sub.add_parser('tools', help='Status of external tools')
     p_tools.set_defaults(func=cmd_tools)
 
-    p_install = sub.add_parser('install', help='Установить инструмент (apt, белый список)')
-    p_install.add_argument('tool', help='Имя инструмента (см. tools)')
+    p_install = sub.add_parser('install', help='Install a tool (apt, allow-list)')
+    p_install.add_argument('tool', help='Tool name (see tools)')
     p_install.set_defaults(func=cmd_install)
 
-    p_web = sub.add_parser('web', help='Поднять веб-интерфейс')
+    p_web = sub.add_parser('web', help='Start the web interface')
     p_web.add_argument('--host', default='127.0.0.1')
     p_web.add_argument('--port', type=int, default=8000)
-    p_web.add_argument('--reload', action='store_true', help='Автоперезагрузка (разработка)')
+    p_web.add_argument('--reload', action='store_true', help='Auto-reload (development)')
     p_web.set_defaults(func=cmd_web)
 
-    p_nginx = sub.add_parser('setup-nginx', help='Сгенерировать конфиг nginx с basic auth')
+    p_nginx = sub.add_parser('setup-nginx', help='Generate an nginx config with basic auth')
     p_nginx.add_argument('--domain', default='netaudit.local')
-    p_nginx.add_argument('--user', default='admin', help='Имя для basic auth')
+    p_nginx.add_argument('--user', default='admin', help='Basic auth username')
     p_nginx.add_argument('--backend-port', type=int, default=8000)
     p_nginx.set_defaults(func=cmd_setup_nginx)
 
