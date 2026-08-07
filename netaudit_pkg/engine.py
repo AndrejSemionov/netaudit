@@ -39,7 +39,7 @@ def run_checks(selected: list[dict]) -> dict:
             report['timing'][check_id] = 0.0
             continue
 
-        log.info(f'Выполняю: {spec.label} ({check_id})...')
+        log.info(f'Running: {spec.label} ({check_id})...')
         start = time.monotonic()
         try:
             result = spec.func(**params)

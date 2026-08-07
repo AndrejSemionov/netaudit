@@ -71,7 +71,7 @@ def cmd_run(args):
 
     report = run_checks(selected)
     saved = save_report(report)
-    log.info(f'Отчёт сохранён: {saved}')
+    log.info(f'Report saved: {saved}')
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
     if args.ai:
@@ -123,11 +123,11 @@ def cmd_web(args):
     try:
         import uvicorn
     except ImportError:
-        log.error('uvicorn не установлен: pip install "uvicorn[standard]" fastapi --break-system-packages')
+        log.error('uvicorn not installed: pip install "uvicorn[standard]" fastapi --break-system-packages')
         sys.exit(1)
-    log.info(f'Веб-интерфейс: http://{args.host}:{args.port}')
+    log.info(f'Web UI: http://{args.host}:{args.port}')
     if args.host != '127.0.0.1':
-        log.warning('Слушаю не только localhost. Для доступа снаружи используй setup-nginx с авторизацией.')
+        log.warning('Listening beyond localhost. For external access use setup-nginx with auth.')
     uvicorn.run('web.app:app', host=args.host, port=args.port, reload=args.reload,
                 app_dir=str(Path(__file__).resolve().parent))
 
