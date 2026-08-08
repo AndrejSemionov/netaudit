@@ -130,16 +130,13 @@ def check_lynis_audit(host='', user='root', port=22, key_path='', password='',
         return {'error': f'could not connect: {e}'}
 
     try:
-        which_out, _ = ssh.run('which lynis || echo NOTFOUND')
-        if 'NOTFOUND' in which_out:
+        if not ssh.is_tool_installed('lynis'):
             if not auto_install:
                 return {'error': 'lynis is not installed on the server',
                         'hint': 'apt install lynis -y (or enable auto_install)'}
-            install_out, install_err = ssh.sudo('apt-get install -y lynis 2>&1', timeout=90)
-            which_out, _ = ssh.run('which lynis || echo NOTFOUND')
-            if 'NOTFOUND' in which_out:
-                return {'error': 'failed to install lynis',
-                        'detail': (install_out + install_err)[-500:]}
+            installed, install_err = ssh.ensure_tool_installed('lynis', timeout=90)
+            if not installed:
+                return {'error': 'failed to install lynis', 'detail': install_err}
 
         if ssh.needs_sudo_password():
             return {'error': 'sudo is needed, but passwordless sudo isn\'t set up and no password was given',

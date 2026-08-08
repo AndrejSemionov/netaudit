@@ -165,6 +165,37 @@ class SSHExecutor:
             self._no_password_sudo = 'NOPASS' not in check_out
         return (not self._no_password_sudo) and not self.password
 
+    def is_tool_installed(self, tool: str) -> bool:
+        """Checks whether a binary is on PATH on the remote host."""
+        out, _ = self.run(f'which {tool} || echo NOTFOUND')
+        return 'NOTFOUND' not in out
+
+    def ensure_tool_installed(self, tool: str, timeout: int = 120) -> tuple[bool, str | None]:
+        """
+        Installs `tool` via apt on the remote host if it's missing, using the
+        same package allowlist as the local ToolManager (see tools.py) - this
+        was previously duplicated inline in lynis_audit/rootkit_check/aide_check,
+        each with its own copy of the same which-then-apt-install pattern.
+
+        Returns (installed, error). installed is True if the tool is now present
+        (whether it already was, or was just installed). error explains why not,
+        if installed is False - most commonly "not on the allowlist" or an apt
+        failure.
+        """
+        from .tools import TOOL_PACKAGES  # local import - avoids a circular import at module load time
+
+        if self.is_tool_installed(tool):
+            return True, None
+
+        package = TOOL_PACKAGES.get(tool)
+        if package is None:
+            return False, f'{tool} is not on the install allowlist (see tools.py TOOL_PACKAGES)'
+
+        self.sudo(f'apt-get install -y {package} 2>&1', timeout=timeout)
+        if self.is_tool_installed(tool):
+            return True, None
+        return False, f'failed to install {tool} (package {package})'
+
     def close(self) -> None:
         if self.client:
             self.client.close()

@@ -156,22 +156,20 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='',
             return {'error': 'sudo is needed, but passwordless sudo isn\'t set up and no password was given',
                     'hint': 'set "Password (if not using a key)" — it will also be used for sudo -S'}
 
-        def _ensure_installed(tool, package):
-            which_out, _ = ssh.run(f'which {tool} || echo NOTFOUND')
-            if 'NOTFOUND' not in which_out:
+        def _ensure_installed(tool):
+            if ssh.is_tool_installed(tool):
                 return True
             if not auto_install:
                 return False
-            ssh.sudo(f'apt-get install -y {package} 2>&1', timeout=120)
-            which_out, _ = ssh.run(f'which {tool} || echo NOTFOUND')
-            return 'NOTFOUND' not in which_out
+            installed, _ = ssh.ensure_tool_installed(tool, timeout=120)
+            return installed
 
         tools_status = {}
         all_findings = []
         errors = []
 
         if use_rkhunter:
-            if not _ensure_installed('rkhunter', 'rkhunter'):
+            if not _ensure_installed('rkhunter'):
                 errors.append('rkhunter is not installed' + (' and could not be installed' if auto_install else ''))
                 tools_status['rkhunter'] = {'ran': False}
             else:
@@ -186,7 +184,7 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='',
                     tools_status['rkhunter'] = {'ran': True, 'findings_count': len(findings)}
 
         if use_chkrootkit:
-            if not _ensure_installed('chkrootkit', 'chkrootkit'):
+            if not _ensure_installed('chkrootkit'):
                 errors.append('chkrootkit is not installed' + (' and could not be installed' if auto_install else ''))
                 tools_status['chkrootkit'] = {'ran': False}
             else:

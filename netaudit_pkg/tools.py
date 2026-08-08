@@ -14,7 +14,9 @@ from .registry import registry
 from .utils import run_cmd, tool_available
 from . import checks  # noqa: F401  - importing registers the checks
 
-# Allowlist: tool -> apt package. Only these can be installed from the web UI.
+# Allowlist: tool -> apt package. Only these can be installed from the web UI,
+# whether locally (install_tool below) or on a remote host over SSH
+# (SSHExecutor.ensure_tool_installed in ssh.py).
 TOOL_PACKAGES: dict[str, str] = {
     'mtr': 'mtr-tiny',
     'tcptraceroute': 'tcptraceroute',
@@ -30,6 +32,11 @@ TOOL_PACKAGES: dict[str, str] = {
     'whois': 'whois',
     'tshark': 'tshark',
     'sqlmap': 'sqlmap',
+    # remote (SSH-target) server security tools
+    'lynis': 'lynis',
+    'aide': 'aide',
+    'rkhunter': 'rkhunter',
+    'chkrootkit': 'chkrootkit',
 }
 
 # Tools that checks use internally but don't declare in required_tools

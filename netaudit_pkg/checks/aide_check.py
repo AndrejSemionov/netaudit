@@ -121,15 +121,13 @@ def check_aide(host='', user='root', port=22, key_path='', password='',
             return {'error': 'sudo is needed, but passwordless sudo isn\'t set up and no password was given',
                     'hint': 'set "Password (if not using a key)" — it will also be used for sudo -S'}
 
-        which_out, _ = ssh.run('which aide || echo NOTFOUND')
-        if 'NOTFOUND' in which_out:
+        if not ssh.is_tool_installed('aide'):
             if not auto_install:
                 return {'error': 'aide is not installed on the server',
                         'hint': 'apt install aide -y (or enable auto_install)'}
-            ssh.sudo('apt-get install -y aide 2>&1', timeout=120)
-            which_out, _ = ssh.run('which aide || echo NOTFOUND')
-            if 'NOTFOUND' in which_out:
-                return {'error': 'failed to install aide'}
+            installed, install_err = ssh.ensure_tool_installed('aide', timeout=120)
+            if not installed:
+                return {'error': 'failed to install aide', 'detail': install_err}
 
         # AIDE on Debian/Ubuntu usually keeps the database at /var/lib/aide/aide.db
         # (writing a new one as aide.db.new on --init) - these paths are standard
