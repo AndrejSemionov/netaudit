@@ -1,25 +1,24 @@
 """
-Проверка на руткиты через rkhunter и/или chkrootkit по SSH.
+Rootkit check via rkhunter and/or chkrootkit over SSH.
 
-Оба инструмента делают похожую работу (ищут известные сигнатуры руткитов,
-подменённые системные команды, скрытые процессы), но с разными базами
-сигнатур и разными ложноположительными паттернами — поэтому по умолчанию
-гоняем оба и не дедуплицируем находки, чтобы не потерять то, что заметил
-только один из них.
+Both tools do similar work (looking for known rootkit signatures, tampered
+system commands, hidden processes), but with different signature databases
+and different false-positive patterns - so by default we run both and don't
+deduplicate findings, to avoid losing something caught by only one of them.
 
-rkhunter: `--check --skip-keypress --report-warnings-only --nocolors` —
-неинтерактивно, только Warning-строки, без ANSI-кодов (иначе парсинг
-ломается на escape-последовательностях).
+rkhunter: `--check --skip-keypress --report-warnings-only --nocolors` -
+non-interactive, only Warning: lines, no ANSI codes (otherwise parsing
+breaks on escape sequences).
 
-chkrootkit: построчный вывод "Checking `name'... STATUS", где STATUS один
-из: not infected / INFECTED / not tested / not found / Vulnerable but disabled.
-Интересуют только строки с INFECTED.
+chkrootkit: line-by-line output "Checking `name'... STATUS", where STATUS is
+one of: not infected / INFECTED / not tested / not found / Vulnerable but
+disabled. Only INFECTED lines matter.
 
-ВАЖНО про ложные срабатывания: оба инструмента известны false positives —
-например chkrootkit иногда путает легитимный bindshell (Exim TLS) с реальным
-бэкдором, а на некоторых VPS/контейнерах даёт "hidden processes" из-за
-особенностей виртуализации, а не потому что там реально руткит. Находки
-здесь — повод разобраться, не подтверждённый факт компрометации.
+IMPORTANT about false positives: both tools are known for them - e.g.
+chkrootkit sometimes confuses a legitimate bindshell (Exim TLS) for a real
+backdoor, and on some VPS/containers reports "hidden processes" due to
+virtualization quirks rather than an actual rootkit. A finding here is a
+reason to investigate, not a confirmed compromise.
 """
 
 from __future__ import annotations
@@ -54,7 +53,7 @@ def _run(client, cmd, timeout=15):
 
 
 def _run_sudo(client, cmd, sudo_password, timeout=15):
-    """sudo -S читает пароль из stdin — работает без TTY (см. lynis_audit.py, тот же паттерн)."""
+    """sudo -S reads the password from stdin - works without a TTY (see lynis_audit.py, same pattern)."""
     stdin, so, se = client.exec_command(f'sudo -S -p "" {cmd}', timeout=timeout)
     stdin.write((sudo_password or '') + '\n')
     stdin.flush()
@@ -71,8 +70,8 @@ def _finding(severity, title, detail=''):
 # ===========================================================================
 
 def _parse_rkhunter(raw: str) -> list[dict]:
-    """С флагом --report-warnings-only в выводе остаются практически только
-    строки 'Warning: ...' (плюс шапка версии и системные сообщения)."""
+    """With --report-warnings-only, the output is left with almost only
+    'Warning: ...' lines (plus a version banner and system messages)."""
     findings = []
     for line in raw.splitlines():
         line = line.strip()
@@ -83,10 +82,10 @@ def _parse_rkhunter(raw: str) -> list[dict]:
 
 
 def _run_rkhunter(client, sudo_password, no_sudo) -> tuple[list[dict], str | None]:
-    """Возвращает (findings, error). error не None если инструмент не найден/не смог отработать."""
+    """Returns (findings, error). error is not None if the tool is missing/failed to run."""
     which_out, _ = _run(client, 'which rkhunter || echo NOTFOUND')
     if 'NOTFOUND' in which_out:
-        return [], 'rkhunter не установлен'
+        return [], 'rkhunter is not installed'
 
     cmd = 'rkhunter --check --skip-keypress --report-warnings-only --nocolors 2>&1'
     if no_sudo:
@@ -95,7 +94,7 @@ def _run_rkhunter(client, sudo_password, no_sudo) -> tuple[list[dict], str | Non
         out, _ = _run(client, f'sudo {cmd}', timeout=300)
 
     if not out.strip():
-        return [], 'rkhunter не вернул вывод (проверь права sudo)'
+        return [], 'rkhunter returned no output (check sudo privileges)'
 
     return _parse_rkhunter(out), None
 
@@ -116,18 +115,18 @@ def _parse_chkrootkit(raw: str) -> list[dict]:
         name, status = m.group(1), m.group(2).strip()
         if status.startswith('INFECTED'):
             findings.append(_finding('high', f'{name}: {status}',
-                                      'проверь вручную перед выводами — известны ложные срабатывания '
-                                      '(например легитимный bindshell на нестандартных портах)'))
+                                      'verify manually before drawing conclusions — false positives are known '
+                                      '(e.g. a legitimate bindshell on non-standard ports)'))
         elif status.startswith('Vulnerable but disabled'):
             findings.append(_finding('low', f'{name}: {status}',
-                                      'команда уязвима, но не используется (не запущена/не в конфиге)'))
+                                      'the command is vulnerable but not in use (not running/not in config)'))
     return findings
 
 
 def _run_chkrootkit(client, sudo_password, no_sudo) -> tuple[list[dict], str | None]:
     which_out, _ = _run(client, 'which chkrootkit || echo NOTFOUND')
     if 'NOTFOUND' in which_out:
-        return [], 'chkrootkit не установлен'
+        return [], 'chkrootkit is not installed'
 
     cmd = 'chkrootkit 2>&1'
     if no_sudo:
@@ -136,53 +135,53 @@ def _run_chkrootkit(client, sudo_password, no_sudo) -> tuple[list[dict], str | N
         out, _ = _run(client, f'sudo {cmd}', timeout=300)
 
     if not out.strip():
-        return [], 'chkrootkit не вернул вывод (проверь права sudo)'
+        return [], 'chkrootkit returned no output (check sudo privileges)'
 
     return _parse_chkrootkit(out), None
 
 
 # ===========================================================================
-# Проверка
+# Check
 # ===========================================================================
 
 @register(
-    id='rootkit_check', label='Проверка на руткиты (rkhunter/chkrootkit, SSH)', category='server',
+    id='rootkit_check', label='Rootkit check (rkhunter/chkrootkit, SSH)', category='server',
     params=[
-        {'name': 'host', 'type': 'text', 'label': 'Хост', 'default': ''},
-        {'name': 'user', 'type': 'text', 'label': 'Пользователь', 'default': 'root'},
-        {'name': 'port', 'type': 'number', 'label': 'SSH-порт', 'default': 22},
-        {'name': 'key_path', 'type': 'text', 'label': 'Путь к ключу', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'Пароль (если без ключа)', 'default': ''},
-        {'name': 'use_rkhunter', 'type': 'checkbox', 'label': 'Запускать rkhunter', 'default': True},
-        {'name': 'use_chkrootkit', 'type': 'checkbox', 'label': 'Запускать chkrootkit', 'default': True},
-        {'name': 'auto_install', 'type': 'checkbox', 'label': 'Установить недостающие инструменты',
+        {'name': 'host', 'type': 'text', 'label': 'Host', 'default': ''},
+        {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
+        {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
+        {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
+        {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
+        {'name': 'use_rkhunter', 'type': 'checkbox', 'label': 'Run rkhunter', 'default': True},
+        {'name': 'use_chkrootkit', 'type': 'checkbox', 'label': 'Run chkrootkit', 'default': True},
+        {'name': 'auto_install', 'type': 'checkbox', 'label': 'Install missing tools',
          'default': False},
     ],
     required_tools=[],
-    description='Поиск известных руткитов и подменённых системных команд через rkhunter и/или '
-                'chkrootkit по SSH. Readonly, только чтение системы. Оба инструмента дают '
-                'ложные срабатывания — находки нужно проверять вручную, не как готовый вердикт.',
+    description='Searches for known rootkits and tampered system commands via rkhunter and/or '
+                'chkrootkit over SSH. Read-only, system reads only. Both tools produce '
+                'false positives — findings need manual verification, not a ready-made verdict.',
 )
 def check_rootkit(host='', user='root', port=22, key_path='', password='',
                    use_rkhunter=True, use_chkrootkit=True, auto_install=False) -> dict:
     if paramiko is None:
-        return {'error': 'paramiko не установлен'}
+        return {'error': 'paramiko not installed'}
     if not host:
-        return {'error': 'не указан host'}
+        return {'error': 'host not specified'}
     if not use_rkhunter and not use_chkrootkit:
-        return {'error': 'выбери хотя бы один инструмент (rkhunter или chkrootkit)'}
+        return {'error': 'select at least one tool (rkhunter or chkrootkit)'}
 
     try:
         client = _ssh_connect(host, user, port, key_path, password)
     except Exception as e:
-        return {'error': f'не подключиться: {e}'}
+        return {'error': f'could not connect: {e}'}
 
     try:
         sudo_check, _ = _run(client, 'sudo -n true 2>&1 && echo OK || echo NOPASS')
         no_sudo = 'NOPASS' in sudo_check
         if no_sudo and not password:
-            return {'error': 'нужен sudo, но passwordless sudo не настроен и пароль не передан',
-                    'hint': 'укажи «Пароль (если без ключа)» — он будет использован и для sudo -S'}
+            return {'error': 'sudo is needed, but passwordless sudo isn\'t set up and no password was given',
+                    'hint': 'set "Password (if not using a key)" — it will also be used for sudo -S'}
 
         def _ensure_installed(tool, package):
             which_out, _ = _run(client, f'which {tool} || echo NOTFOUND')
@@ -204,7 +203,7 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='',
 
         if use_rkhunter:
             if not _ensure_installed('rkhunter', 'rkhunter'):
-                errors.append('rkhunter не установлен' + (' и не удалось поставить' if auto_install else ''))
+                errors.append('rkhunter is not installed' + (' and could not be installed' if auto_install else ''))
                 tools_status['rkhunter'] = {'ran': False}
             else:
                 findings, err = _run_rkhunter(client, password, no_sudo)
@@ -219,7 +218,7 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='',
 
         if use_chkrootkit:
             if not _ensure_installed('chkrootkit', 'chkrootkit'):
-                errors.append('chkrootkit не установлен' + (' и не удалось поставить' if auto_install else ''))
+                errors.append('chkrootkit is not installed' + (' and could not be installed' if auto_install else ''))
                 tools_status['chkrootkit'] = {'ran': False}
             else:
                 findings, err = _run_chkrootkit(client, password, no_sudo)
@@ -236,10 +235,10 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='',
         client.close()
 
     if not any(s.get('ran') for s in tools_status.values()):
-        return {'error': 'ни один инструмент не запустился', 'detail': '; '.join(errors)}
+        return {'error': 'no tool ran', 'detail': '; '.join(errors)}
 
     if not all_findings:
-        all_findings.append(_finding('ok', 'признаков руткитов не найдено'))
+        all_findings.append(_finding('ok', 'no signs of rootkits found'))
 
     counts = {'high': 0, 'medium': 0, 'low': 0, 'ok': 0}
     for f in all_findings:

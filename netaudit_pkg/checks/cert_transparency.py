@@ -1,21 +1,22 @@
 """
-Certificate Transparency мониторинг через crt.sh.
+Certificate Transparency monitoring via crt.sh.
 
-crt.sh агрегирует публичные CT-логи (обязательные с RFC 6962 — каждый публично
-доверенный TLS-сертификат обязан туда попасть). Полезно для:
-  - обнаружения поддоменов, о которых забыли (staging/dev/old-admin и т.д.) —
-    они не появляются в обычном DNS-брутфорсе, но сертификат на них выдавался,
-    а значит запись в CT-логах есть;
-  - обнаружения левых/неожиданных сертификатов на домен — если кто-то выпустил
-    сертификат на твой домен без твоего ведома (скомпрометированный аккаунт у
-    вашего CA, ошибка валидации DV и т.п.), это будет видно здесь раньше, чем
-    где-либо ещё.
+crt.sh aggregates public CT logs (mandatory since RFC 6962 - every publicly
+trusted TLS certificate must be logged there). Useful for:
+  - discovering forgotten subdomains (staging/dev/old-admin etc) - they don't
+    show up in a normal DNS brute-force, but a certificate was issued for
+    them at some point, so there's a CT log entry;
+  - discovering rogue/unexpected certificates for the domain - if someone
+    issued a certificate for your domain without your knowledge (a
+    compromised CA account, a DV validation bug, etc), this is where it
+    surfaces first, ahead of anywhere else.
 
-ВАЖНО (из живого фидбека): crt.sh нестабилен, hit-or-miss по доступности и
-скорости ответа. Поэтому здесь короткий timeout и graceful skip — при таймауте/
-ошибке возвращаем понятный error, а не роняем/зависаем весь аудит.
+IMPORTANT (from real-world feedback): crt.sh is unstable, hit-or-miss on
+availability and response time. Hence the short timeout and graceful skip
+here - on a timeout/error we return a clear error instead of dragging down
+or hanging the whole audit.
 
-Без API-ключа, простой JSON-эндпоинт: https://crt.sh/?q=%.domain.com&output=json
+No API key needed, plain JSON endpoint: https://crt.sh/?q=%.domain.com&output=json
 """
 
 from __future__ import annotations
@@ -29,12 +30,12 @@ import httpx
 from ..registry import register
 
 CRTSH_URL = 'https://crt.sh/'
-# crt.sh известен нестабильностью — не ждём долго, лучше честный skip чем зависший аудит
+# crt.sh is known to be unstable - don't wait long, a clean skip beats a hung audit
 REQUEST_TIMEOUT = 12
 
-# CA, о которых стоит явно предупредить, если сертификат выпущен НЕ от них,
-# а домен предположительно ожидает конкретного провайдера — здесь пока не используется
-# напрямую, но полезно для будущего сравнения "ожидаемый CA vs фактический"
+# CAs worth an explicit warning about if a certificate was issued by someone
+# else and the domain is expected to use a specific provider - not used
+# directly yet, but useful for a future "expected CA vs actual" comparison
 
 WILDCARD_RE = re.compile(r'^\*\.')
 
@@ -44,8 +45,8 @@ def _finding(severity, title, detail=''):
 
 
 def _fetch_certs(query: str) -> list[dict]:
-    """Запрашивает crt.sh, возвращает список записей или бросает исключение
-    (обрабатывается в вызывающем коде — тут держим чисто сетевой слой)."""
+    """Queries crt.sh, returns a list of records or raises an exception
+    (handled by the caller - this keeps a purely network-layer function)."""
     resp = httpx.get(CRTSH_URL, params={'q': query, 'output': 'json'},
                       timeout=REQUEST_TIMEOUT,
                       headers={'User-Agent': 'NetAudit (github.com/AndrejSemionov/netaudit)'})
@@ -54,13 +55,13 @@ def _fetch_certs(query: str) -> list[dict]:
 
 
 def _extract_hostnames(cert: dict) -> set[str]:
-    """У одного сертификата name_value может содержать несколько строк (SAN)."""
+    """A single certificate's name_value can contain multiple lines (SAN)."""
     raw = cert.get('name_value', '')
     return {line.strip().lower() for line in raw.split('\n') if line.strip()}
 
 
 def _parse_crtsh_date(s: str) -> datetime | None:
-    """crt.sh отдаёт даты вида '2024-01-01T00:00:00' (иногда с дробными секундами)."""
+    """crt.sh returns dates like '2024-01-01T00:00:00' (sometimes with fractional seconds)."""
     if not s:
         return None
     for fmt in ('%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M:%S.%f'):
@@ -72,44 +73,44 @@ def _parse_crtsh_date(s: str) -> datetime | None:
 
 
 @register(
-    id='cert_transparency', label='Certificate Transparency мониторинг', category='site',
+    id='cert_transparency', label='Certificate Transparency monitoring', category='site',
     params=[
-        {'name': 'domain', 'type': 'text', 'label': 'Домен', 'default': 'example.com'},
+        {'name': 'domain', 'type': 'text', 'label': 'Domain', 'default': 'example.com'},
         {'name': 'expected_issuer_contains', 'type': 'text',
-         'label': 'Ожидаемый издатель содержит (опционально, напр. "Let\'s Encrypt")', 'default': ''},
-        {'name': 'include_expired', 'type': 'checkbox', 'label': 'Включать истёкшие сертификаты', 'default': False},
+         'label': 'Expected issuer contains (optional, e.g. "Let\'s Encrypt")', 'default': ''},
+        {'name': 'include_expired', 'type': 'checkbox', 'label': 'Include expired certificates', 'default': False},
     ],
     required_tools=[],
-    description='Поиск сертификатов и поддоменов домена через публичные Certificate '
-                'Transparency логи (crt.sh) — обнаруживает забытые поддомены (staging/dev/old-admin) '
-                'и сертификаты, выпущенные неожиданным издателем. Без доступа к серверу.',
+    description='Searches for the domain\'s certificates and subdomains via public Certificate '
+                'Transparency logs (crt.sh) - discovers forgotten subdomains (staging/dev/old-admin) '
+                'and certificates issued by an unexpected authority. No server access needed.',
 )
 def check_cert_transparency(domain: str = 'example.com', expected_issuer_contains: str = '',
                              include_expired: bool = False) -> dict:
     if not domain:
-        return {'error': 'не указан domain'}
+        return {'error': 'domain not specified'}
     domain = domain.strip().lower().rstrip('.')
 
     try:
         certs = _fetch_certs(f'%.{domain}')
     except httpx.TimeoutException:
-        return {'error': f'crt.sh не ответил за {REQUEST_TIMEOUT}с — сервис нестабилен, попробуй ещё раз позже'}
+        return {'error': f'crt.sh did not respond within {REQUEST_TIMEOUT}s — the service is unstable, try again later'}
     except httpx.HTTPStatusError as e:
-        return {'error': f'crt.sh вернул HTTP {e.response.status_code} — сервис может быть временно перегружен'}
+        return {'error': f'crt.sh returned HTTP {e.response.status_code} — the service may be temporarily overloaded'}
     except httpx.HTTPError as e:
-        return {'error': f'crt.sh недоступен: {e}'}
+        return {'error': f'crt.sh is unreachable: {e}'}
     except ValueError:
-        return {'error': 'crt.sh вернул не-JSON ответ (сервис нестабилен) — попробуй ещё раз позже'}
+        return {'error': 'crt.sh returned a non-JSON response (the service is unstable) — try again later'}
 
     if not certs:
         return {'domain': domain, 'total_certificates': 0, 'subdomains': [], 'findings': [],
                 'summary': {'high': 0, 'medium': 0, 'low': 0, 'ok': 1},
-                'note': 'сертификатов не найдено — либо домен не использует HTTPS, либо ещё не в CT-логах'}
+                'note': 'no certificates found — either the domain doesn\'t use HTTPS, or it\'s not in the CT logs yet'}
 
     now = datetime.now(timezone.utc)
     findings = []
 
-    # ---- поддомены: собираем уникальные хосты, помечаем "интересные" по ключевым словам ----
+    # ---- subdomains: collect unique hosts, flag "interesting" ones by keyword ----
     hostnames_seen = defaultdict(list)  # host -> [cert_id, ...]
     issuers_by_host = defaultdict(set)
     active_count = 0
@@ -128,10 +129,10 @@ def check_cert_transparency(domain: str = 'example.com', expected_issuer_contain
 
         issuer = cert.get('issuer_name', '?')
         for host in _extract_hostnames(cert):
-            # убираем wildcard-префикс для сравнения с ключевыми словами, но храним как есть в выводе
+            # strip the wildcard prefix for keyword matching, but keep it as-is in the output
             bare = WILDCARD_RE.sub('', host)
             if not bare.endswith(domain):
-                continue  # SAN на левый домен в том же сертификате (бывает у мультидоменных серт.)
+                continue  # a SAN for an unrelated domain on the same cert (happens with multi-domain certs)
             hostnames_seen[host].append(cert.get('id'))
             issuers_by_host[host].add(issuer)
 
@@ -141,11 +142,11 @@ def check_cert_transparency(domain: str = 'example.com', expected_issuer_contain
     if interesting:
         findings.append(_finding(
             'medium',
-            f'найдены потенциально забытые/внутренние поддомены ({len(interesting)})',
+            f'found potentially forgotten/internal subdomains ({len(interesting)})',
             ', '.join(interesting[:20]) + (' …' if len(interesting) > 20 else '')
         ))
 
-    # ---- неожиданный издатель ----
+    # ---- unexpected issuer ----
     if expected_issuer_contains:
         needle = expected_issuer_contains.strip().lower()
         unexpected = {h: iss for h, iss in issuers_by_host.items()
@@ -155,21 +156,21 @@ def check_cert_transparency(domain: str = 'example.com', expected_issuer_contain
             detail = '; '.join(f'{h}: {", ".join(iss)}' for h, iss in sample)
             findings.append(_finding(
                 'high',
-                f'сертификаты от неожиданного издателя ({len(unexpected)} хост(ов))',
+                f'certificates from an unexpected issuer ({len(unexpected)} host(s))',
                 detail + (' …' if len(unexpected) > 10 else '')
             ))
 
-    # ---- wildcard-сертификаты — не находка сама по себе, но полезно знать ----
+    # ---- wildcard certificates - not a finding on its own, but useful to know ----
     wildcard_hosts = [h for h in subdomains if WILDCARD_RE.match(h)]
     if wildcard_hosts:
         findings.append(_finding(
             'low',
-            f'используются wildcard-сертификаты ({len(wildcard_hosts)})',
-            ', '.join(wildcard_hosts) + ' — компрометация приватного ключа затрагивает все поддомены сразу'
+            f'wildcard certificates in use ({len(wildcard_hosts)})',
+            ', '.join(wildcard_hosts) + ' — a compromised private key affects all subdomains at once'
         ))
 
     if not findings:
-        findings.append(_finding('ok', 'подозрительных сертификатов или неожиданных поддоменов не найдено'))
+        findings.append(_finding('ok', 'no suspicious certificates or unexpected subdomains found'))
 
     counts = {'high': 0, 'medium': 0, 'low': 0, 'ok': 0}
     for f in findings:

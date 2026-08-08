@@ -1,30 +1,31 @@
 """
-Аудит безопасности Docker-контейнеров по SSH.
+Docker container security audit over SSH.
 
-В отличие от server_audit (смотрит на хост-уровень — nginx, firewall, SSH),
-этот чек смотрит именно на то, КАК запущены контейнеры — отдельная категория
-рисков, которую хостовый аудит физически не видит.
+Unlike server_audit (looks at the host level - nginx, firewall, SSH), this
+check looks specifically at HOW containers are run - a separate risk
+category a host-level audit physically can't see.
 
-Проверяется для каждого запущенного контейнера через `docker inspect`:
-  - запущен ли процесс внутри контейнера от root (Config.User пусто/'root'/'0') —
-    при container escape атакующий сразу получает root на хосте;
-  - --privileged (HostConfig.Privileged) — почти полный доступ к хосту,
-    оправдан редко (Docker-in-Docker, низкоуровневый мониторинг);
-  - опасные добавленные capabilities (HostConfig.CapAdd) — список того, что
-    реально считается рискованным при добавлении без явной необходимости
-    (SYS_ADMIN, SYS_PTRACE, SYS_MODULE и т.д.), а не "любой CapAdd — плохо"
-    (NET_RAW для ping-подобных инструментов — нормальный, обоснованный кейс);
-  - публично торчащие порты — контейнер слушает 0.0.0.0 вместо 127.0.0.1
-    или внутренней docker-сети (HostConfig.PortBindings[].HostIp);
-  - широкие volume-монтирования — весь корень хоста, /etc, docker.sock
-    внутрь контейнера (HostConfig.Binds);
-  - тег образа 'latest' без пиннинга версии — не баг сам по себе, но
-    сигнал, что нет контроля версий и накопленных патчей CVE.
+Checked for each running container via `docker inspect`:
+  - whether the process inside the container runs as root (Config.User is
+    empty/'root'/'0') - on container escape, the attacker immediately gets
+    root on the host;
+  - --privileged (HostConfig.Privileged) - near-full host access, rarely
+    justified (Docker-in-Docker, low-level monitoring);
+  - dangerous added capabilities (HostConfig.CapAdd) - a list of what's
+    genuinely considered risky to add without an explicit need (SYS_ADMIN,
+    SYS_PTRACE, SYS_MODULE etc), not "any CapAdd is bad" (NET_RAW for
+    ping-like tools is a normal, justified case);
+  - publicly exposed ports - the container listens on 0.0.0.0 instead of
+    127.0.0.1 or an internal docker network (HostConfig.PortBindings[].HostIp);
+  - broad volume mounts - the whole host root, /etc, docker.sock into the
+    container (HostConfig.Binds);
+  - the 'latest' image tag with no version pin - not a bug by itself, but a
+    signal there's no version control or accumulated CVE patching.
 
-Отдельно — доступность самого Docker daemon socket без защиты (TCP без TLS
-или предоставленный контейнеру `/var/run/docker.sock` bind) — фактически
-root-доступ к хосту, один из самых частых и опасных косяков в реальных
-деплоях.
+Separately - whether the Docker daemon socket itself is exposed unprotected
+(TCP without TLS, or `/var/run/docker.sock` bound into a container) -
+effectively root access to the host, one of the most common and dangerous
+mistakes in real deployments.
 """
 
 from __future__ import annotations
@@ -70,16 +71,16 @@ def _finding(severity, title, detail=''):
     return {'severity': severity, 'title': title, 'detail': detail}
 
 
-# capabilities, добавление которых расширяет атаку сильнее, чем типичные
-# легитимные кейсы (NET_RAW для сетевых утилит, NET_BIND_SERVICE для портов
-# < 1024 — намеренно не включены сюда, это частые и обоснованные добавления)
+# capabilities whose addition widens the attack surface more than typical
+# legitimate cases (NET_RAW for network utilities, NET_BIND_SERVICE for
+# ports < 1024 are deliberately excluded here - those are common, justified additions)
 DANGEROUS_CAPS = {
     'SYS_ADMIN', 'SYS_MODULE', 'SYS_PTRACE', 'SYS_RAWIO', 'SYS_BOOT',
     'DAC_READ_SEARCH', 'ALL',
 }
 
-# пути, монтирование которых внутрь контейнера практически всегда избыточно
-# для обычного приложения (не системного инструмента мониторинга/бэкапа)
+# paths whose mounting into a container is almost always excessive for a
+# regular application (not a system monitoring/backup tool)
 DANGEROUS_BIND_TARGETS = ('/', '/etc', '/root', '/var/run/docker.sock', '/boot')
 
 
@@ -98,33 +99,33 @@ def _audit_one_container(info: dict) -> list[dict]:
     host_config = info.get('HostConfig') or {}
     image = config.get('Image', '?')
 
-    # --- запущен от root ---
+    # --- runs as root ---
     user = (config.get('User') or '').strip()
     if user in ('', 'root', '0', '0:0'):
         findings.append(_finding(
-            'medium', f'{name}: процесс внутри контейнера запущен от root',
-            f'image {image} — при container escape атакующий сразу получает root-доступ к хосту; '
-            'задай USER в Dockerfile или --user при запуске, если приложению не нужен root'
+            'medium', f'{name}: the process inside the container runs as root',
+            f'image {image} — on container escape, the attacker immediately gets root access '
+            'to the host; set USER in the Dockerfile or --user at run time if root isn\'t needed'
         ))
 
     # --- privileged ---
     if host_config.get('Privileged'):
         findings.append(_finding(
-            'high', f'{name}: запущен с --privileged',
-            'почти полный доступ к хосту (устройства, ядро) — оправдано редко '
-            '(Docker-in-Docker, низкоуровневый мониторинг); проверь, действительно ли нужно'
+            'high', f'{name}: running with --privileged',
+            'near-full host access (devices, kernel) - rarely justified '
+            '(Docker-in-Docker, low-level monitoring); check whether it\'s really needed'
         ))
 
-    # --- опасные capabilities ---
+    # --- dangerous capabilities ---
     cap_add = host_config.get('CapAdd') or []
     dangerous = [c for c in cap_add if c.upper() in DANGEROUS_CAPS]
     if dangerous:
         findings.append(_finding(
-            'high', f'{name}: добавлены рискованные capabilities: {", ".join(dangerous)}',
-            f'полный список CapAdd: {", ".join(cap_add)} — убедись, что каждая реально нужна приложению'
+            'high', f'{name}: risky capabilities added: {", ".join(dangerous)}',
+            f'full CapAdd list: {", ".join(cap_add)} — make sure each one is actually needed by the app'
         ))
 
-    # --- публичные порты ---
+    # --- public ports ---
     port_bindings = host_config.get('PortBindings') or {}
     public_ports = []
     for container_port, bindings in port_bindings.items():
@@ -134,78 +135,78 @@ def _audit_one_container(info: dict) -> list[dict]:
                 public_ports.append(f'{container_port} -> {b.get("HostPort", "?")}')
     if public_ports:
         findings.append(_finding(
-            'low', f'{name}: порты слушают на всех интерфейсах (0.0.0.0)',
-            ', '.join(public_ports) + ' — норм для веб-сервисов за reverse-proxy, '
-            'но для внутренних служб (БД, admin-панели) обычно должно быть 127.0.0.1'
+            'low', f'{name}: ports listening on all interfaces (0.0.0.0)',
+            ', '.join(public_ports) + ' — fine for web services behind a reverse proxy, '
+            'but internal services (DBs, admin panels) usually should be 127.0.0.1'
         ))
 
-    # --- docker.sock смонтирован внутрь ---
+    # --- docker.sock mounted inside ---
     binds = host_config.get('Binds') or []
     for bind in binds:
-        # формат "host_path:container_path[:mode]"
+        # format "host_path:container_path[:mode]"
         parts = bind.split(':')
         host_path = parts[0] if parts else bind
-        normalized = host_path.rstrip('/') or '/'  # '/'.rstrip('/') даёт '' - возвращаем обратно в '/'
+        normalized = host_path.rstrip('/') or '/'  # '/'.rstrip('/') gives '' - restore to '/'
         if normalized == '/var/run/docker.sock':
             findings.append(_finding(
-                'high', f'{name}: docker.sock смонтирован внутрь контейнера',
-                f'{bind} — это фактически root-доступ к хосту через Docker API; '
-                'убедись, что это осознанное решение (напр. Portainer/CI-раннер), не случайность'
+                'high', f'{name}: docker.sock mounted inside the container',
+                f'{bind} — this is effectively root access to the host via the Docker API; '
+                'make sure this is deliberate (e.g. Portainer/CI runner), not an accident'
             ))
         elif normalized in DANGEROUS_BIND_TARGETS:
             findings.append(_finding(
-                'medium', f'{name}: смонтирован чувствительный путь хоста: {normalized}',
-                f'{bind} — избыточный доступ для обычного приложения, '
-                'проверь, действительно ли контейнеру нужен весь этот путь'
+                'medium', f'{name}: a sensitive host path is mounted: {normalized}',
+                f'{bind} — excessive access for a regular application, '
+                'check whether the container really needs this whole path'
             ))
 
-    # --- тег latest / без тега ---
+    # --- latest tag / no tag ---
     if image.endswith(':latest') or ':' not in image.split('/')[-1]:
         findings.append(_finding(
-            'low', f'{name}: образ без пиннинга версии ({image})',
-            'без фиксированной версии сложно контролировать, какие патчи CVE применены — '
-            'при следующем pull образ может незаметно смениться'
+            'low', f'{name}: image with no version pin ({image})',
+            'without a fixed version it\'s hard to track which CVE patches are applied — '
+            'the image could silently change on the next pull'
         ))
 
     return findings
 
 
 @register(
-    id='docker_audit', label='Аудит Docker-контейнеров (SSH)', category='server',
+    id='docker_audit', label='Docker container audit (SSH)', category='server',
     params=[
-        {'name': 'host', 'type': 'text', 'label': 'Хост', 'default': ''},
-        {'name': 'user', 'type': 'text', 'label': 'Пользователь', 'default': 'root'},
-        {'name': 'port', 'type': 'number', 'label': 'SSH-порт', 'default': 22},
-        {'name': 'key_path', 'type': 'text', 'label': 'Путь к ключу', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'Пароль (если без ключа)', 'default': ''},
-        {'name': 'include_stopped', 'type': 'checkbox', 'label': 'Включать остановленные контейнеры',
+        {'name': 'host', 'type': 'text', 'label': 'Host', 'default': ''},
+        {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
+        {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
+        {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
+        {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
+        {'name': 'include_stopped', 'type': 'checkbox', 'label': 'Include stopped containers',
          'default': False},
     ],
     required_tools=[],
-    description='Аудит того, КАК запущены Docker-контейнеры (не что внутри): root-процессы, '
-                '--privileged, опасные capabilities, публичные порты, docker.sock и другие '
-                'чувствительные volume-монтирования, непиннутые образы. Readonly — только '
-                '`docker ps`/`docker inspect`, ничего не меняет.',
+    description='Audits HOW Docker containers are run (not what\'s inside): root processes, '
+                '--privileged, dangerous capabilities, public ports, docker.sock and other '
+                'sensitive volume mounts, unpinned images. Read-only — only '
+                '`docker ps`/`docker inspect`, changes nothing.',
 )
 def check_docker_audit(host='', user='root', port=22, key_path='', password='',
                         include_stopped=False) -> dict:
     if paramiko is None:
-        return {'error': 'paramiko не установлен'}
+        return {'error': 'paramiko not installed'}
     if not host:
-        return {'error': 'не указан host'}
+        return {'error': 'host not specified'}
 
     try:
         client = _ssh_connect(host, user, port, key_path, password)
     except Exception as e:
-        return {'error': f'не подключиться: {e}'}
+        return {'error': f'could not connect: {e}'}
 
     try:
         which_out, _ = _run(client, 'which docker || echo NOTFOUND')
         if 'NOTFOUND' in which_out:
-            return {'error': 'docker не установлен на сервере'}
+            return {'error': 'docker is not installed on the server'}
 
-        # docker обычно требует быть в группе docker или root — пробуем без sudo сначала,
-        # это самый частый рабочий вариант (пользователь добавлен в группу docker)
+        # docker usually requires being in the docker group or root - try without
+        # sudo first, that's the most common working case (user added to docker group)
         ps_out, ps_err = _run(client, 'docker ps -q' + (' -a' if include_stopped else ''))
         needs_sudo = 'permission denied' in (ps_out + ps_err).lower()
 
@@ -213,9 +214,9 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='',
             sudo_check, _ = _run(client, 'sudo -n true 2>&1 && echo OK || echo NOPASS')
             no_sudo_pass = 'NOPASS' in sudo_check
             if no_sudo_pass and not password:
-                return {'error': 'docker недоступен без sudo, а passwordless sudo не настроен и пароль не передан',
-                        'hint': 'добавь пользователя в группу docker (usermod -aG docker <user>), '
-                                'или укажи «Пароль (если без ключа)» для sudo -S'}
+                return {'error': 'docker isn\'t accessible without sudo, and passwordless sudo isn\'t set up and no password was given',
+                        'hint': 'add the user to the docker group (usermod -aG docker <user>), '
+                                'or set "Password (if not using a key)" for sudo -S'}
             if no_sudo_pass:
                 ps_out, ps_err = _run_sudo(client, 'docker ps -q' + (' -a' if include_stopped else ''), password)
             else:
@@ -223,8 +224,9 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='',
 
         container_ids = [c.strip() for c in ps_out.splitlines() if c.strip()]
 
-        # проверяем незащищённый TCP-сокет Docker daemon независимо от того, есть ли
-        # сейчас запущенные контейнеры — сокет опасен сам по себе, даже когда всё остановлено
+        # check for an unprotected Docker daemon TCP socket regardless of whether
+        # any containers are currently running — the socket is dangerous on its
+        # own, even when everything is stopped
         socket_check_cmd = (
             "grep -rE 'tcp://.*2375' /etc/docker/daemon.json /lib/systemd/system/docker.service "
             "/etc/systemd/system/docker.service.d/*.conf 2>/dev/null || true"
@@ -234,14 +236,14 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='',
         all_findings = []
         if socket_out.strip():
             all_findings.append(_finding(
-                'high', 'Docker daemon слушает TCP без явного TLS (порт 2375)',
-                socket_out.strip()[:300] + ' — незащищённый TCP-сокет Docker API = root-доступ '
-                'для любого, кто до него достучится по сети'
+                'high', 'Docker daemon is listening on TCP without explicit TLS (port 2375)',
+                socket_out.strip()[:300] + ' — an unprotected TCP Docker API socket means root access '
+                'for anyone who can reach it over the network'
             ))
 
         if not container_ids:
             if not all_findings:
-                all_findings.append(_finding('ok', 'запущенных контейнеров не найдено'))
+                all_findings.append(_finding('ok', 'no running containers found'))
             counts = {'high': 0, 'medium': 0, 'low': 0, 'ok': 0}
             for f in all_findings:
                 counts[f['severity']] = counts.get(f['severity'], 0) + 1
@@ -260,7 +262,7 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='',
             try:
                 data = json.loads(raw)
             except (json.JSONDecodeError, ValueError):
-                continue  # пропускаем контейнер, если вывод не распарсился, не роняем весь чек
+                continue  # skip the container if the output didn't parse, don't fail the whole check
             info = data[0] if isinstance(data, list) and data else (data if isinstance(data, dict) else None)
             if not info:
                 continue
@@ -270,7 +272,7 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='',
         client.close()
 
     if not all_findings:
-        all_findings.append(_finding('ok', 'заметных проблем в конфигурации контейнеров не найдено'))
+        all_findings.append(_finding('ok', 'no notable issues found in container configuration'))
 
     counts = {'high': 0, 'medium': 0, 'low': 0, 'ok': 0}
     for f in all_findings:
