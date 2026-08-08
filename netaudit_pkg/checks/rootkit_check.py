@@ -26,39 +26,12 @@ from __future__ import annotations
 import re
 
 from ..registry import register
+from ..ssh import SSHExecutor, HostKeyMismatchError
 
 try:
     import paramiko
 except ImportError:
     paramiko = None
-
-
-def _ssh_connect(host, user, port, key_path, password):
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    kwargs = {'hostname': host, 'port': int(port), 'username': user, 'timeout': 10,
-              'look_for_keys': bool(key_path), 'allow_agent': bool(key_path)}
-    if key_path and key_path.strip():
-        from pathlib import Path
-        kwargs['key_filename'] = str(Path(key_path).expanduser())
-    elif password:
-        kwargs['password'] = password
-    client.connect(**kwargs)
-    return client
-
-
-def _run(client, cmd, timeout=15):
-    _, so, se = client.exec_command(cmd, timeout=timeout)
-    return so.read().decode(errors='replace'), se.read().decode(errors='replace')
-
-
-def _run_sudo(client, cmd, sudo_password, timeout=15):
-    """sudo -S reads the password from stdin - works without a TTY (see lynis_audit.py, same pattern)."""
-    stdin, so, se = client.exec_command(f'sudo -S -p "" {cmd}', timeout=timeout)
-    stdin.write((sudo_password or '') + '\n')
-    stdin.flush()
-    stdin.channel.shutdown_write()
-    return so.read().decode(errors='replace'), se.read().decode(errors='replace')
 
 
 def _finding(severity, title, detail=''):
@@ -81,17 +54,13 @@ def _parse_rkhunter(raw: str) -> list[dict]:
     return findings
 
 
-def _run_rkhunter(client, sudo_password, no_sudo) -> tuple[list[dict], str | None]:
+def _run_rkhunter(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
     """Returns (findings, error). error is not None if the tool is missing/failed to run."""
-    which_out, _ = _run(client, 'which rkhunter || echo NOTFOUND')
+    which_out, _ = ssh.run('which rkhunter || echo NOTFOUND')
     if 'NOTFOUND' in which_out:
         return [], 'rkhunter is not installed'
 
-    cmd = 'rkhunter --check --skip-keypress --report-warnings-only --nocolors 2>&1'
-    if no_sudo:
-        out, _ = _run_sudo(client, cmd, sudo_password, timeout=300)
-    else:
-        out, _ = _run(client, f'sudo {cmd}', timeout=300)
+    out, _ = ssh.sudo('rkhunter --check --skip-keypress --report-warnings-only --nocolors 2>&1', timeout=300)
 
     if not out.strip():
         return [], 'rkhunter returned no output (check sudo privileges)'
@@ -123,16 +92,12 @@ def _parse_chkrootkit(raw: str) -> list[dict]:
     return findings
 
 
-def _run_chkrootkit(client, sudo_password, no_sudo) -> tuple[list[dict], str | None]:
-    which_out, _ = _run(client, 'which chkrootkit || echo NOTFOUND')
+def _run_chkrootkit(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
+    which_out, _ = ssh.run('which chkrootkit || echo NOTFOUND')
     if 'NOTFOUND' in which_out:
         return [], 'chkrootkit is not installed'
 
-    cmd = 'chkrootkit 2>&1'
-    if no_sudo:
-        out, _ = _run_sudo(client, cmd, sudo_password, timeout=300)
-    else:
-        out, _ = _run(client, f'sudo {cmd}', timeout=300)
+    out, _ = ssh.sudo('chkrootkit 2>&1', timeout=300)
 
     if not out.strip():
         return [], 'chkrootkit returned no output (check sudo privileges)'
@@ -172,29 +137,25 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='',
         return {'error': 'select at least one tool (rkhunter or chkrootkit)'}
 
     try:
-        client = _ssh_connect(host, user, port, key_path, password)
+        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+    except HostKeyMismatchError as e:
+        return {'error': str(e)}
     except Exception as e:
         return {'error': f'could not connect: {e}'}
 
     try:
-        sudo_check, _ = _run(client, 'sudo -n true 2>&1 && echo OK || echo NOPASS')
-        no_sudo = 'NOPASS' in sudo_check
-        if no_sudo and not password:
+        if ssh.needs_sudo_password():
             return {'error': 'sudo is needed, but passwordless sudo isn\'t set up and no password was given',
                     'hint': 'set "Password (if not using a key)" — it will also be used for sudo -S'}
 
         def _ensure_installed(tool, package):
-            which_out, _ = _run(client, f'which {tool} || echo NOTFOUND')
+            which_out, _ = ssh.run(f'which {tool} || echo NOTFOUND')
             if 'NOTFOUND' not in which_out:
                 return True
             if not auto_install:
                 return False
-            install_cmd = f'apt-get install -y {package} 2>&1'
-            if no_sudo:
-                _run_sudo(client, install_cmd, password, timeout=120)
-            else:
-                _run(client, f'sudo {install_cmd}', timeout=120)
-            which_out, _ = _run(client, f'which {tool} || echo NOTFOUND')
+            ssh.sudo(f'apt-get install -y {package} 2>&1', timeout=120)
+            which_out, _ = ssh.run(f'which {tool} || echo NOTFOUND')
             return 'NOTFOUND' not in which_out
 
         tools_status = {}
@@ -206,7 +167,7 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='',
                 errors.append('rkhunter is not installed' + (' and could not be installed' if auto_install else ''))
                 tools_status['rkhunter'] = {'ran': False}
             else:
-                findings, err = _run_rkhunter(client, password, no_sudo)
+                findings, err = _run_rkhunter(ssh)
                 if err:
                     errors.append(f'rkhunter: {err}')
                     tools_status['rkhunter'] = {'ran': False}
@@ -221,7 +182,7 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='',
                 errors.append('chkrootkit is not installed' + (' and could not be installed' if auto_install else ''))
                 tools_status['chkrootkit'] = {'ran': False}
             else:
-                findings, err = _run_chkrootkit(client, password, no_sudo)
+                findings, err = _run_chkrootkit(ssh)
                 if err:
                     errors.append(f'chkrootkit: {err}')
                     tools_status['chkrootkit'] = {'ran': False}
@@ -232,7 +193,7 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='',
                     tools_status['chkrootkit'] = {'ran': True, 'findings_count': len(findings)}
 
     finally:
-        client.close()
+        ssh.close()
 
     if not any(s.get('ran') for s in tools_status.values()):
         return {'error': 'no tool ran', 'detail': '; '.join(errors)}

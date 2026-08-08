@@ -37,38 +37,12 @@ from __future__ import annotations
 import re
 
 from ..registry import register
+from ..ssh import SSHExecutor, HostKeyMismatchError
 
 try:
     import paramiko
 except ImportError:
     paramiko = None
-
-
-def _ssh_connect(host, user, port, key_path, password):
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    kwargs = {'hostname': host, 'port': int(port), 'username': user, 'timeout': 10,
-              'look_for_keys': bool(key_path), 'allow_agent': bool(key_path)}
-    if key_path and key_path.strip():
-        from pathlib import Path
-        kwargs['key_filename'] = str(Path(key_path).expanduser())
-    elif password:
-        kwargs['password'] = password
-    client.connect(**kwargs)
-    return client
-
-
-def _run(client, cmd, timeout=15):
-    _, so, se = client.exec_command(cmd, timeout=timeout)
-    return so.read().decode(errors='replace'), se.read().decode(errors='replace')
-
-
-def _run_sudo(client, cmd, sudo_password, timeout=15):
-    stdin, so, se = client.exec_command(f'sudo -S -p "" {cmd}', timeout=timeout)
-    stdin.write((sudo_password or '') + '\n')
-    stdin.flush()
-    stdin.channel.shutdown_write()
-    return so.read().decode(errors='replace'), se.read().decode(errors='replace')
 
 
 def _finding(severity, title, detail=''):
@@ -133,29 +107,24 @@ def check_aide(host='', user='root', port=22, key_path='', password='',
         return {'error': f'unknown mode: {mode}'}
 
     try:
-        client = _ssh_connect(host, user, port, key_path, password)
+        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+    except HostKeyMismatchError as e:
+        return {'error': str(e)}
     except Exception as e:
         return {'error': f'could not connect: {e}'}
 
     try:
-        sudo_check, _ = _run(client, 'sudo -n true 2>&1 && echo OK || echo NOPASS')
-        no_sudo = 'NOPASS' in sudo_check
-        if no_sudo and not password:
+        if ssh.needs_sudo_password():
             return {'error': 'sudo is needed, but passwordless sudo isn\'t set up and no password was given',
                     'hint': 'set "Password (if not using a key)" — it will also be used for sudo -S'}
 
-        def _sudo_run(cmd, timeout=15):
-            if no_sudo:
-                return _run_sudo(client, cmd, password, timeout=timeout)
-            return _run(client, f'sudo {cmd}', timeout=timeout)
-
-        which_out, _ = _run(client, 'which aide || echo NOTFOUND')
+        which_out, _ = ssh.run('which aide || echo NOTFOUND')
         if 'NOTFOUND' in which_out:
             if not auto_install:
                 return {'error': 'aide is not installed on the server',
                         'hint': 'apt install aide -y (or enable auto_install)'}
-            _sudo_run('apt-get install -y aide 2>&1', timeout=120)
-            which_out, _ = _run(client, 'which aide || echo NOTFOUND')
+            ssh.sudo('apt-get install -y aide 2>&1', timeout=120)
+            which_out, _ = ssh.run('which aide || echo NOTFOUND')
             if 'NOTFOUND' in which_out:
                 return {'error': 'failed to install aide'}
 
@@ -163,12 +132,12 @@ def check_aide(host='', user='root', port=22, key_path='', password='',
         # (writing a new one as aide.db.new on --init) - these paths are standard
         # for the repo package, a custom aide.conf might differ
         if mode == 'init':
-            out, err = _sudo_run('aide --init 2>&1', timeout=600)
+            out, err = ssh.sudo('aide --init 2>&1', timeout=600)
             # --init writes the new database as aide.db.new, it has to be
             # explicitly activated by renaming - otherwise the next --check
             # would compare against the old (or missing) database
-            _sudo_run('mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db 2>&1 '
-                       '|| mv /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz 2>&1', timeout=30)
+            ssh.sudo('mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db 2>&1 '
+                      '|| mv /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz 2>&1', timeout=30)
             if 'error' in out.lower() and 'Total number of entries' not in out:
                 return {'error': 'error initializing the AIDE database', 'detail': out.strip()[-500:]}
             return {'host': host, 'mode': 'init', 'output_tail': out.strip()[-800:],
@@ -176,16 +145,16 @@ def check_aide(host='', user='root', port=22, key_path='', password='',
                     'summary': {'high': 0, 'medium': 0, 'low': 0, 'ok': 1}}
 
         # mode == 'check'
-        db_check, _ = _run(client, 'test -f /var/lib/aide/aide.db || test -f /var/lib/aide/aide.db.gz '
-                                    '&& echo EXISTS || echo MISSING')
+        db_check, _ = ssh.run('test -f /var/lib/aide/aide.db || test -f /var/lib/aide/aide.db.gz '
+                               '&& echo EXISTS || echo MISSING')
         if 'MISSING' in db_check:
             return {'error': 'AIDE database not found — run this same check with mode=init first',
                     'hint': '/var/lib/aide/aide.db does not exist'}
 
-        out, err = _sudo_run('aide --check 2>&1', timeout=300)
+        out, err = ssh.sudo('aide --check 2>&1', timeout=300)
 
     finally:
-        client.close()
+        ssh.close()
 
     summary = _parse_summary(out)
     if summary is None:
