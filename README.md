@@ -2,7 +2,7 @@
 
 [![Donate](https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/AndrejSemionov)
 
-[🇷🇺 Русский](README.en.md) · 🇬🇧 English
+[🇷🇺 Русский](README.ru.md) · 🇬🇧 English
 
 A diagnostics tool for networks, websites and servers. Works from the **console** and via a
 **web interface**. Modular architecture: every check is a plugin, registered with a decorator
