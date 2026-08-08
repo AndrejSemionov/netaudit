@@ -1,7 +1,7 @@
 """
-FastAPI-бэкенд NetAudit. Умный sync/async, AI-анализ, история, настройки/пресеты/цели.
-Всё хранилище — SQLite через netaudit_pkg.storage.
-Запуск: netaudit.py web  (или uvicorn web.app:app)
+NetAudit FastAPI backend. Smart sync/async, AI analysis, history, settings/presets/targets.
+All storage - SQLite via netaudit_pkg.storage.
+Run: netaudit.py web  (or uvicorn web.app:app)
 """
 
 from __future__ import annotations
@@ -28,9 +28,9 @@ from netaudit_pkg.web_auth import BasicAuthMiddleware, ensure_auth_configured
 app = FastAPI(title='NetAudit', version='2.0')
 STATIC_DIR = Path(__file__).resolve().parent / 'static'
 
-# host выставляется реальным значением в cmd_web() (netaudit.py) до старта uvicorn —
-# здесь читаем его из переменной окружения, которую cmd_web сам же и проставляет,
-# т.к. на момент импорта этого модуля host ещё не всегда известен напрямую.
+# host is set to its real value in cmd_web() (netaudit.py) before uvicorn starts -
+# we read it here from the env var that cmd_web itself sets, since at the time
+# this module is imported the host isn't always directly known otherwise.
 import os as _os
 _WEB_HOST = _os.environ.get('NETAUDIT_WEB_HOST', '127.0.0.1')
 ensure_auth_configured(_WEB_HOST)
@@ -39,8 +39,8 @@ app.add_middleware(BasicAuthMiddleware, host=_WEB_HOST)
 
 @app.on_event('startup')
 def _start_history_watcher() -> None:
-    # запускается всегда, но реально что-то делает только если enabled=true
-    # в настройках (см. history_capture.get_settings) — иначе просто спит.
+    # always starts, but only actually does something if enabled=true in
+    # settings (see history_capture.get_settings) - otherwise it just sleeps.
     history_capture.start()
 
 _tasks: dict[str, dict] = {}
@@ -109,13 +109,13 @@ def _execute_task(task_id: str, selected: list[dict]) -> None:
             _tasks[task_id] = {'status': 'error', 'error': f'{type(e).__name__}: {e}'}
 
 
-# --- Страница ---
+# --- Page ---
 @app.get('/', response_class=HTMLResponse)
 def index() -> str:
     return (STATIC_DIR / 'index.html').read_text(encoding='utf-8')
 
 
-# --- Проверки ---
+# --- Checks ---
 @app.get('/api/checks')
 def api_checks() -> list[dict]:
     return list_available()
@@ -158,7 +158,7 @@ def api_status(task_id: str) -> dict:
     return task
 
 
-# --- История ---
+# --- History ---
 @app.get('/api/history')
 def api_history() -> list[dict]:
     return list_reports()
@@ -174,17 +174,17 @@ def api_report(id: int) -> dict:
 
 @app.get('/api/timeseries/mtr')
 def api_timeseries_mtr(target: str) -> dict:
-    """Динамика потерь mtr по цели во времени — для графика."""
+    """mtr loss trend for a target over time - for the chart."""
     return {'target': target, 'points': storage.timeseries_mtr_loss(target)}
 
 
 @app.get('/api/timeseries/targets')
 def api_timeseries_targets() -> list[str]:
-    """Цели, по которым есть mtr-история."""
+    """Targets that have mtr history."""
     return storage.distinct_mtr_targets()
 
 
-# --- AI-анализ ---
+# --- AI analysis ---
 @app.post('/api/analyze')
 def api_analyze(req: AnalyzeRequest) -> dict:
     if req.report is not None:
@@ -198,22 +198,22 @@ def api_analyze(req: AnalyzeRequest) -> dict:
     return ai_analyze(report, language=req.language)
 
 
-# --- Настройки ---
-# ключи, которые не отдаём обратно на фронт в открытом виде
+# --- Settings ---
+# keys never sent back to the frontend in the clear
 SECRET_KEYS = {'anthropic_api_key', 'telegram_token', 'hibp_api_key'}
 
 
 @app.get('/api/settings')
 def api_get_settings() -> dict:
-    """Возвращает настройки. Секреты маскируются — только флаг задан/нет."""
+    """Returns settings. Secrets are masked - only a set/not-set flag."""
     raw = storage.settings_all()
     out = {}
     for k, v in raw.items():
         if k in SECRET_KEYS:
-            out[k] = {'set': bool(v)}  # не отдаём значение
+            out[k] = {'set': bool(v)}  # never return the actual value
         else:
             out[k] = v
-    # значения по умолчанию, если не заданы
+    # defaults, if not set
     out.setdefault('sync_threshold_sec', str(timing.DEFAULT_SYNC_THRESHOLD_SEC))
     out.setdefault('ema_alpha', str(timing.DEFAULT_EMA_ALPHA))
     from netaudit_pkg.history import DEFAULT_AI_LANGUAGE
@@ -225,10 +225,10 @@ def api_get_settings() -> dict:
 
 @app.post('/api/settings')
 def api_set_settings(req: SettingsRequest) -> dict:
-    """Сохраняет настройки. Пустые значения секретов игнорируются (чтобы не затереть)."""
+    """Saves settings. Empty secret values are ignored (to avoid wiping them out)."""
     for k, v in req.settings.items():
         if k in SECRET_KEYS and (v is None or v == ''):
-            continue  # не перезаписываем секрет пустотой
+            continue  # don't overwrite a secret with an empty value
         storage.setting_set(k, str(v))
     return {'ok': True}
 
@@ -240,9 +240,9 @@ def api_verify_key(req: VerifyKeyRequest) -> dict:
 
 @app.post('/api/settings/web-auth')
 def api_set_web_auth(req: WebAuthRequest) -> dict:
-    """Меняет логин/пароль встроенной Basic Auth (см. netaudit_pkg/web_auth.py).
-    Доступно всегда, даже если сейчас сервер запущен на localhost — так можно
-    подготовить credentials заранее, до того как переключиться на 0.0.0.0."""
+    """Changes the built-in Basic Auth login/password (see netaudit_pkg/web_auth.py).
+    Always available, even if the server is currently running on localhost - so
+    credentials can be prepared ahead of time, before switching to 0.0.0.0."""
     if not req.user or not req.password:
         raise HTTPException(400, 'user and password are required')
     if len(req.password) < 8:
@@ -253,7 +253,7 @@ def api_set_web_auth(req: WebAuthRequest) -> dict:
     return {'ok': True}
 
 
-# --- Пресеты ---
+# --- Presets ---
 @app.get('/api/presets')
 def api_presets() -> list[dict]:
     return storage.presets_list()
@@ -272,7 +272,7 @@ def api_delete_preset(preset_id: int) -> dict:
     return {'ok': True}
 
 
-# --- Цели по умолчанию ---
+# --- Default targets ---
 @app.get('/api/targets')
 def api_targets() -> list[dict]:
     return storage.targets_list()
@@ -290,7 +290,7 @@ def api_delete_target(target_id: int) -> dict:
     return {'ok': True}
 
 
-# --- Инструменты ---
+# --- Tools ---
 @app.get('/api/tools')
 def api_tools() -> list[dict]:
     return tools.tools_status()
@@ -301,7 +301,7 @@ def api_install_tool(req: InstallToolRequest) -> dict:
     return tools.install_tool(req.tool)
 
 
-# --- Списки репутации (allow/block) ---
+# --- Reputation lists (allow/block) ---
 @app.get('/api/reputation')
 def api_reputation(list_type: str = '') -> list[dict]:
     return storage.rep_list(list_type or None)
@@ -321,7 +321,7 @@ def api_delete_reputation(rep_id: int) -> dict:
     return {'ok': True}
 
 
-# --- Потоковое выполнение (живой график + остановка) ---
+# --- Streaming execution (live chart + stop) ---
 import asyncio
 import json as _json
 import uuid as _uuid
@@ -355,13 +355,13 @@ async def api_stream(task_id: str):
             try:
                 event = await asyncio.to_thread(task.q.get, True, 30)
             except Exception:
-                # таймаут очереди — heartbeat, чтобы соединение не падало
+                # queue timeout - a heartbeat so the connection doesn't drop
                 yield ': keep-alive\n\n'
                 continue
             if event.get('type') == '_end':
                 break
             yield f'data: {_json.dumps(event, ensure_ascii=False)}\n\n'
-        # очистка задачи после завершения
+        # clean up the task once it's finished
         with _stream_lock:
             _stream_tasks.pop(task_id, None)
 
@@ -393,7 +393,7 @@ class HistoryCaptureSettingsRequest(BaseModel):
 @app.get('/api/history_capture/settings')
 def api_history_capture_settings_get() -> dict:
     s = history_capture.get_settings()
-    s.pop('password', None)  # не отдаём пароль обратно на фронт
+    s.pop('password', None)  # never return the password to the frontend
     return s
 
 

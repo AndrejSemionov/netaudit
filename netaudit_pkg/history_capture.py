@@ -1,16 +1,15 @@
 """
-Фоновый сборщик истории трафика. Раз в N секунд опрашивает MikroTik
-(тот же connection tracking, что и check_mikrotik_sniffer в checks/capture.py),
-оценивает назначения через threat.score_destinations и складывает снимок
-в storage.traffic_history — чтобы потом можно было "отмотать назад" и
-посмотреть, куда устройство стучалось за прошедший период, а не только
-в момент, когда чек был запущен вручную.
+Background traffic-history collector. Polls MikroTik every N seconds (the same
+connection tracking as check_mikrotik_sniffer in checks/capture.py), scores
+destinations via threat.score_destinations, and stores a snapshot in
+storage.traffic_history - so you can later "rewind" and see where the device
+connected to over a past period, not just at the moment a check ran manually.
 
-Настройки хранятся в общей settings-таблице (ключи с префиксом history_capture_*),
-управляются через /api/history_capture/* эндпоинты в web/app.py.
+Settings live in the shared settings table (keys prefixed history_capture_*),
+managed via the /api/history_capture/* endpoints in web/app.py.
 
-Работает в отдельном daemon-потоке (threading, не asyncio — так же, как и остальной
-рантайм проверок в engine.py), стартует/останавливается вместе с процессом веб-сервера.
+Runs in its own daemon thread (threading, not asyncio - same as the rest of
+the check runtime in engine.py), starts/stops alongside the web server process.
 """
 
 from __future__ import annotations
@@ -68,8 +67,8 @@ def get_status() -> dict:
 
 
 def _take_snapshot(s: dict) -> None:
-    """Один снимок connection tracking — идентичная логика check_mikrotik_sniffer,
-    но пишет результат в traffic_history вместо возврата в отчёт."""
+    """A single connection-tracking snapshot - same logic as check_mikrotik_sniffer,
+    but writes the result to traffic_history instead of returning it in a report."""
     if paramiko is None:
         raise RuntimeError('paramiko not installed')
     if not s['target_ip']:
@@ -141,7 +140,7 @@ def _watch_loop() -> None:
                 _status['last_run'] = datetime.now().isoformat()
                 _status['last_error'] = str(e)[:300]
 
-        # чистка старых записей — раз в проходе, дёшево при индексе на seen_at
+        # prune old records - once per loop pass, cheap thanks to the seen_at index
         try:
             cutoff = (datetime.now() - timedelta(hours=s['retention_hours'])).isoformat()
             storage.traffic_history_prune(cutoff)
@@ -152,7 +151,7 @@ def _watch_loop() -> None:
 
 
 def start() -> None:
-    """Запускается один раз при старте веб-сервера (см. web/app.py lifespan)."""
+    """Called once when the web server starts (see web/app.py lifespan)."""
     global _watcher_thread
     if _watcher_thread and _watcher_thread.is_alive():
         return

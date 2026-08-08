@@ -1,13 +1,13 @@
 """
-Адаптивный тайминг: учится на реальном времени и решает sync/async.
-Хранение статистики — через storage (SQLite). Пороги настраиваются через настройки.
+Adaptive timing: learns from real elapsed times and decides sync/async.
+Stats storage is via storage (SQLite). Thresholds are configurable via settings.
 """
 
 from __future__ import annotations
 
 from . import storage
 
-# Значения по умолчанию (переопределяются настройками в БД)
+# Defaults (overridden by settings in the DB)
 DEFAULT_SYNC_THRESHOLD_SEC = 2.5
 DEFAULT_EMA_ALPHA = 0.4
 
@@ -21,10 +21,10 @@ SEED_ESTIMATES = {
 DEFAULT_SEED = 5.0
 TARGET_PARAM_KEYS = ('target', 'url', 'hostname', 'host', 'server')
 
-# Проверки, где длительность явно вычисляется из параметров (count*interval, duration и т.п.).
-# Если явный расчёт даёт заметно большее время чем история/seed — доверяем явному расчёту:
-# иначе короткая история той же цели может ошибочно отправить долгий прогон в sync,
-# и он упрётся в таймаут HTTP-запроса раньше, чем реально завершится.
+# Checks where duration is explicitly derivable from params (count*interval, duration, etc).
+# If the explicit calc gives noticeably more time than history/seed - trust the explicit
+# calc: otherwise a short history for the same target could wrongly push a long run into
+# sync, and it'd hit the HTTP request timeout before it actually finishes.
 def _explicit_duration(check_id: str, params: dict) -> float | None:
     if check_id == 'mtr':
         try:
@@ -80,8 +80,8 @@ def _key(check_id: str, params: dict) -> str:
 def estimate(check_id: str, params: dict) -> float:
     seed = SEED_ESTIMATES.get(check_id, DEFAULT_SEED)
 
-    # Явный расчёт из параметров (mtr count*interval, iperf duration и т.п.) — если он
-    # заметно больше seed/истории, доверяем ему: пользователь явно попросил длинный прогон.
+    # Explicit calc from params (mtr count*interval, iperf duration, etc) - if it's
+    # noticeably bigger than seed/history, trust it: the user explicitly asked for a long run.
     explicit = _explicit_duration(check_id, params)
 
     specific = storage.timing_get(_key(check_id, params))

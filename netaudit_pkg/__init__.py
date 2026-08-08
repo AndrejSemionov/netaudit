@@ -1,1 +1,1 @@
-"""NetAudit — модульный универсальный инструмент сетевого аудита."""
+"""NetAudit — modular, universal network audit tool."""

@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-NetAudit — модульный универсальный инструмент сетевого аудита.
-Работает из консоли и как веб-сервис.
+NetAudit — modular, universal network audit tool.
+Runs from the console and as a web service.
 
-Консоль:
-    netaudit.py list                        — показать все доступные проверки
-    netaudit.py run mtr ping                 — выполнить проверки (параметры по умолчанию)
-    netaudit.py run mtr --target 5.20.136.3   — с параметрами
+Console:
+    netaudit.py list                        - show all available checks
+    netaudit.py run mtr ping                 - run checks (default params)
+    netaudit.py run mtr --target 5.20.136.3   - with params
     netaudit.py run ssl http --url https://example.com
-    netaudit.py history                       — список отчётов
-    netaudit.py analyze <path>                 — AI-анализ отчёта (что делать)
+    netaudit.py history                       - list reports
+    netaudit.py analyze <path>                 - AI analysis of a report (what to do)
 
-Веб:
-    netaudit.py web                            — поднять веб-интерфейс на 127.0.0.1:8000
-    netaudit.py web --host 0.0.0.0 --port 8080  — на всех интерфейсах
-    netaudit.py setup-nginx --domain audit.local — сгенерировать конфиг nginx + basic auth
+Web:
+    netaudit.py web                            - start the web UI on 127.0.0.1:8000
+    netaudit.py web --host 0.0.0.0 --port 8080  - on all interfaces
+    netaudit.py setup-nginx --domain audit.local - generate an nginx config + basic auth
 
-Установка инструментов:
+Installing tools:
     sudo apt install mtr-tiny tcptraceroute dnsutils iputils-arping iperf3 -y
     pip install psutil httpx paramiko fastapi "uvicorn[standard]" --break-system-packages
 """
@@ -38,7 +38,7 @@ from netaudit_pkg.utils import log
 
 def cmd_list(args):
     for c in list_available():
-        miss = f"  [нет: {', '.join(c['missing_tools'])}]" if c['missing_tools'] else ''
+        miss = f"  [missing: {', '.join(c['missing_tools'])}]" if c['missing_tools'] else ''
         print(f"[{c['category']:12}] {c['id']:18} {c['label']}{miss}")
         if c['params']:
             for p in c['params']:
@@ -46,7 +46,7 @@ def cmd_list(args):
 
 
 def cmd_run(args):
-    # собираем общие параметры из --key value для всех выбранных проверок
+    # collect shared params from --key value for all selected checks
     extra = {}
     i = 0
     unknown = args.rest
@@ -127,28 +127,28 @@ def cmd_web(args):
         log.error('uvicorn not installed: pip install "uvicorn[standard]" fastapi --break-system-packages')
         sys.exit(1)
     log.info(f'Web UI: http://{args.host}:{args.port}')
-    # app.py читает host из этой переменной при импорте, чтобы решить,
-    # включать ли обязательную Basic Auth (см. netaudit_pkg/web_auth.py)
+    # app.py reads host from this env var at import time, to decide whether to
+    # enable mandatory Basic Auth (see netaudit_pkg/web_auth.py)
     os.environ['NETAUDIT_WEB_HOST'] = args.host
     uvicorn.run('web.app:app', host=args.host, port=args.port, reload=args.reload,
                 app_dir=str(Path(__file__).resolve().parent))
 
 
 def cmd_setup_nginx(args):
-    """Генерирует конфиг nginx с basic auth и печатает команды установки."""
+    """Generates an nginx config with basic auth and prints the install commands."""
     project_dir = Path(__file__).resolve().parent
-    conf = f"""# NetAudit — конфиг nginx с basic auth
-# 1. Создай пользователя:  sudo htpasswd -c /etc/nginx/.netaudit_htpasswd {args.user}
-# 2. Скопируй этот файл:    sudo cp netaudit.nginx.conf /etc/nginx/sites-available/netaudit
-# 3. Включи:                sudo ln -s /etc/nginx/sites-available/netaudit /etc/nginx/sites-enabled/
-# 4. Проверь и перезагрузи: sudo nginx -t && sudo systemctl reload nginx
-# 5. Запусти бэкенд:        python3 netaudit.py web --host 127.0.0.1 --port {args.backend_port}
+    conf = f"""# NetAudit — nginx config with basic auth
+# 1. Create a user:         sudo htpasswd -c /etc/nginx/.netaudit_htpasswd {args.user}
+# 2. Copy this file:        sudo cp netaudit.nginx.conf /etc/nginx/sites-available/netaudit
+# 3. Enable it:             sudo ln -s /etc/nginx/sites-available/netaudit /etc/nginx/sites-enabled/
+# 4. Test and reload:       sudo nginx -t && sudo systemctl reload nginx
+# 5. Start the backend:     python3 netaudit.py web --host 127.0.0.1 --port {args.backend_port}
 
 server {{
     listen 80;
     server_name {args.domain};
 
-    # Для HTTPS раскомментируй после получения сертификата (certbot):
+    # For HTTPS, uncomment after getting a certificate (certbot):
     # listen 443 ssl;
     # ssl_certificate     /etc/letsencrypt/live/{args.domain}/fullchain.pem;
     # ssl_certificate_key /etc/letsencrypt/live/{args.domain}/privkey.pem;
@@ -162,10 +162,10 @@ server {{
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        # длинные проверки (mtr/iperf) — увеличенные таймауты
+        # long-running checks (mtr/iperf) - extended timeouts
         proxy_read_timeout 3600s;
         proxy_connect_timeout 75s;
-        # для потоковых ответов (SSE, живой график) — отключаем буферизацию
+        # for streaming responses (SSE, the live chart) - disable buffering
         proxy_buffering off;
         proxy_cache off;
         proxy_set_header Connection '';
@@ -230,7 +230,7 @@ def build_parser():
 def main():
     parser = build_parser()
     args, rest = parser.parse_known_args()
-    args.rest = rest  # для cmd_run: свободные --key value
+    args.rest = rest  # for cmd_run: free-form --key value
     args.func(args)
 
 

@@ -1,16 +1,17 @@
 """
-Единый слой хранилища на SQLite. Весь остальной код работает через функции этого
-модуля и не знает про SQL — если понадобится сменить бэкенд, меняется только здесь.
+Single storage layer on SQLite. All other code goes through this module's
+functions and doesn't know about SQL - if the backend ever needs to change,
+only this file changes.
 
-Таблицы:
-  reports        — история отчётов (метаданные в колонках + полный JSON блобом)
-  timing_stats   — адаптивная статистика времени по ключу (проверка::цель)
-  settings       — key-value настройки (API-ключ, пороги, Telegram)
-  presets        — сохранённые наборы проверок
-  targets        — цели по умолчанию
+Tables:
+  reports        - report history (metadata in columns + full JSON blob)
+  timing_stats   - adaptive timing stats keyed by (check::target)
+  settings       - key-value settings (API key, thresholds, Telegram)
+  presets        - saved check sets
+  targets        - default targets
 
-Схема версионируется (PRAGMA user_version) — миграции добавляются в MIGRATIONS.
-БД: ~/.netaudit/netaudit.db
+Schema is versioned (PRAGMA user_version) - migrations are added to MIGRATIONS.
+DB: ~/.netaudit/netaudit.db
 """
 
 from __future__ import annotations
@@ -27,28 +28,28 @@ _local = threading.local()
 
 
 def _conn() -> sqlite3.Connection:
-    """Пер-поточное соединение (SQLite не любит шаринг между потоками)."""
+    """Per-thread connection (SQLite doesn't like being shared across threads)."""
     if not hasattr(_local, 'conn'):
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(DB_PATH))
         conn.row_factory = sqlite3.Row
-        conn.execute('PRAGMA journal_mode=WAL')  # безопаснее при конкурентных чтениях
+        conn.execute('PRAGMA journal_mode=WAL')  # safer under concurrent reads
         conn.execute('PRAGMA foreign_keys=ON')
         _local.conn = conn
         _migrate(conn)
     return _local.conn
 
 
-# --- Миграции: список функций, применяются по порядку до текущей версии ---
+# --- Migrations: list of functions, applied in order up to the current version ---
 
 def _m1(conn: sqlite3.Connection) -> None:
     conn.executescript("""
     CREATE TABLE IF NOT EXISTS reports (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp TEXT NOT NULL,
-        checks TEXT NOT NULL,          -- CSV id проверок для быстрого списка
+        checks TEXT NOT NULL,          -- CSV of check ids, for a quick listing
         total_time REAL,
-        data TEXT NOT NULL             -- полный JSON отчёта
+        data TEXT NOT NULL             -- full report JSON
     );
     CREATE INDEX IF NOT EXISTS idx_reports_ts ON reports(timestamp);
 
@@ -75,7 +76,7 @@ def _m1(conn: sqlite3.Connection) -> None:
     CREATE TABLE IF NOT EXISTS targets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         label TEXT,
-        value TEXT NOT NULL,           -- IP или URL
+        value TEXT NOT NULL,           -- IP or URL
         kind TEXT DEFAULT 'ip'         -- ip | url
     );
     """)
@@ -85,7 +86,7 @@ def _m2(conn: sqlite3.Connection) -> None:
     conn.executescript("""
     CREATE TABLE IF NOT EXISTS rep_list (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        pattern TEXT NOT NULL,          -- IP, подсеть или подстрока домена
+        pattern TEXT NOT NULL,          -- IP, subnet, or a domain substring
         list_type TEXT NOT NULL,        -- 'allow' | 'block'
         note TEXT,
         created_at TEXT NOT NULL
@@ -105,7 +106,7 @@ def _m3(conn: sqlite3.Connection) -> None:
     conn.executescript("""
     CREATE TABLE IF NOT EXISTS cve_cache (
         key TEXT PRIMARY KEY,           -- 'nginx::1.24.0'
-        data TEXT NOT NULL,             -- JSON: список ID уязвимостей
+        data TEXT NOT NULL,             -- JSON: list of vulnerability IDs
         updated_at TEXT NOT NULL
     );
     """)
@@ -132,7 +133,13 @@ MIGRATIONS = [_m1, _m2, _m3, _m4]
 
 
 def _seed_presets(conn: sqlite3.Connection) -> None:
-    """Стартовые пресеты под типовые задачи — создаются один раз, если таблица пуста."""
+    """Starter presets for common tasks - created once, only if the table is empty.
+
+    NOTE: preset names below are intentionally Russian - they're used as lookup
+    keys in web/static/i18n.js's PRESET_NAME_TR dict, which translates them for
+    display based on the UI language. Renaming a key here without updating that
+    dict breaks the translation for both the newly-seeded default and anyone's
+    already-stored presets on existing installs."""
     count = conn.execute('SELECT COUNT(*) FROM presets').fetchone()[0]
     if count > 0:
         return
@@ -213,7 +220,7 @@ def load_report(report_id: int) -> dict | None:
 
 
 def query_reports(check_id: str | None = None, since: str | None = None, limit: int = 200) -> list[dict]:
-    """Аналитика на будущее: фильтр по проверке и дате. Возвращает метаданные."""
+    """Analytics for the future: filter by check and date. Returns metadata."""
     conn = _conn()
     sql = 'SELECT id, timestamp, checks, total_time FROM reports WHERE 1=1'
     params: list = []
@@ -231,8 +238,8 @@ def query_reports(check_id: str | None = None, since: str | None = None, limit: 
 
 def timeseries_mtr_loss(target: str, limit: int = 100) -> list[dict]:
     """
-    Динамика потерь для mtr по конкретной цели во времени.
-    Возвращает [{timestamp, max_loss, worst_hop}] по последним отчётам, где была эта цель.
+    mtr loss trend for a specific target over time.
+    Returns [{timestamp, max_loss, worst_hop}] from the most recent reports that had this target.
     """
     conn = _conn()
     rows = conn.execute(
@@ -240,7 +247,7 @@ def timeseries_mtr_loss(target: str, limit: int = 100) -> list[dict]:
         (limit,),
     ).fetchall()
     out = []
-    for r in reversed(rows):  # хронологический порядок
+    for r in reversed(rows):  # chronological order
         data = json.loads(r['data'])
         mtr = data.get('results', {}).get('mtr', {})
         if mtr.get('target') != target or not mtr.get('hops'):
@@ -254,7 +261,7 @@ def timeseries_mtr_loss(target: str, limit: int = 100) -> list[dict]:
 
 
 def distinct_mtr_targets(limit: int = 50) -> list[str]:
-    """Список целей, по которым есть mtr-история — для выпадашки графика динамики."""
+    """List of targets with mtr history - for the trend chart dropdown."""
     conn = _conn()
     rows = conn.execute(
         "SELECT data FROM reports WHERE checks LIKE '%mtr%' ORDER BY id DESC LIMIT ?",
@@ -412,7 +419,7 @@ def rep_delete(rep_id: int) -> None:
 
 
 # ===========================================================================
-# ASN cache (чтобы не дёргать whois по одному IP много раз)
+# ASN cache (to avoid hammering whois for the same IP repeatedly)
 # ===========================================================================
 
 def asn_get(ip: str) -> dict | None:
@@ -432,7 +439,7 @@ def asn_set(ip: str, org: str | None, country: str | None) -> None:
 
 
 # ===========================================================================
-# CVE cache (OSV.dev — чтобы не долбить API на каждый прогон одной и той же версии)
+# CVE cache (OSV.dev - to avoid hitting the API on every run for the same version)
 # ===========================================================================
 
 def cve_get(key: str) -> dict | None:
@@ -455,10 +462,10 @@ def cve_set(key: str, data: list) -> None:
 
 
 # ===========================================================================
-# Traffic history — снимки connection tracking с MikroTik, копятся фоновым
-# watcher'ом (см. history_capture.py), чтобы можно было "отмотать назад"
-# и посмотреть, куда устройство стучалось за прошедший период, а не только
-# в моменте запуска чека.
+# Traffic history - MikroTik connection tracking snapshots, accumulated by a
+# background watcher (see history_capture.py), so you can "rewind" and see
+# where a device connected to over a past period, not just at the moment a
+# check runs.
 # ===========================================================================
 
 def traffic_history_add(target_ip: str, destinations: list[dict]) -> None:
@@ -488,7 +495,7 @@ def traffic_history_query(target_ip: str, since: str, until: str | None = None) 
 
 
 def traffic_history_prune(older_than: str) -> int:
-    """Удаляет записи старше указанного ISO-времени. Вызывается watcher'ом периодически."""
+    """Deletes records older than the given ISO timestamp. Called periodically by the watcher."""
     conn = _conn()
     cur = conn.execute('DELETE FROM traffic_history WHERE seen_at < ?', (older_than,))
     conn.commit()

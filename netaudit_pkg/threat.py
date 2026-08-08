@@ -1,21 +1,22 @@
 """
-Оценка подозрительности трафика. Каждому назначению ставит risk_score (0..100),
-risk_level (ok / suspicious / high) и список причин (reasons).
+Traffic suspiciousness scoring. Assigns each destination a risk_score (0..100),
+risk_level (ok / suspicious / high), and a list of reasons.
 
-Сигналы:
-  РЕПУТАЦИЯ:
-    - чёрный список пользователя -> высокий риск
-    - белый список / известные хорошие организации -> риск снят
-    - ASN/организация через whois (кэш) — для контекста
-  ПОВЕДЕНИЕ:
-    - прямой IP без обратного DNS (частый признак malware/C2)
-    - нестандартный порт (не 80/443/53 и т.п.)
-    - известные «плохие» порты (IRC C2, telnet и т.п.)
-    - незашифрованный HTTP к неизвестному хосту
-    - аномально много соединений к одному не-белому адресу (маячок/beacon)
-  СПИСКИ: allow/block из БД (пользовательские).
+Signals:
+  REPUTATION:
+    - user blocklist -> high risk
+    - user allowlist / known-good organizations -> risk cleared
+    - ASN/organization via whois (cached) - for context
+  BEHAVIOR:
+    - direct IP with no reverse DNS (common malware/C2 indicator)
+    - non-standard port (not 80/443/53 etc)
+    - known "bad" ports (IRC C2, telnet, etc)
+    - unencrypted HTTP to an unknown host
+    - anomalously many connections to one non-whitelisted address (beacon-like)
+  LISTS: user's allow/block from the DB.
 
-Всё offline-эвристики (whois опционально). Итог отдаётся в AI для человеческой оценки.
+All heuristics are offline (whois is optional). The result feeds into the AI for
+a human-facing assessment.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ import re
 from .utils import run_cmd, tool_available
 from . import storage
 
-# Известные «хорошие» организации/домены — их трафик обычно легитимен.
+# Known-good organizations/domains - their traffic is usually legitimate.
 KNOWN_GOOD_PATTERNS = [
     'google', 'gstatic', '1e100.net', 'cloudflare', 'amazonaws', 'akamai',
     'microsoft', 'apple.com', 'icloud', 'facebook', 'fbcdn', 'instagram', 'whatsapp',
@@ -34,10 +35,10 @@ KNOWN_GOOD_PATTERNS = [
     'telegram', 'cdninstagram', 'windowsupdate', 'office365', 'azureedge',
 ]
 
-# IP-диапазоны известных сервисов, у которых часто НЕТ публичного reverse DNS
-# (обычная практика для мессенджеров/CDN ради приватности) — без этого списка
-# такие адреса ложно попадали бы в 'suspicious' только из-за отсутствия PTR-записи.
-# Источник: official Telegram DC ranges (core.telegram.org/resources/cidr.txt).
+# IP ranges of known services that often have NO public reverse DNS (common
+# practice for messengers/CDNs for privacy) - without this list, such
+# addresses would falsely land in 'suspicious' just for lacking a PTR record.
+# Source: official Telegram DC ranges (core.telegram.org/resources/cidr.txt).
 KNOWN_GOOD_CIDRS = [
     '149.154.160.0/20',   # Telegram DC
     '91.108.4.0/22',      # Telegram DC
@@ -59,17 +60,17 @@ def _is_known_good_ip(ip: str) -> bool:
             return True
     return False
 
-# Обычные порты — их наличие само по себе не подозрительно.
+# Common ports - their presence alone isn't suspicious.
 COMMON_PORTS = {'80', '443', '53', '123', '993', '995', '587', '465', '853', '5223'}
 
-# Порты, часто ассоциируемые с угрозами / нежелательными сервисами.
+# Ports often associated with threats / unwanted services.
 SUSPICIOUS_PORTS = {
-    '23': 'telnet (незашифрованный удалённый доступ)',
-    '6667': 'IRC (частый C2-канал ботнетов)',
+    '23': 'telnet (unencrypted remote access)',
+    '6667': 'IRC (common botnet C2 channel)',
     '6666': 'IRC/C2',
-    '4444': 'Metasploit default / бэкдор',
-    '1337': 'частый порт бэкдоров',
-    '31337': 'классический бэкдор (elite)',
+    '4444': 'Metasploit default / backdoor',
+    '1337': 'common backdoor port',
+    '31337': 'classic backdoor (elite)',
     '9001': 'Tor / C2',
     '9030': 'Tor',
 }
@@ -90,7 +91,7 @@ def _is_private(ip: str) -> bool:
 
 
 def _match_rep_lists(ip: str, host: str | None):
-    """Проверяет IP/домен по пользовательским allow/block спискам."""
+    """Checks the IP/domain against the user's allow/block lists."""
     allow = storage.rep_list('allow')
     block = storage.rep_list('block')
     hay = f'{ip} {host or ""}'.lower()
@@ -99,7 +100,7 @@ def _match_rep_lists(ip: str, host: str | None):
         p = pattern.lower().strip()
         if not p:
             return False
-        # подсеть?
+        # subnet?
         if '/' in p:
             try:
                 return ipaddress.ip_address(ip) in ipaddress.ip_network(p, strict=False)
@@ -113,7 +114,7 @@ def _match_rep_lists(ip: str, host: str | None):
 
 
 def enrich_asn(ip: str) -> dict:
-    """ASN/организация через whois (с кэшем в БД). Лучший effort — если whois нет, пропускаем."""
+    """ASN/organization via whois (cached in the DB). Best-effort - skipped if whois is absent."""
     if _is_private(ip):
         return {'org': 'private/LAN', 'country': None}
     cached = storage.asn_get(ip)
@@ -138,8 +139,8 @@ def enrich_asn(ip: str) -> dict:
 
 def score_destination(dest: dict, do_whois: bool = False) -> dict:
     """
-    Оценивает одно назначение. Возвращает копию с добавленными
-    risk_score, risk_level, reasons, (org/country если whois).
+    Scores a single destination. Returns a copy with added
+    risk_score, risk_level, reasons, (org/country if whois was used).
     dest: {'ip', 'host'?, 'ports'?, 'protocols'?, 'connections'?/'packets'?}
     """
     ip = dest.get('ip', '')
@@ -151,53 +152,53 @@ def score_destination(dest: dict, do_whois: bool = False) -> dict:
     reasons: list[str] = []
     score = 0
 
-    # пользовательские списки — высший приоритет
+    # user lists - highest priority
     allowed, blocked = _match_rep_lists(ip, host)
     if blocked:
         return {**dest, 'risk_score': 100, 'risk_level': 'high',
-                'reasons': [f'в чёрном списке: {blocked["pattern"]}' + (f' ({blocked["note"]})' if blocked.get('note') else '')]}
+                'reasons': [f'on the blocklist: {blocked["pattern"]}' + (f' ({blocked["note"]})' if blocked.get('note') else '')]}
     if allowed:
         return {**dest, 'risk_score': 0, 'risk_level': 'ok',
-                'reasons': [f'в белом списке: {allowed["pattern"]}']}
+                'reasons': [f'on the allowlist: {allowed["pattern"]}']}
 
-    # приватный/LAN — обычно не интересен
+    # private/LAN - usually not interesting
     if _is_private(ip):
-        return {**dest, 'risk_score': 0, 'risk_level': 'ok', 'reasons': ['локальная сеть']}
+        return {**dest, 'risk_score': 0, 'risk_level': 'ok', 'reasons': ['local network']}
 
-    # известная хорошая организация по DNS или по IP-диапазону (для сервисов
-    # без публичного reverse DNS, напр. Telegram DC)
+    # known-good organization via DNS or IP range (for services with no public
+    # reverse DNS, e.g. Telegram DC)
     good = _is_known_good(host) or _is_known_good_ip(ip)
     if good and not _is_known_good(host):
-        reasons.append('известный сервис (по IP-диапазону, без reverse DNS — обычная практика для мессенджеров)')
+        reasons.append('known service (by IP range, no reverse DNS - normal practice for messengers)')
     elif good:
-        reasons.append('известный сервис (по DNS)')
+        reasons.append('known service (by DNS)')
 
-    # прямой IP без обратного DNS — подозрительный сигнал
+    # direct IP with no reverse DNS - a suspicious signal
     if not host and not good:
         score += 30
-        reasons.append('нет обратного DNS (прямой IP)')
+        reasons.append('no reverse DNS (direct IP)')
 
-    # порты
+    # ports
     non_common = ports - COMMON_PORTS
     for p in ports:
         if p in SUSPICIOUS_PORTS:
             score += 45
-            reasons.append(f'порт {p}: {SUSPICIOUS_PORTS[p]}')
+            reasons.append(f'port {p}: {SUSPICIOUS_PORTS[p]}')
     if non_common and not (ports & COMMON_PORTS) and not good:
         score += 20
-        reasons.append(f'только нестандартные порты: {", ".join(sorted(non_common))}')
+        reasons.append(f'only non-standard ports: {", ".join(sorted(non_common))}')
 
-    # незашифрованный HTTP (порт 80) к неизвестному хосту
+    # unencrypted HTTP (port 80) to an unknown host
     if '80' in ports and '443' not in ports and not good:
         score += 15
-        reasons.append('только незашифрованный HTTP (80) к неизвестному адресу')
+        reasons.append('only unencrypted HTTP (80) to an unknown address')
 
-    # аномально много соединений к одному не-белому адресу — возможный beacon
+    # anomalously many connections to one non-whitelisted address - possible beacon
     if conns and conns >= 20 and not good:
         score += 20
-        reasons.append(f'много соединений ({conns}) к одному адресу — возможен маячок/beacon')
+        reasons.append(f'many connections ({conns}) to one address - possible beacon')
 
-    # whois-обогащение (по запросу, для не-хороших — чтобы не тормозить)
+    # whois enrichment (on demand, only for non-good ones - to avoid slowing things down)
     if do_whois and not good:
         info = enrich_asn(ip)
         if info.get('org'):
@@ -205,23 +206,23 @@ def score_destination(dest: dict, do_whois: bool = False) -> dict:
             reasons.append(f'ASN: {info["org"]}' + (f' ({info["country"]})' if info.get('country') else ''))
 
     if good:
-        score = max(0, score - 40)  # известный сервис сильно снижает риск
+        score = max(0, score - 40)  # a known service significantly lowers the risk
 
     score = min(100, score)
     level = 'high' if score >= 60 else ('suspicious' if score >= 25 else 'ok')
-    return {**dest, 'risk_score': score, 'risk_level': level, 'reasons': reasons or ['без явных сигналов']}
+    return {**dest, 'risk_score': score, 'risk_level': level, 'reasons': reasons or ['no explicit signals']}
 
 
 def score_destinations(dests: list[dict], do_whois: bool = False) -> dict:
     """
-    Оценивает все назначения. Возвращает {'scored': [...], 'summary': {...}}.
-    whois применяется только к подозрительным (чтобы не тормозить на легитимных).
+    Scores all destinations. Returns {'scored': [...], 'summary': {...}}.
+    whois is only applied to suspicious ones (to avoid slowing down on legitimate traffic).
     """
     scored = []
     for d in dests:
-        # первый проход без whois — чтобы понять, подозрительно ли
+        # first pass without whois - to figure out if it's suspicious at all
         s = score_destination(d, do_whois=False)
-        # если подозрительно и разрешён whois — обогащаем
+        # if suspicious and whois is allowed - enrich
         if do_whois and s['risk_level'] != 'ok':
             s = score_destination(d, do_whois=True)
         scored.append(s)

@@ -1,27 +1,28 @@
 """
-Обязательная защита веб-интерфейса, когда он слушает не только localhost.
+Mandatory web UI protection when it's listening beyond localhost.
 
-Идея: если сервер поднят с --host 0.0.0.0 (или любым не-127.0.0.1/::1 адресом),
-это значит интерфейс потенциально доступен кому-то ещё, кроме владельца машины —
-из локальной сети, а иногда и из интернета, если проброшен порт. NetAudit даёт
-доступ к результатам аудита сети/сервера, а часть проверок (сохранённые SSH-креды
-в истории команд, содержимое отчётов) — чувствительные данные. Оставлять это
-совсем без защиты по умолчанию — реальный риск, не гипотетический (см. фидбек:
-человек по невнимательности выставляет панель наружу и не понимает, что она открыта).
+The idea: if the server is started with --host 0.0.0.0 (or any non-127.0.0.1/::1
+address), the interface is potentially reachable by someone other than the
+machine's owner - from the local network, and sometimes from the internet if a
+port is forwarded. NetAudit provides access to network/server audit results,
+and some checks handle sensitive data (saved SSH credentials in command
+history, report contents). Leaving this completely unprotected by default is
+a real risk, not a hypothetical one (see feedback: someone exposes the panel
+externally by mistake and doesn't realize it's open).
 
-Здесь не полагаемся на то, что администратор ОБЯЗАТЕЛЬНО настроит nginx с htpasswd
-(это отдельный, необязательный шаг, setup-nginx) — вместо этого встроенная
-Basic Auth защищает само FastAPI-приложение, независимо от того, стоит ли что-то
-перед ним. Если nginx с htpasswd тоже настроен — это просто два слоя, не проблема.
+We don't rely on the admin ALWAYS setting up nginx with htpasswd here (that's
+a separate, optional step, setup-nginx) - instead, built-in Basic Auth protects
+the FastAPI app itself, regardless of whether anything sits in front of it. If
+nginx with htpasswd is also configured, that's just two layers, not a problem.
 
-Логика:
-  - host == 127.0.0.1 / localhost / ::1  -> auth не требуется, всё как раньше.
-  - host != localhost и учётные данные заданы (web_auth_user/web_auth_password
-    в настройках) -> требуем Basic Auth на каждый запрос.
-  - host != localhost и учётные данные НЕ заданы -> генерируем случайный пароль
-    один раз при старте, громко печатаем его в лог (только в этот момент, дальше
-    он не показывается), сохраняем хэш в БД. Так или иначе открытым интерфейс
-    не остаётся никогда.
+Logic:
+  - host == 127.0.0.1 / localhost / ::1  -> no auth required, same as before.
+  - host != localhost and credentials are set (web_auth_user/web_auth_password
+    in settings) -> Basic Auth is required on every request.
+  - host != localhost and credentials are NOT set -> generate a random password
+    once at startup, print it loudly to the log (only at that moment, never
+    shown again), store the hash in the DB. Either way, the interface is
+    never left open.
 """
 
 from __future__ import annotations
@@ -42,8 +43,8 @@ LOCALHOST_HOSTS = {'127.0.0.1', 'localhost', '::1'}
 
 
 def _hash_password(password: str) -> str:
-    """Простой salted hash — этого достаточно для локального веб-интерфейса,
-    не для банковского приложения. sha256(salt + password), соль хранится рядом."""
+    """Simple salted hash - good enough for a local web UI, not for a banking
+    app. sha256(salt + password), the salt is stored alongside it."""
     salt = storage.setting_get('web_auth_salt')
     if not salt:
         salt = secrets.token_hex(16)
@@ -52,8 +53,8 @@ def _hash_password(password: str) -> str:
 
 
 def ensure_auth_configured(host: str) -> None:
-    """Вызывается один раз при старте сервера. Если host не localhost и
-    учётных данных ещё нет — генерирует их и печатает пароль в лог."""
+    """Called once when the server starts. If host isn't localhost and no
+    credentials exist yet - generates them and prints the password to the log."""
     if host in LOCALHOST_HOSTS:
         return
 
@@ -63,7 +64,7 @@ def ensure_auth_configured(host: str) -> None:
         log.warning(f'Web UI is listening on {host} — Basic Auth is required (user: {user}).')
         return
 
-    # первый запуск не на localhost без заданных credentials — генерируем и показываем один раз
+    # first run beyond localhost with no credentials set - generate and show once
     generated_user = 'admin'
     generated_password = secrets.token_urlsafe(12)
     storage.setting_set('web_auth_user', generated_user)
@@ -79,7 +80,7 @@ def ensure_auth_configured(host: str) -> None:
 
 
 class BasicAuthMiddleware(BaseHTTPMiddleware):
-    """Требует Basic Auth на каждый запрос, если сервер слушает не localhost."""
+    """Requires Basic Auth on every request, if the server is listening beyond localhost."""
 
     def __init__(self, app, host: str):
         super().__init__(app)
@@ -92,9 +93,9 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         user = storage.setting_get('web_auth_user')
         pw_hash = storage.setting_get('web_auth_password_hash')
         if not user or not pw_hash:
-            # защитный барьер: до сюда в норме не должны дойти (ensure_auth_configured
-            # вызывается на старте), но если БД очистили руками — лучше отказать,
-            # чем тихо остаться открытыми
+            # safety net: shouldn't normally get here (ensure_auth_configured runs
+            # at startup), but if the DB was cleared manually - better to refuse
+            # than to silently stay open
             return Response('Auth not configured. Restart the server to generate credentials.',
                              status_code=503)
 

@@ -1,9 +1,9 @@
 """
-Реестр проверок — сердце модульности. Каждая проверка регистрируется декоратором
-@register и автоматически становится доступна в CLI и веб-интерфейсе.
+Check registry — the heart of the modularity. Each check registers itself via the
+@register decorator and automatically becomes available in the CLI and the web UI.
 
-Добавить новую проверку = создать функцию с декоратором @register(...). Всё.
-Ничего больше менять не нужно — ни CLI, ни веб, ни UI.
+Adding a new check = write a function with the @register(...) decorator. That's it.
+Nothing else needs to change — not the CLI, not the web, not the UI.
 """
 
 from __future__ import annotations
@@ -14,18 +14,18 @@ from typing import Callable, Any
 
 @dataclass
 class CheckSpec:
-    """Описание одной проверки."""
-    id: str                          # уникальный идентификатор (например 'mtr')
-    label: str                       # человекочитаемое имя для UI
-    category: str                    # группа: network / site / server / performance / security
-    func: Callable[..., Any]         # функция-исполнитель
-    params: list[dict] = field(default_factory=list)  # параметры для UI (name/type/label/default)
-    required_tools: list[str] = field(default_factory=list)  # какие бинарники нужны
-    description: str = ''             # подсказка для UI
+    """Description of a single check."""
+    id: str                          # unique identifier (e.g. 'mtr')
+    label: str                       # human-readable name for the UI
+    category: str                    # group: network / site / server / performance / security
+    func: Callable[..., Any]         # the executor function
+    params: list[dict] = field(default_factory=list)  # UI params (name/type/label/default)
+    required_tools: list[str] = field(default_factory=list)  # which binaries are needed
+    description: str = ''             # hint shown in the UI
 
 
 class Registry:
-    """Хранилище всех зарегистрированных проверок."""
+    """Storage for all registered checks."""
 
     def __init__(self) -> None:
         self._checks: dict[str, CheckSpec] = {}
@@ -48,13 +48,13 @@ class Registry:
         return result
 
 
-# Глобальный реестр
+# Global registry
 registry = Registry()
 
 
 def register(id: str, label: str, category: str, params: list[dict] | None = None,
              required_tools: list[str] | None = None, description: str = ''):
-    """Декоратор для регистрации проверки."""
+    """Decorator for registering a check."""
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         registry.register(CheckSpec(
             id=id, label=label, category=category, func=func,
