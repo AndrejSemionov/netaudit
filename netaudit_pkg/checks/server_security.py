@@ -16,6 +16,7 @@ import ssl
 
 from ..registry import register
 from ..utils import run_cmd, tool_available
+from ..ssh import SSHExecutor, HostKeyMismatchError
 
 try:
     import paramiko
@@ -27,25 +28,6 @@ except ImportError:
 # Helpers
 # ===========================================================================
 
-def _ssh_connect(host, user, port, key_path, password):
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    kwargs = {'hostname': host, 'port': int(port), 'username': user, 'timeout': 10,
-              'look_for_keys': bool(key_path), 'allow_agent': bool(key_path)}
-    if key_path and key_path.strip():
-        from pathlib import Path
-        kwargs['key_filename'] = str(Path(key_path).expanduser())
-    elif password:
-        kwargs['password'] = password
-    client.connect(**kwargs)
-    return client
-
-
-def _run(client, cmd, timeout=15):
-    _, so, se = client.exec_command(cmd, timeout=timeout)
-    return so.read().decode(errors='replace'), se.read().decode(errors='replace')
-
-
 def _finding(severity, title, detail=''):
     return {'severity': severity, 'title': title, 'detail': detail}
 
@@ -54,13 +36,13 @@ def _finding(severity, title, detail=''):
 # nginx
 # ===========================================================================
 
-def audit_nginx(client) -> dict:
-    out, _ = _run(client, 'which nginx || echo NONE')
+def audit_nginx(ssh: SSHExecutor) -> dict:
+    out, _ = ssh.run('which nginx || echo NONE')
     if 'NONE' in out:
         return {'installed': False}
 
-    ver, _ = _run(client, 'nginx -v 2>&1')
-    conf, _ = _run(client, 'nginx -T 2>/dev/null')
+    ver, _ = ssh.run('nginx -v 2>&1')
+    conf, _ = ssh.run('nginx -T 2>/dev/null')
     findings = []
 
     if not conf:
@@ -102,14 +84,14 @@ def audit_nginx(client) -> dict:
 # fail2ban
 # ===========================================================================
 
-def audit_fail2ban(client) -> dict:
-    out, _ = _run(client, 'which fail2ban-client || echo NONE')
+def audit_fail2ban(ssh: SSHExecutor) -> dict:
+    out, _ = ssh.run('which fail2ban-client || echo NONE')
     if 'NONE' in out:
         return {'installed': False,
                 'findings': [_finding('medium', 'fail2ban is not installed',
                                       'no brute-force protection for SSH/web — recommended to install')]}
 
-    status, err = _run(client, 'fail2ban-client status 2>&1')
+    status, err = ssh.run('fail2ban-client status 2>&1')
     if 'Failed' in status or 'ERROR' in status or err.strip():
         return {'installed': True,
                 'findings': [_finding('low', 'no access to fail2ban status', 'requires root')]}
@@ -122,7 +104,7 @@ def audit_fail2ban(client) -> dict:
     for jail in jails:
         if not jail:
             continue
-        jstatus, _ = _run(client, f'fail2ban-client status {jail} 2>/dev/null')
+        jstatus, _ = ssh.run(f'fail2ban-client status {jail} 2>/dev/null')
         banned_m = re.search(r'Currently banned:\s*(\d+)', jstatus)
         total_m = re.search(r'Total banned:\s*(\d+)', jstatus)
         banned = int(banned_m.group(1)) if banned_m else 0
@@ -144,7 +126,7 @@ def audit_fail2ban(client) -> dict:
 # firewall
 # ===========================================================================
 
-def audit_firewall(client) -> dict:
+def audit_firewall(ssh: SSHExecutor) -> dict:
     findings = []
 
     # nftables: try reading the config file directly first (doesn't require root
@@ -155,16 +137,16 @@ def audit_firewall(client) -> dict:
     nft_conf = ''
     nft_conf_path = ''
     for path in ('/etc/nftables.conf', '/etc/nftables/nftables.conf', '/etc/nftables/main.nft'):
-        out, _ = _run(client, f'cat {path} 2>/dev/null')
+        out, _ = ssh.run(f'cat {path} 2>/dev/null')
         if out.strip():
             nft_conf = out
             nft_conf_path = path
             break
 
     # ufw?
-    ufw, _ = _run(client, 'which ufw && ufw status 2>/dev/null || echo NOUFW')
-    nft, _ = _run(client, 'nft list ruleset 2>/dev/null | head -100 || echo NONFT')
-    ipt, _ = _run(client, 'iptables -S 2>/dev/null | head -60 || echo NOIPT')
+    ufw, _ = ssh.run('which ufw && ufw status 2>/dev/null || echo NOUFW')
+    nft, _ = ssh.run('nft list ruleset 2>/dev/null | head -100 || echo NONFT')
+    ipt, _ = ssh.run('iptables -S 2>/dev/null | head -60 || echo NOIPT')
 
     active = False
     if 'Status: active' in ufw:
@@ -203,9 +185,9 @@ def audit_firewall(client) -> dict:
 # SQL (MySQL/MariaDB) — config and exposure, without logging into the DB
 # ===========================================================================
 
-def audit_sql(client) -> dict:
-    out, _ = _run(client, 'which mysql mariadb 2>/dev/null || echo NONE')
-    running, _ = _run(client, 'ss -tlnp 2>/dev/null | grep -E ":3306" || echo NOPORT')
+def audit_sql(ssh: SSHExecutor) -> dict:
+    out, _ = ssh.run('which mysql mariadb 2>/dev/null || echo NONE')
+    running, _ = ssh.run('ss -tlnp 2>/dev/null | grep -E ":3306" || echo NOPORT')
     if 'NONE' in out and 'NOPORT' in running:
         return {'installed': False}
 
@@ -221,7 +203,7 @@ def audit_sql(client) -> dict:
     # bind-address in the config (ignore commented-out lines — the earlier grep
     # also matched '#bind-address = 0.0.0.0', giving a false high on the default,
     # never-activated value from the template config)
-    bind, _ = _run(client, "grep -rh '^\\s*bind-address' /etc/mysql/ 2>/dev/null | head -3")
+    bind, _ = ssh.run("grep -rh '^\\s*bind-address' /etc/mysql/ 2>/dev/null | head -3")
     if bind.strip() and '127.0.0.1' not in bind and '0.0.0.0' in bind:
         findings.append(_finding('high', 'bind-address=0.0.0.0 in the MySQL config', bind.strip()))
 
@@ -235,8 +217,8 @@ def audit_sql(client) -> dict:
 # SSH hardening
 # ===========================================================================
 
-def audit_ssh_hardening(client) -> dict:
-    conf, _ = _run(client, "cat /etc/ssh/sshd_config 2>/dev/null; cat /etc/ssh/sshd_config.d/*.conf 2>/dev/null")
+def audit_ssh_hardening(ssh: SSHExecutor) -> dict:
+    conf, _ = ssh.run("cat /etc/ssh/sshd_config 2>/dev/null; cat /etc/ssh/sshd_config.d/*.conf 2>/dev/null")
     if not conf.strip():
         return {'findings': [_finding('low', 'no access to sshd_config')]}
 
@@ -290,20 +272,22 @@ def check_server_audit(host='', user='root', port=22, key_path='', password='') 
     if not host:
         return {'error': 'host not specified'}
     try:
-        client = _ssh_connect(host, user, port, key_path, password)
+        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+    except HostKeyMismatchError as e:
+        return {'error': str(e)}
     except Exception as e:
         return {'error': f'could not connect: {e}'}
 
     try:
         sections = {
-            'nginx': audit_nginx(client),
-            'fail2ban': audit_fail2ban(client),
-            'firewall': audit_firewall(client),
-            'sql': audit_sql(client),
-            'ssh': audit_ssh_hardening(client),
+            'nginx': audit_nginx(ssh),
+            'fail2ban': audit_fail2ban(ssh),
+            'firewall': audit_firewall(ssh),
+            'sql': audit_sql(ssh),
+            'ssh': audit_ssh_hardening(ssh),
         }
     finally:
-        client.close()
+        ssh.close()
 
     # severity summary
     counts = {'high': 0, 'medium': 0, 'low': 0, 'ok': 0}

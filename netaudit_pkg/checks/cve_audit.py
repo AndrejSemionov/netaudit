@@ -1,7 +1,6 @@
 """
 CVE audit of installed software via SSH. Two steps:
-  1. Collect facts about services (version + relevant config) - reuses
-     the logic from server_security.py (_ssh_connect/_run).
+  1. Collect facts about services (version + relevant config).
   2. Version matching via OSV.dev (https://osv.dev, no key needed, batch query).
 
 Result: a list of CVEs found for each service with severity (if a CVSS score
@@ -22,7 +21,12 @@ import httpx
 
 from ..registry import register
 from .. import storage
-from .server_security import _ssh_connect, _run, paramiko
+from ..ssh import SSHExecutor, HostKeyMismatchError
+
+try:
+    import paramiko
+except ImportError:
+    paramiko = None
 
 OSV_BATCH_URL = 'https://api.osv.dev/v1/querybatch'
 OSV_VULN_URL = 'https://api.osv.dev/v1/vulns/{id}'
@@ -38,7 +42,7 @@ def _parse_version(text: str) -> str | None:
     return m.group(1) if m else None
 
 
-def collect_packages(client) -> list[dict]:
+def collect_packages(ssh: SSHExecutor) -> list[dict]:
     """
     Returns a list of {name, version, ecosystem, raw} for known services,
     plus a general snapshot of installed deb packages (for ecosystem='Debian' in OSV).
@@ -46,41 +50,41 @@ def collect_packages(client) -> list[dict]:
     packages = []
 
     # --- nginx ---
-    out, _ = _run(client, 'nginx -v 2>&1')
+    out, _ = ssh.run('nginx -v 2>&1')
     ver = _parse_version(out)
     if ver:
         packages.append({'name': 'nginx', 'version': ver, 'ecosystem': 'Debian', 'raw': out.strip()})
 
     # --- OpenSSH ---
-    out, _ = _run(client, 'ssh -V 2>&1')
+    out, _ = ssh.run('ssh -V 2>&1')
     ver = _parse_version(out)
     if ver:
         packages.append({'name': 'openssh', 'version': ver, 'ecosystem': 'Debian', 'raw': out.strip()})
 
     # --- MySQL / MariaDB ---
-    out, _ = _run(client, 'mysql --version 2>/dev/null || mariadb --version 2>/dev/null')
+    out, _ = ssh.run('mysql --version 2>/dev/null || mariadb --version 2>/dev/null')
     ver = _parse_version(out)
     if ver:
         name = 'mariadb' if 'mariadb' in out.lower() else 'mysql'
         packages.append({'name': name, 'version': ver, 'ecosystem': 'Debian', 'raw': out.strip()})
 
     # --- PHP ---
-    out, _ = _run(client, 'php -v 2>/dev/null')
+    out, _ = ssh.run('php -v 2>/dev/null')
     ver = _parse_version(out)
     if ver:
         packages.append({'name': 'php', 'version': ver, 'ecosystem': 'Debian', 'raw': out.strip().splitlines()[0] if out.strip() else ''})
 
     # --- kernel ---
-    out, _ = _run(client, 'uname -r')
+    out, _ = ssh.run('uname -r')
     if out.strip():
         packages.append({'name': 'linux', 'version': out.strip(), 'ecosystem': 'Debian', 'raw': out.strip()})
 
     # --- WordPress (if wp-config.php is found in standard locations) ---
-    out, _ = _run(client, "find /var/www -maxdepth 3 -iname 'wp-includes' -type d 2>/dev/null | head -1")
+    out, _ = ssh.run("find /var/www -maxdepth 3 -iname 'wp-includes' -type d 2>/dev/null | head -1")
     wp_dir = out.strip()
     if wp_dir:
         base = wp_dir.rsplit('/wp-includes', 1)[0]
-        ver_out, _ = _run(client, f"grep -m1 \"\\$wp_version = \" {base}/wp-includes/version.php 2>/dev/null")
+        ver_out, _ = ssh.run(f"grep -m1 \"\\$wp_version = \" {base}/wp-includes/version.php 2>/dev/null")
         ver = _parse_version(ver_out)
         if ver:
             packages.append({'name': 'wordpress', 'version': ver, 'ecosystem': 'WordPress', 'raw': ver_out.strip()})
@@ -199,14 +203,16 @@ def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> 
     if not host:
         return {'error': 'host not specified'}
     try:
-        client = _ssh_connect(host, user, port, key_path, password)
+        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+    except HostKeyMismatchError as e:
+        return {'error': str(e)}
     except Exception as e:
         return {'error': f'could not connect: {e}'}
 
     try:
-        packages = collect_packages(client)
+        packages = collect_packages(ssh)
     finally:
-        client.close()
+        ssh.close()
 
     if not packages:
         return {'host': host, 'packages': [], 'findings': [],
