@@ -516,6 +516,12 @@ print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168
         Терминал напрямую: <code>sudo aide --init</code> (первый раз, плюс переименовать <code>aide.db.new</code> в <code>aide.db</code>), затем <code>sudo aide --check</code>.<br>
         ⚠️ После каждого легитимного обновления системы (apt upgrade и т.п.) базу нужно пересоздавать заново (снова режим «инициализировать»), иначе штатные обновления будут постоянно показываться как «подозрительные изменения».</p>
 
+        <p class="hint"><b>Проверка бэкапов (SSH)</b> — не «cron вроде настроен», а факт: бэкапы реально есть, свежие, не битые и копий больше одной. Самый частый сценарий провала — тихий: скрипт годами «работает» по крону, но давно падает с ошибкой в лог, и дыра вскрывается только в момент реального disaster recovery.<br>
+        Проверяет по каждой указанной директории: свежесть последнего файла относительно ожидаемого интервала, аномально маленький размер (подозрение на упавший на середине дамп), целостность архива (gz/tar.gz/zip, плюс эвристика для голых .sql — не HTML ли там вместо дампа), число копий (правило 3-2-1), занятость партиции.<br>
+        UI: Host + User + Port + Key path (или Password) + Директории с бэкапами (через запятую) + Ожидаемая свежесть, часов + Минимум копий.<br>
+        Установка: не требуется, работает через стандартные <code>find</code>/<code>gzip -t</code>/<code>tar -tzf</code>/<code>df</code> на целевом сервере.<br>
+        Полностью readonly — ничего не распаковывает на диск, только проверяет заголовки архивов.</p>
+
         <p class="hint"><b>DNS-аудит домена</b> — проверка настроек email-безопасности и DNS-гигиены домена: SPF (включая превышение лимита в 10 DNS-lookup, из-за которого SPF может сломаться), DKIM (перебор популярных селекторов), DMARC (наличие и строгость политики), DNSSEC (валидность цепочки подписи), dangling CNAME (риск subdomain takeover — когда CNAME указывает на несуществующий или чужой ресурс), плюс список сторонних сервисов, обнаруженных через TXT verification-токены (Google, Microsoft, и т.д.). Работает только через DNS-запросы, доступ к серверу не нужен.<br>
         UI: Domain + список поддоменов для проверки CNAME (через запятую, опционально).<br>
         Установка: не требуется, использует встроенный DNS-резолвер Python.<br>
@@ -691,6 +697,12 @@ print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168
         Install on the target server: <code>sudo apt install aide</code>.<br>
         Terminal, run directly: <code>sudo aide --init</code> (first time, plus rename <code>aide.db.new</code> to <code>aide.db</code>), then <code>sudo aide --check</code>.<br>
         ⚠️ After every legitimate system update (apt upgrade etc), the database needs to be rebuilt (reinitialize mode again), otherwise routine updates will keep showing up as "suspicious changes".</p>
+
+        <p class="hint"><b>Backup check (SSH)</b> — not "cron looks configured", but the fact: backups actually exist, are recent, aren't corrupted, and there's more than one copy. The most common failure mode is silent: a backup script "works" for years via cron but has been failing quietly into a log nobody reads, and the gap only surfaces during an actual disaster recovery, when it's too late.<br>
+        Checks per directory: freshness of the latest file against the expected interval, suspiciously small size (a sign of a dump that failed midway), archive integrity (gz/tar.gz/zip, plus a heuristic for bare .sql files — checking it isn't HTML instead of a dump), copy count (the 3-2-1 rule), partition usage.<br>
+        UI: Host + User + Port + Key path (or Password) + Backup directories (comma-separated) + Expected freshness, hours + Minimum copies.<br>
+        Install: none needed, works via standard <code>find</code>/<code>gzip -t</code>/<code>tar -tzf</code>/<code>df</code> on the target server.<br>
+        Fully read-only — nothing is extracted to disk, only archive headers are checked.</p>
 
         <p class="hint"><b>DNS domain audit</b> — checks a domain's email security and DNS hygiene: SPF (including exceeding the 10-DNS-lookup limit, which can silently break SPF), DKIM (probing common selectors), DMARC (presence and strictness of the policy), DNSSEC (validity of the signing chain), dangling CNAME (subdomain takeover risk — when a CNAME points at a resource that no longer exists or belongs to someone else), plus a list of third-party services discovered via TXT verification tokens (Google, Microsoft, etc). Pure DNS queries only, no server access needed.<br>
         UI: Domain + comma-separated list of subdomains to check for CNAME (optional).<br>

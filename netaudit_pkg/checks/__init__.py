@@ -12,3 +12,4 @@ from . import breach_check     # noqa: F401
 from . import cert_transparency  # noqa: F401
 from . import rootkit_check    # noqa: F401
 from . import aide_check       # noqa: F401
+from . import backup_check     # noqa: F401
