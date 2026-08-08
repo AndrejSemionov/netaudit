@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -126,8 +127,9 @@ def cmd_web(args):
         log.error('uvicorn not installed: pip install "uvicorn[standard]" fastapi --break-system-packages')
         sys.exit(1)
     log.info(f'Web UI: http://{args.host}:{args.port}')
-    if args.host != '127.0.0.1':
-        log.warning('Listening beyond localhost. For external access use setup-nginx with auth.')
+    # app.py читает host из этой переменной при импорте, чтобы решить,
+    # включать ли обязательную Basic Auth (см. netaudit_pkg/web_auth.py)
+    os.environ['NETAUDIT_WEB_HOST'] = args.host
     uvicorn.run('web.app:app', host=args.host, port=args.port, reload=args.reload,
                 app_dir=str(Path(__file__).resolve().parent))
 

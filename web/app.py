@@ -23,9 +23,18 @@ from netaudit_pkg.history import save_report, list_reports, load_report, ai_anal
 from netaudit_pkg import timing, storage, tools
 from netaudit_pkg import streaming
 from netaudit_pkg import history_capture
+from netaudit_pkg.web_auth import BasicAuthMiddleware, ensure_auth_configured
 
 app = FastAPI(title='NetAudit', version='2.0')
 STATIC_DIR = Path(__file__).resolve().parent / 'static'
+
+# host выставляется реальным значением в cmd_web() (netaudit.py) до старта uvicorn —
+# здесь читаем его из переменной окружения, которую cmd_web сам же и проставляет,
+# т.к. на момент импорта этого модуля host ещё не всегда известен напрямую.
+import os as _os
+_WEB_HOST = _os.environ.get('NETAUDIT_WEB_HOST', '127.0.0.1')
+ensure_auth_configured(_WEB_HOST)
+app.add_middleware(BasicAuthMiddleware, host=_WEB_HOST)
 
 
 @app.on_event('startup')
@@ -60,6 +69,11 @@ class SettingsRequest(BaseModel):
 
 class VerifyKeyRequest(BaseModel):
     api_key: str
+
+
+class WebAuthRequest(BaseModel):
+    user: str
+    password: str
 
 
 class PresetRequest(BaseModel):
@@ -204,6 +218,8 @@ def api_get_settings() -> dict:
     out.setdefault('ema_alpha', str(timing.DEFAULT_EMA_ALPHA))
     from netaudit_pkg.history import DEFAULT_AI_LANGUAGE
     out.setdefault('ai_language', DEFAULT_AI_LANGUAGE)
+    out['web_auth_user'] = storage.setting_get('web_auth_user') or ''
+    out['web_auth_configured'] = bool(storage.setting_get('web_auth_password_hash'))
     return out
 
 
@@ -220,6 +236,21 @@ def api_set_settings(req: SettingsRequest) -> dict:
 @app.post('/api/settings/verify-key')
 def api_verify_key(req: VerifyKeyRequest) -> dict:
     return verify_api_key(req.api_key)
+
+
+@app.post('/api/settings/web-auth')
+def api_set_web_auth(req: WebAuthRequest) -> dict:
+    """Меняет логин/пароль встроенной Basic Auth (см. netaudit_pkg/web_auth.py).
+    Доступно всегда, даже если сейчас сервер запущен на localhost — так можно
+    подготовить credentials заранее, до того как переключиться на 0.0.0.0."""
+    if not req.user or not req.password:
+        raise HTTPException(400, 'user and password are required')
+    if len(req.password) < 8:
+        raise HTTPException(400, 'password must be at least 8 characters')
+    from netaudit_pkg.web_auth import _hash_password
+    storage.setting_set('web_auth_user', req.user)
+    storage.setting_set('web_auth_password_hash', _hash_password(req.password))
+    return {'ok': True}
 
 
 # --- Пресеты ---

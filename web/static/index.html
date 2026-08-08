@@ -218,6 +218,26 @@
     </div>
 
     <div class="settings-group">
+      <h2 data-i18n="settings.webauth.title">Доступ к веб-интерфейсу</h2>
+      <p class="hint" data-i18n="settings.webauth.hint">Если веб-интерфейс запущен не только на localhost (например, --host 0.0.0.0), для входа обязательно требуется логин и пароль. Если их не задать заранее, при первом запуске NetAudit сам сгенерирует пароль и покажет его один раз в консоли/логе — рекомендуется сразу задать здесь свой. Чтобы сохранить новый пароль, нужно быть уже залогиненным текущим (браузер спросит его сам при первом заходе).</p>
+      <div id="webAuthStatus" class="hint" style="margin-bottom:10px"></div>
+      <div class="field-row">
+        <div class="field">
+          <label data-i18n="settings.webauth.user">Логин</label>
+          <input type="text" id="webAuthUser" placeholder="admin">
+        </div>
+        <div class="field">
+          <label data-i18n="settings.webauth.password">Новый пароль (мин. 8 символов)</label>
+          <input type="password" id="webAuthPassword" placeholder="••••••••">
+        </div>
+      </div>
+      <div class="save-row">
+        <button class="btn-sm" onclick="saveWebAuth()" data-i18n="settings.webauth.save">Сохранить доступ</button>
+        <span id="webAuthSaved" class="key-status"></span>
+      </div>
+    </div>
+
+    <div class="settings-group">
       <h2 data-i18n="settings.threshold.title">Режим sync / async</h2>
       <p class="hint" data-i18n="settings.threshold.hint">Порог: проверки с оценкой времени ≤ порога идут синхронно (сразу), длиннее — в фоне. EMA — скорость адаптации оценок (0..1).</p>
       <div class="field-row">
@@ -1302,6 +1322,10 @@ async function loadSettings() {
   document.getElementById('tgStatus').style.color = (s.telegram_token && s.telegram_token.set) ? 'var(--ok)' : 'var(--muted)';
   document.getElementById('hibpKeyStatus').textContent = (s.hibp_api_key && s.hibp_api_key.set) ? t('key.set') : t('key.unset');
   document.getElementById('hibpKeyStatus').style.color = (s.hibp_api_key && s.hibp_api_key.set) ? 'var(--ok)' : 'var(--muted)';
+  document.getElementById('webAuthUser').value = s.web_auth_user || '';
+  const waStatus = document.getElementById('webAuthStatus');
+  waStatus.textContent = s.web_auth_configured ? t('settings.webauth.configured').replace('{user}', s.web_auth_user || '') : t('settings.webauth.not_configured');
+  waStatus.style.color = s.web_auth_configured ? 'var(--ok)' : 'var(--warn)';
   loadTargets();
   loadPresetsManage();
   loadTools();
@@ -1462,6 +1486,32 @@ async function verifyKey() {
   const r = await res.json();
   el.textContent = r.ok ? t('key.ok') : '✗ ' + (r.error || t('key.failed'));
   el.style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
+}
+
+async function saveWebAuth() {
+  const user = document.getElementById('webAuthUser').value.trim();
+  const password = document.getElementById('webAuthPassword').value;
+  const el = document.getElementById('webAuthSaved');
+  if (!user || !password) {
+    el.textContent = t('settings.webauth.need_both'); el.style.color = 'var(--bad)';
+    return;
+  }
+  if (password.length < 8) {
+    el.textContent = t('settings.webauth.too_short'); el.style.color = 'var(--bad)';
+    return;
+  }
+  const res = await fetch('/api/settings/web-auth', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ user, password })
+  });
+  if (res.ok) {
+    el.textContent = t('saved'); el.style.color = 'var(--ok)';
+    document.getElementById('webAuthPassword').value = '';
+    setTimeout(() => { el.textContent = ''; loadSettings(); }, 1500);
+  } else {
+    const r = await res.json().catch(() => ({}));
+    el.textContent = '✗ ' + (r.detail || t('key.failed')); el.style.color = 'var(--bad)';
+  }
 }
 
 // ---- Цели ----
