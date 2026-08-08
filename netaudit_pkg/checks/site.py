@@ -1,4 +1,4 @@
-"""Проверки сайта-плагины: SSL (openssl), HTTP-тайминги (curl), заголовки безопасности."""
+"""Site check plugins: SSL (openssl), HTTP timings (curl), security headers."""
 
 from __future__ import annotations
 
@@ -35,24 +35,24 @@ def _ssl_stdlib(hostname: str, port: int = 443) -> dict:
 
 
 @register(
-    id='ssl', label='SSL/TLS сертификат', category='site',
+    id='ssl', label='SSL/TLS certificate', category='site',
     params=[
         {'name': 'url', 'type': 'text', 'label': 'URL', 'default': 'https://example.com'},
-        {'name': 'method', 'type': 'select', 'label': 'Инструмент',
+        {'name': 'method', 'type': 'select', 'label': 'Tool',
          'options': ['auto', 'openssl', 'python'], 'default': 'auto'},
     ],
     required_tools=[],
-    description='Протокол, шифр, цепочка сертификатов, срок годности. auto = openssl если есть, иначе python.',
+    description='Protocol, cipher, certificate chain, expiration. auto = openssl if available, otherwise python.',
 )
 def check_ssl(url: str = 'https://example.com', method: str = 'auto') -> dict:
     hostname = urlparse(url if '://' in url else f'https://{url}').hostname
     if not hostname:
-        return {'ok': False, 'error': f'не распарсить URL: {url}'}
+        return {'ok': False, 'error': f'could not parse URL: {url}'}
 
-    # выбор инструмента
+    # tool selection
     use_openssl = (method == 'openssl') or (method == 'auto' and tool_available('openssl'))
     if method == 'openssl' and not tool_available('openssl'):
-        return {'ok': False, 'error': 'openssl не установлен, а выбран явно'}
+        return {'ok': False, 'error': 'openssl is not installed, but was explicitly selected'}
     if method == 'python' or not use_openssl:
         res = _ssl_stdlib(hostname)
         res['tool_used'] = 'python'
@@ -62,7 +62,7 @@ def check_ssl(url: str = 'https://example.com', method: str = 'auto') -> dict:
                               '-servername', hostname, '-brief'], timeout=15, input_text='Q\n')
     combined = out + err
     if 'CONNECTION ESTABLISHED' not in combined and 'CONNECTED' not in combined:
-        return {'ok': False, 'error': err.strip() or out.strip() or 'не подключиться'}
+        return {'ok': False, 'error': err.strip() or out.strip() or 'could not connect'}
     protocol = cipher = None
     for line in combined.splitlines():
         if line.startswith('Protocol version:'):
@@ -79,27 +79,27 @@ def check_ssl(url: str = 'https://example.com', method: str = 'auto') -> dict:
 
 
 @register(
-    id='http', label='HTTP-тайминги', category='site',
+    id='http', label='HTTP timings', category='site',
     params=[
         {'name': 'url', 'type': 'text', 'label': 'URL', 'default': 'https://example.com'},
-        {'name': 'method', 'type': 'select', 'label': 'Инструмент',
+        {'name': 'method', 'type': 'select', 'label': 'Tool',
          'options': ['auto', 'curl', 'python'], 'default': 'auto'},
     ],
     required_tools=[],
-    description='Тайминги по фазам: DNS / TCP connect / TLS / TTFB. auto = curl если есть, иначе python.',
+    description='Per-phase timings: DNS / TCP connect / TLS / TTFB. auto = curl if available, otherwise python.',
 )
 def check_http(url: str = 'https://example.com', method: str = 'auto') -> dict:
     full = url if '://' in url else f'https://{url}'
     use_curl = (method == 'curl') or (method == 'auto' and tool_available('curl'))
     if method == 'curl' and not tool_available('curl'):
-        return {'error': 'curl не установлен, а выбран явно'}
+        return {'error': 'curl is not installed, but was explicitly selected'}
     if method == 'python' or not use_curl:
         return _http_python(full)
 
     code, out, err = run_cmd(['curl', '-s', '-o', '/dev/null', '-L', '--max-time', '15',
                               '-w', CURL_TIMING, full], timeout=20)
     if code != 0:
-        return {'error': err.strip() or f'curl код {code}'}
+        return {'error': err.strip() or f'curl exit code {code}'}
     try:
         t = _json.loads(out)
         for k in ('dns_ms', 'connect_ms', 'tls_ms', 'ttfb_ms', 'total_ms'):
@@ -107,15 +107,15 @@ def check_http(url: str = 'https://example.com', method: str = 'auto') -> dict:
         t['tool_used'] = 'curl'
         return t
     except (ValueError, KeyError) as e:
-        return {'error': f'парсинг curl: {e}', 'raw': out}
+        return {'error': f'curl parsing: {e}', 'raw': out}
 
 
 def _http_python(url: str) -> dict:
-    """HTTP-тайминги через httpx (fallback без curl). Фазы грубее — нет раздельного TLS."""
+    """HTTP timings via httpx (fallback without curl). Coarser phases - no separate TLS."""
     try:
         import httpx
     except ImportError:
-        return {'error': 'ни curl, ни httpx недоступны'}
+        return {'error': 'neither curl nor httpx is available'}
     import time
     try:
         start = time.monotonic()
@@ -130,14 +130,14 @@ def _http_python(url: str) -> dict:
 
 
 @register(
-    id='security_headers', label='Заголовки безопасности', category='site',
+    id='security_headers', label='Security headers', category='site',
     params=[{'name': 'url', 'type': 'text', 'label': 'URL', 'default': 'https://example.com'}],
     required_tools=['curl'],
     description='HSTS, X-Frame-Options, X-Content-Type-Options, CSP.',
 )
 def check_security_headers(url: str = 'https://example.com') -> dict:
     if not tool_available('curl'):
-        return {'error': 'curl не установлен'}
+        return {'error': 'curl is not installed'}
     full = url if '://' in url else f'https://{url}'
     code, out, err = run_cmd(['curl', '-s', '-I', '-L', '--max-time', '10', full], timeout=15)
     if code != 0:

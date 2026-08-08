@@ -1,4 +1,4 @@
-"""Локальные проверки (порты, firewall, CPU/RAM/диск), SSH-аудит, iperf3 — как плагины."""
+"""Local checks (ports, firewall, CPU/RAM/disk), SSH audit, iperf3 - as plugins."""
 
 from __future__ import annotations
 
@@ -21,13 +21,13 @@ except ImportError:
 
 
 @register(
-    id='ports', label='Открытые порты', category='security',
+    id='ports', label='Open ports', category='security',
     required_tools=['ss'],
-    description='Слушающие TCP/UDP порты (ss).',
+    description='Listening TCP/UDP ports (ss).',
 )
 def check_ports() -> dict:
     if not tool_available('ss'):
-        return {'error': 'ss не найден'}
+        return {'error': 'ss not found'}
     code, out, err = run_cmd(['ss', '-tulnp'])
     if code != 0:
         code, out, err = run_cmd(['ss', '-tuln'])
@@ -43,26 +43,26 @@ def check_ports() -> dict:
 
 @register(
     id='firewall', label='Firewall', category='security',
-    description='Статус ufw / количество правил nftables.',
+    description='ufw status / nftables rule count.',
 )
 def check_firewall() -> dict:
     result = {}
     if tool_available('ufw'):
         code, out, _ = run_cmd(['ufw', 'status'])
-        result['ufw'] = out.strip().splitlines()[0] if out.strip() else 'нет данных'
+        result['ufw'] = out.strip().splitlines()[0] if out.strip() else 'no data'
     if tool_available('nft'):
         code, out, _ = run_cmd(['nft', 'list', 'ruleset'])
-        result['nftables_rules_count'] = len(out.strip().splitlines()) if code == 0 else 'нет доступа (root)'
-    return result or {'note': 'ufw/nft не найдены'}
+        result['nftables_rules_count'] = len(out.strip().splitlines()) if code == 0 else 'no access (root)'
+    return result or {'note': 'ufw/nft not found'}
 
 
 @register(
-    id='performance', label='CPU / RAM / диск', category='performance',
-    description='Использование ресурсов системы (psutil).',
+    id='performance', label='CPU / RAM / disk', category='performance',
+    description='System resource usage (psutil).',
 )
 def check_performance() -> dict:
     if psutil is None:
-        return {'error': 'psutil не установлен (pip install psutil --break-system-packages)'}
+        return {'error': 'psutil not installed (pip install psutil --break-system-packages)'}
     disks = []
     for part in psutil.disk_partitions(all=False):
         try:
@@ -82,34 +82,34 @@ REMOTE_CHECKS = {
     'disk_usage': 'df -h --output=target,size,pcent -x tmpfs -x devtmpfs',
     'memory': 'free -h',
     'open_ports': 'ss -tulnp 2>/dev/null || ss -tuln',
-    'firewall_ufw': 'ufw status 2>/dev/null || echo "нет доступа"',
-    'firewall_nft': 'nft list ruleset 2>/dev/null | head -50 || echo "нет доступа (root)"',
-    'failed_ssh_logins': 'journalctl -u ssh -u sshd --since "-24 hours" 2>/dev/null | grep -i "failed\\|invalid" | tail -20 || echo "journalctl недоступен"',
-    'fail2ban_status': 'fail2ban-client status 2>/dev/null || echo "fail2ban не установлен"',
-    'unattended_upgrades': 'systemctl is-enabled unattended-upgrades 2>/dev/null || echo "не найден"',
-    'sshd_config': "grep -E '^(PermitRootLogin|PasswordAuthentication|Port)' /etc/ssh/sshd_config 2>/dev/null || echo 'нет доступа'",
+    'firewall_ufw': 'ufw status 2>/dev/null || echo "no access"',
+    'firewall_nft': 'nft list ruleset 2>/dev/null | head -50 || echo "no access (root)"',
+    'failed_ssh_logins': 'journalctl -u ssh -u sshd --since "-24 hours" 2>/dev/null | grep -i "failed\\|invalid" | tail -20 || echo "journalctl unavailable"',
+    'fail2ban_status': 'fail2ban-client status 2>/dev/null || echo "fail2ban not installed"',
+    'unattended_upgrades': 'systemctl is-enabled unattended-upgrades 2>/dev/null || echo "not found"',
+    'sshd_config': "grep -E '^(PermitRootLogin|PasswordAuthentication|Port)' /etc/ssh/sshd_config 2>/dev/null || echo 'no access'",
     'load_average': 'cat /proc/loadavg',
 }
 
 
 @register(
-    id='ssh_audit', label='SSH-аудит сервера', category='server',
+    id='ssh_audit', label='Server SSH audit', category='server',
     params=[
-        {'name': 'host', 'type': 'text', 'label': 'Хост', 'default': ''},
-        {'name': 'user', 'type': 'text', 'label': 'Пользователь', 'default': 'root'},
-        {'name': 'port', 'type': 'number', 'label': 'Порт', 'default': 22},
-        {'name': 'key_path', 'type': 'text', 'label': 'Путь к ключу', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'Пароль (если без ключа)', 'default': ''},
+        {'name': 'host', 'type': 'text', 'label': 'Host', 'default': ''},
+        {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
+        {'name': 'port', 'type': 'number', 'label': 'Port', 'default': 22},
+        {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
+        {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
     ],
     required_tools=[],
-    description='Readonly-аудит удалённого сервера: порты, firewall, fail2ban, логи логинов.',
+    description='Read-only audit of a remote server: ports, firewall, fail2ban, login logs.',
 )
 def check_ssh_audit(host: str = '', user: str = 'root', port: int = 22,
                     key_path: str = '', password: str = '') -> dict:
     if paramiko is None:
-        return {'error': 'paramiko не установлен (pip install paramiko --break-system-packages)'}
+        return {'error': 'paramiko not installed (pip install paramiko --break-system-packages)'}
     if not host:
-        return {'error': 'не указан host'}
+        return {'error': 'host not specified'}
     from pathlib import Path
     port = int(port)
     client = paramiko.SSHClient()
@@ -122,35 +122,35 @@ def check_ssh_audit(host: str = '', user: str = 'root', port: int = 22,
             kwargs['password'] = password
         client.connect(**kwargs)
     except (paramiko.AuthenticationException, paramiko.SSHException, socket.error, OSError) as e:
-        return {'error': f'не подключиться: {e}'}
+        return {'error': f'could not connect: {e}'}
     results = {}
     try:
         for name, cmd in REMOTE_CHECKS.items():
             try:
                 _, so, se = client.exec_command(cmd, timeout=15)
-                results[name] = so.read().decode(errors='replace').strip() or se.read().decode(errors='replace').strip() or '(пусто)'
+                results[name] = so.read().decode(errors='replace').strip() or se.read().decode(errors='replace').strip() or '(empty)'
             except (paramiko.SSHException, socket.timeout) as e:
-                results[name] = f'ошибка: {e}'
+                results[name] = f'error: {e}'
     finally:
         client.close()
     return {'host': host, 'user': user, 'checks': results}
 
 
 @register(
-    id='iperf', label='iperf3 пропускная способность', category='performance',
+    id='iperf', label='iperf3 throughput', category='performance',
     params=[
-        {'name': 'server', 'type': 'text', 'label': 'iperf3-сервер', 'default': ''},
-        {'name': 'port', 'type': 'number', 'label': 'Порт', 'default': 5201},
-        {'name': 'duration', 'type': 'number', 'label': 'Секунд', 'default': 10},
+        {'name': 'server', 'type': 'text', 'label': 'iperf3 server', 'default': ''},
+        {'name': 'port', 'type': 'number', 'label': 'Port', 'default': 5201},
+        {'name': 'duration', 'type': 'number', 'label': 'Seconds', 'default': 10},
     ],
     required_tools=['iperf3'],
-    description='Реальная скорость upload/download (нужен `iperf3 -s` на другом конце).',
+    description='Real upload/download speed (needs `iperf3 -s` running on the other end).',
 )
 def check_iperf(server: str = '', port: int = 5201, duration: int = 10) -> dict:
     if not tool_available('iperf3'):
-        return {'error': 'iperf3 не установлен (apt install iperf3)'}
+        return {'error': 'iperf3 not installed (apt install iperf3)'}
     if not server:
-        return {'error': 'не указан server'}
+        return {'error': 'server not specified'}
     port, duration = int(port), int(duration)
 
     def one(reverse):
@@ -158,13 +158,13 @@ def check_iperf(server: str = '', port: int = 5201, duration: int = 10) -> dict:
         if reverse: cmd.append('-R')
         code, out, err = run_cmd(cmd, timeout=duration + 15)
         if code != 0:
-            return {'error': err.strip() or f'iperf3 код {code}. Запущен ли `iperf3 -s` на {server}?'}
+            return {'error': err.strip() or f'iperf3 exit code {code}. Is `iperf3 -s` running on {server}?'}
         try:
             data = _json.loads(out)
             s = data.get('end', {}).get('sum_received') or data.get('end', {}).get('sum_sent') or {}
             return {'mbps': round(s.get('bits_per_second', 0) / 1e6, 1),
                     'retransmits': data.get('end', {}).get('sum_sent', {}).get('retransmits')}
         except (_json.JSONDecodeError, KeyError) as e:
-            return {'error': f'парсинг iperf3: {e}'}
+            return {'error': f'iperf3 parsing: {e}'}
 
     return {'server': server, 'upload': one(False), 'download': one(True)}

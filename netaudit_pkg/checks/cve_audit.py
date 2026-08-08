@@ -1,16 +1,16 @@
 """
-CVE-аудит установленного ПО через SSH. Два шага:
-  1. Сбор фактов о сервисах (версия + релевантный конфиг) — переиспользует
-     логику из server_security.py (_ssh_connect/_run).
-  2. Матчинг версий через OSV.dev (https://osv.dev, без ключа, batch-запрос).
+CVE audit of installed software via SSH. Two steps:
+  1. Collect facts about services (version + relevant config) - reuses
+     the logic from server_security.py (_ssh_connect/_run).
+  2. Version matching via OSV.dev (https://osv.dev, no key needed, batch query).
 
-Результат — список найденных CVE по каждому сервису с severity (если есть CVSS)
-и данными для fix (affected/fixed версии). Финальный вердикт "что делать" даёт
-общий ai_analyze() из history.py — сюда просто попадает секция 'cve' с фактами
-и конфигом, чтобы AI мог сопоставить уязвимость с реальной конфигурацией, а не
-пересказывать голый CVSS-скор.
+Result: a list of CVEs found for each service with severity (if a CVSS score
+is available) and fix data (affected/fixed versions). The final "what to do"
+verdict is given by the shared ai_analyze() in history.py - this just feeds
+in a 'cve' section with facts and config, so the AI can match a vulnerability
+against the actual configuration instead of just restating a raw CVSS score.
 
-Кэш: cve_cache в storage.py, TTL 24ч — чтобы не долбить OSV.dev на каждый прогон.
+Cache: cve_cache in storage.py, 24h TTL - to avoid hammering OSV.dev on every run.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ CACHE_TTL_HOURS = 24
 
 
 # ===========================================================================
-# Сбор версий сервисов по SSH
+# Collecting service versions over SSH
 # ===========================================================================
 
 def _parse_version(text: str) -> str | None:
@@ -40,8 +40,8 @@ def _parse_version(text: str) -> str | None:
 
 def collect_packages(client) -> list[dict]:
     """
-    Возвращает список {name, version, ecosystem, raw} для известных сервисов,
-    плюс общий срез установленных deb-пакетов (для ecosystem='Debian' в OSV).
+    Returns a list of {name, version, ecosystem, raw} for known services,
+    plus a general snapshot of installed deb packages (for ecosystem='Debian' in OSV).
     """
     packages = []
 
@@ -75,7 +75,7 @@ def collect_packages(client) -> list[dict]:
     if out.strip():
         packages.append({'name': 'linux', 'version': out.strip(), 'ecosystem': 'Debian', 'raw': out.strip()})
 
-    # --- WordPress (если найдём wp-config.php в стандартных местах) ---
+    # --- WordPress (if wp-config.php is found in standard locations) ---
     out, _ = _run(client, "find /var/www -maxdepth 3 -iname 'wp-includes' -type d 2>/dev/null | head -1")
     wp_dir = out.strip()
     if wp_dir:
@@ -89,7 +89,7 @@ def collect_packages(client) -> list[dict]:
 
 
 # ===========================================================================
-# OSV.dev — матчинг + детали
+# OSV.dev - matching + details
 # ===========================================================================
 
 def _cache_get(name: str, version: str) -> list | None:
@@ -107,7 +107,7 @@ def _cache_set(name: str, version: str, data: list) -> None:
 
 
 def query_osv(packages: list[dict]) -> dict[str, list]:
-    """Возвращает {pkg_name: [vuln_ids...]} используя batch-запрос, с кэшем."""
+    """Returns {pkg_name: [vuln_ids...]} using a batch query, with caching."""
     to_query = []
     result: dict[str, list] = {}
 
@@ -133,7 +133,7 @@ def query_osv(packages: list[dict]) -> dict[str, list]:
         resp.raise_for_status()
         batch = resp.json().get('results', [])
     except httpx.HTTPError:
-        # OSV недоступен — не валим весь чек, просто без CVE-данных по неопрошенным
+        # OSV is unreachable - don't fail the whole check, just skip CVE data for unqueried ones
         for p in to_query:
             result.setdefault(p['name'], [])
         return result
@@ -152,7 +152,7 @@ def fetch_vuln_details(vuln_id: str) -> dict:
         resp.raise_for_status()
         data = resp.json()
     except httpx.HTTPError:
-        return {'id': vuln_id, 'error': 'не удалось получить детали'}
+        return {'id': vuln_id, 'error': 'failed to fetch details'}
 
     severity = None
     for sev in data.get('severity', []):
@@ -176,32 +176,32 @@ def fetch_vuln_details(vuln_id: str) -> dict:
 
 
 # ===========================================================================
-# Комбинированный чек
+# Combined check
 # ===========================================================================
 
 @register(
-    id='cve_audit', label='CVE-аудит установленного ПО (SSH)', category='security',
+    id='cve_audit', label='CVE audit of installed software (SSH)', category='security',
     params=[
-        {'name': 'host', 'type': 'text', 'label': 'Хост', 'default': ''},
-        {'name': 'user', 'type': 'text', 'label': 'Пользователь', 'default': 'root'},
-        {'name': 'port', 'type': 'number', 'label': 'SSH-порт', 'default': 22},
-        {'name': 'key_path', 'type': 'text', 'label': 'Путь к ключу', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'Пароль (если без ключа)', 'default': ''},
+        {'name': 'host', 'type': 'text', 'label': 'Host', 'default': ''},
+        {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
+        {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
+        {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
+        {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
     ],
     required_tools=[],
-    description='Собирает версии установленного ПО (nginx, ssh, mysql/mariadb, php, kernel, wordpress) '
-                'по SSH и сверяет с базой уязвимостей OSV.dev. AI-анализ (общий ai_analyze) сопоставит '
-                'найденные CVE с реальным конфигом сервиса и скажет, что действительно нужно обновить.',
+    description='Collects installed software versions (nginx, ssh, mysql/mariadb, php, kernel, wordpress) '
+                'over SSH and checks them against the OSV.dev vulnerability database. AI analysis (shared '
+                'ai_analyze) will match found CVEs against the actual service config and say what actually needs updating.',
 )
 def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> dict:
     if paramiko is None:
-        return {'error': 'paramiko не установлен'}
+        return {'error': 'paramiko not installed'}
     if not host:
-        return {'error': 'не указан host'}
+        return {'error': 'host not specified'}
     try:
         client = _ssh_connect(host, user, port, key_path, password)
     except Exception as e:
-        return {'error': f'не подключиться: {e}'}
+        return {'error': f'could not connect: {e}'}
 
     try:
         packages = collect_packages(client)
@@ -222,11 +222,11 @@ def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> 
         if not ids:
             findings.append({
                 'package': p['name'], 'version': p['version'],
-                'severity': 'ok', 'cve': None, 'title': 'известных CVE не найдено',
+                'severity': 'ok', 'cve': None, 'title': 'no known CVEs found',
             })
             counts['ok'] += 1
             continue
-        for vid in ids[:10]:  # ограничение, чтобы не заDDoS-ить OSV на пакет с сотней CVE
+        for vid in ids[:10]:  # cap it so we don't DDoS OSV for a package with a hundred CVEs
             details = fetch_vuln_details(vid)
             score = details.get('severity')
             try:
@@ -236,7 +236,7 @@ def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> 
             if score_f is not None:
                 sev = 'critical' if score_f >= 9 else 'high' if score_f >= 7 else 'medium' if score_f >= 4 else 'low'
             else:
-                sev = 'medium'  # неизвестный score — не занижаем
+                sev = 'medium'  # unknown score - don't downplay it
             counts[sev] = counts.get(sev, 0) + 1
             findings.append({
                 'package': p['name'], 'version': p['version'], 'severity': sev,
