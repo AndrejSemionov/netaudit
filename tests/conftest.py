@@ -94,3 +94,28 @@ class FakeSSHExecutor:
 def fake_ssh():
     """A FakeSSHExecutor with no canned responses - tests set .responses directly."""
     return FakeSSHExecutor()
+
+
+@pytest.fixture
+def isolated_db(tmp_path, monkeypatch):
+    """
+    Points netaudit_pkg.storage at a temporary SQLite file for the duration of
+    a test, instead of the real ~/.netaudit/netaudit.db - so tests that touch
+    settings/presets/cve_cache/etc don't read or write the user's actual data,
+    and don't leak state between tests either.
+
+    storage.py caches one connection per thread in a threading.local, so
+    switching DB_PATH after a connection was already opened wouldn't take
+    effect for that thread - this fixture clears the cached connection
+    attribute too, forcing a fresh connect() against the new path.
+    """
+    import netaudit_pkg.storage as storage
+
+    monkeypatch.setattr(storage, 'DB_PATH', tmp_path / 'test.db')
+    if hasattr(storage._local, 'conn'):
+        storage._local.conn.close()
+        del storage._local.conn
+    yield storage
+    if hasattr(storage._local, 'conn'):
+        storage._local.conn.close()
+        del storage._local.conn
