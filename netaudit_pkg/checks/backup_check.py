@@ -1,26 +1,27 @@
 """
-Проверка бэкапов по SSH — не "cron вроде настроен", а факт: бэкапы реально
-есть, свежие, не битые и их больше одной копии.
+Backup verification over SSH - not "cron looks configured", but the fact:
+backups actually exist, are recent, aren't corrupted, and there's more than
+one copy.
 
-Самый частый сценарий провала бэкапов — тихий: скрипт годами "работает" по
-крону, но давно падает с ошибкой в лог, никто туда не смотрит, и дыра
-вскрывается только в момент реального disaster recovery, когда откатываться
-уже некуда. Это ровно тот класс проблем, который стоит проверять
-автоматически, а не полагаться на то, что кто-то вручную зайдёт и посмотрит.
+The most common backup failure mode is silent: a script "works" for years via
+cron but has been failing quietly into a log nobody reads, and the gap only
+surfaces during an actual disaster recovery, when it's too late to roll back.
+This is exactly the kind of problem worth checking automatically, rather than
+relying on someone manually noticing.
 
-Проверяется для каждой указанной директории:
-  - свежесть последнего файла (mtime) относительно ожидаемого интервала;
-  - аномально маленький размер (подозрение на упавший на середине дамп);
-  - целостность архива, если формат распознан (.gz/.tar.gz/.zip/.sql) —
-    без полной распаковки, только header-level проверка;
-  - количество файлов в директории — единственная копия нарушает базовое
-    правило "3-2-1" (минимум одна копия — уже риск, что при её порче
-    восстанавливаться будет нечем);
-  - свободное место на партиции, где лежат бэкапы (если диск почти полон,
-    следующий бэкап может тихо не поместиться и обрезаться).
+Checked for each given directory:
+  - freshness of the latest file (mtime) against the expected interval;
+  - suspiciously small size (a sign of a dump that failed midway);
+  - archive integrity if the format is recognized (.gz/.tar.gz/.zip/.sql) -
+    without full extraction, header-level check only;
+  - number of files in the directory - a single copy violates the basic
+    "3-2-1" rule (a single copy alone is already a risk: if it gets
+    corrupted, there's nothing to restore from);
+  - free space on the partition where the backups live (if the disk is
+    nearly full, the next backup could silently fail to fit or get truncated).
 
-Ничего не меняет на сервере — только чтение (stat, ls, gzip -t/tar -tzf
-без записи на диск, df).
+Never modifies anything on the server - read-only (stat, ls, gzip -t/tar -tzf
+without writing to disk, df).
 """
 
 from __future__ import annotations
@@ -58,23 +59,23 @@ def _finding(severity, title, detail=''):
     return {'severity': severity, 'title': title, 'detail': detail}
 
 
-# минимальный "разумный" размер файла бэкапа — ниже этого почти наверняка
-# означает упавший на середине дамп, а не легитимно маленькую БД
+# minimum "sane" backup file size - below this, it's almost certainly a dump
+# that failed midway, not a legitimately small database
 MIN_SANE_BACKUP_BYTES = 1024  # 1 KB
 
 ARCHIVE_EXT_RE = re.compile(r'\.(tar\.gz|tgz|gz|zip|sql|sql\.gz|bz2|tar\.bz2|xz)$', re.IGNORECASE)
 
 
 def _find_files(client, directory: str) -> list[dict]:
-    """ls -la в машиночитаемом виде через stat, каждая строка:
+    """Machine-readable ls -la via stat, each line:
     epoch_mtime|size_bytes|filename"""
-    # find вместо ls -la — не ломается на файлах с пробелами/спецсимволами
-    # в имени, и сразу даёт нужные поля через -printf
+    # find instead of ls -la - doesn't break on files with spaces/special chars
+    # in the name, and gives the needed fields directly via -printf
     cmd = (f"find {directory!r} -maxdepth 1 -type f "
            r"-printf '%T@|%s|%f\n' 2>&1")
     out, err = _run(client, cmd)
     if 'No such file or directory' in out or 'No such file or directory' in err:
-        return None  # директория не существует - отличаем от "существует, но пусто"
+        return None  # directory doesn't exist - distinguish from "exists but empty"
     files = []
     for line in out.splitlines():
         line = line.strip()
@@ -93,8 +94,8 @@ def _find_files(client, directory: str) -> list[dict]:
 
 
 def _check_archive_integrity(client, directory: str, filename: str) -> str | None:
-    """Возвращает None если целостность ок или формат не распознан (не проверяем),
-    иначе — текст ошибки. Все проверки read-only, без распаковки на диск."""
+    """Returns None if integrity is fine or the format isn't recognized (not checked),
+    otherwise an error message. All checks are read-only, nothing is extracted to disk."""
     path = f'{directory.rstrip("/")}/{filename}'
     lower = filename.lower()
     quoted = path.replace("'", "'\\''")
@@ -108,23 +109,23 @@ def _check_archive_integrity(client, directory: str, filename: str) -> str | Non
     elif lower.endswith(('.tar.bz2', '.tbz2')):
         out, err = _run(client, f"tar -tjf '{quoted}' > /dev/null 2>&1 && echo OK || echo FAIL")
     elif lower.endswith('.sql'):
-        # для голого .sql полноценной "целостности" не бывает - проверяем только,
-        # что файл не пустой и не похож на HTML-страницу ошибки (частый признак,
-        # что дамп прервался редиректом/authentication error вместо самого SQL)
+        # a bare .sql file has no real "integrity" check - only verify it isn't
+        # empty and doesn't look like an HTML error page (a common sign that
+        # the dump was cut short by a redirect/authentication error instead of SQL)
         out, err = _run(client, f"head -c 200 '{quoted}' 2>&1")
         if '<html' in out.lower() or '<!doctype' in out.lower():
-            return 'начало файла похоже на HTML, не на SQL-дамп — вероятно ошибка вместо данных'
+            return 'the start of the file looks like HTML, not an SQL dump — likely an error instead of data'
         return None
     else:
-        return None  # формат не распознан, не проверяем целостность (не ошибка)
+        return None  # format not recognized, integrity not checked (not an error)
 
     if 'FAIL' in out or 'FAIL' in err:
-        return 'архив не проходит проверку целостности (повреждён или недокачан)'
+        return 'archive fails the integrity check (corrupted or incomplete)'
     return None
 
 
 def _check_disk_space(client, directory: str) -> tuple[int | None, str | None]:
-    """Возвращает (percent_used, error)."""
+    """Returns (percent_used, error)."""
     out, err = _run(client, f"df -P {directory!r} 2>&1 | tail -1")
     parts = out.split()
     if len(parts) >= 5 and parts[4].endswith('%'):
@@ -132,42 +133,42 @@ def _check_disk_space(client, directory: str) -> tuple[int | None, str | None]:
             return int(parts[4].rstrip('%')), None
         except ValueError:
             pass
-    return None, 'не удалось определить занятость диска'
+    return None, 'could not determine disk usage'
 
 
 @register(
-    id='backup_check', label='Проверка бэкапов (SSH)', category='server',
+    id='backup_check', label='Backup check (SSH)', category='server',
     params=[
-        {'name': 'host', 'type': 'text', 'label': 'Хост', 'default': ''},
-        {'name': 'user', 'type': 'text', 'label': 'Пользователь', 'default': 'root'},
-        {'name': 'port', 'type': 'number', 'label': 'SSH-порт', 'default': 22},
-        {'name': 'key_path', 'type': 'text', 'label': 'Путь к ключу', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'Пароль (если без ключа)', 'default': ''},
-        {'name': 'directories', 'type': 'text', 'label': 'Директории с бэкапами (через запятую)',
+        {'name': 'host', 'type': 'text', 'label': 'Host', 'default': ''},
+        {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
+        {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
+        {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
+        {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
+        {'name': 'directories', 'type': 'text', 'label': 'Backup directories (comma-separated)',
          'default': '/var/backups'},
-        {'name': 'max_age_hours', 'type': 'number', 'label': 'Ожидаемая свежесть, часов', 'default': 26},
-        {'name': 'min_copies', 'type': 'number', 'label': 'Минимум копий (для 3-2-1)', 'default': 2},
+        {'name': 'max_age_hours', 'type': 'number', 'label': 'Expected freshness, hours', 'default': 26},
+        {'name': 'min_copies', 'type': 'number', 'label': 'Minimum copies (for 3-2-1)', 'default': 2},
     ],
     required_tools=[],
-    description='Проверка бэкапов по SSH: свежесть последнего файла, аномально маленький размер '
-                '(упавший дамп), целостность архива (gz/tar.gz/zip/sql), число копий на диске, '
-                'занятость партиции. Readonly — только чтение файлов и метаданных.',
+    description='Backup verification over SSH: latest file freshness, suspiciously small size '
+                '(a failed dump), archive integrity (gz/tar.gz/zip/sql), number of copies on disk, '
+                'partition usage. Read-only — only reads files and metadata.',
 )
 def check_backup(host='', user='root', port=22, key_path='', password='',
                   directories='/var/backups', max_age_hours=26, min_copies=2) -> dict:
     if paramiko is None:
-        return {'error': 'paramiko не установлен'}
+        return {'error': 'paramiko not installed'}
     if not host:
-        return {'error': 'не указан host'}
+        return {'error': 'host not specified'}
 
     dir_list = [d.strip() for d in directories.split(',') if d.strip()]
     if not dir_list:
-        return {'error': 'не указано ни одной директории'}
+        return {'error': 'no directories specified'}
 
     try:
         client = _ssh_connect(host, user, port, key_path, password)
     except Exception as e:
-        return {'error': f'не подключиться: {e}'}
+        return {'error': f'could not connect: {e}'}
 
     results = []
     all_findings = []
@@ -182,16 +183,16 @@ def check_backup(host='', user='root', port=22, key_path='', password='',
             files = _find_files(client, directory)
 
             if files is None:
-                entry['error'] = 'директория не существует'
-                all_findings.append(_finding('high', f'{directory}: директория с бэкапами не существует',
-                                              'проверь путь или задачу бэкапа целиком — возможно, она пишет в другое место'))
+                entry['error'] = 'directory does not exist'
+                all_findings.append(_finding('high', f'{directory}: backup directory does not exist',
+                                              'check the path or the whole backup job — it might be writing elsewhere'))
                 results.append(entry)
                 continue
 
             if not files:
                 entry['file_count'] = 0
-                all_findings.append(_finding('high', f'{directory}: файлов бэкапов не найдено',
-                                              'директория пуста — бэкап либо ни разу не запускался, либо всё удаляется раньше срока'))
+                all_findings.append(_finding('high', f'{directory}: no backup files found',
+                                              'the directory is empty — the backup either never ran, or everything gets deleted too soon'))
                 results.append(entry)
                 continue
 
@@ -206,20 +207,20 @@ def check_backup(host='', user='root', port=22, key_path='', password='',
 
             if age_hours > max_age_hours:
                 all_findings.append(_finding(
-                    'high', f'{directory}: последний бэкап устарел ({age_hours:.0f}ч, ожидалось ≤{max_age_hours}ч)',
-                    f'файл {latest["name"]}, проверь cron/systemd timer и лог последнего запуска на сервере'
+                    'high', f'{directory}: the latest backup is stale ({age_hours:.0f}h, expected ≤{max_age_hours}h)',
+                    f'file {latest["name"]}, check the cron/systemd timer and the last run log on the server'
                 ))
 
             if 0 < latest['size'] < MIN_SANE_BACKUP_BYTES:
                 all_findings.append(_finding(
-                    'high', f'{directory}: последний бэкап подозрительно маленький ({latest["size"]} байт)',
-                    f'файл {latest["name"]} — вероятно, скрипт упал на середине или база была пустой в момент дампа'
+                    'high', f'{directory}: the latest backup is suspiciously small ({latest["size"]} bytes)',
+                    f'file {latest["name"]} — the script likely failed midway, or the database was empty at dump time'
                 ))
 
             if len(files) < min_copies:
                 all_findings.append(_finding(
-                    'medium', f'{directory}: копий бэкапа меньше ожидаемого ({len(files)}, нужно ≥{min_copies})',
-                    'единственная копия нарушает правило 3-2-1 — при её порче восстанавливаться будет нечем'
+                    'medium', f'{directory}: fewer backup copies than expected ({len(files)}, need ≥{min_copies})',
+                    'a single copy violates the 3-2-1 rule — if it gets corrupted, there\'s nothing to restore from'
                 ))
 
             if ARCHIVE_EXT_RE.search(latest['name']):
@@ -227,7 +228,7 @@ def check_backup(host='', user='root', port=22, key_path='', password='',
                 entry['integrity_ok'] = integrity_error is None
                 if integrity_error:
                     all_findings.append(_finding(
-                        'high', f'{directory}: последний бэкап не проходит проверку целостности',
+                        'high', f'{directory}: the latest backup fails the integrity check',
                         f'{latest["name"]}: {integrity_error}'
                     ))
 
@@ -236,8 +237,8 @@ def check_backup(host='', user='root', port=22, key_path='', password='',
                 entry['disk_used_pct'] = disk_pct
                 if disk_pct >= 90:
                     all_findings.append(_finding(
-                        'medium', f'{directory}: партиция заполнена на {disk_pct}%',
-                        'следующий бэкап рискует не поместиться — освободи место или перенеси бэкапы на другой диск'
+                        'medium', f'{directory}: partition is {disk_pct}% full',
+                        'the next backup risks not fitting — free up space or move backups to another disk'
                     ))
 
             results.append(entry)
@@ -246,7 +247,7 @@ def check_backup(host='', user='root', port=22, key_path='', password='',
         client.close()
 
     if not all_findings:
-        all_findings.append(_finding('ok', 'бэкапы свежие, целые, копий достаточно'))
+        all_findings.append(_finding('ok', 'backups are fresh, intact, with enough copies'))
 
     counts = {'high': 0, 'medium': 0, 'low': 0, 'ok': 0}
     for f in all_findings:

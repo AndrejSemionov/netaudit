@@ -1,4 +1,4 @@
-"""Пакет проверок. Импорт модулей здесь регистрирует их в реестре."""
+"""Checks package. Importing modules here registers them in the registry."""
 from . import network          # noqa: F401
 from . import site             # noqa: F401
 from . import system           # noqa: F401
