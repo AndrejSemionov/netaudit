@@ -2,7 +2,7 @@
 
 [![Donate](https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/AndrejSemionov)
 
-[🇷🇺 Русский](README.md) · 🇬🇧 English
+[🇷🇺 Русский](README.en.md) · 🇬🇧 English
 
 A diagnostics tool for networks, websites and servers. Works from the **console** and via a
 **web interface**. Modular architecture: every check is a plugin, registered with a decorator
@@ -26,6 +26,50 @@ Or manually:
 sudo apt install mtr-tiny tcptraceroute dnsutils iputils-arping iperf3 -y
 pip install -r requirements.txt --break-system-packages
 ```
+
+## Getting started (2 minutes)
+
+The fastest way to see what NetAudit actually does — no server setup, no config, just run one check against a public site:
+
+```bash
+python3 netaudit.py run ssl web_security_external --url https://example.com
+```
+
+This runs two checks (SSL certificate + external web security headers) against a real target and
+prints a JSON report to your terminal. Replace `example.com` with any site you're allowed to test.
+
+Add AI analysis of the results — plain-language findings and what to fix — if you've set an
+Anthropic API key (see below):
+```bash
+python3 netaudit.py run ssl web_security_external --url https://example.com --ai
+```
+
+See every available check and what it needs:
+```bash
+python3 netaudit.py list
+```
+
+Prefer clicking over typing? Start the web UI and open it in a browser:
+```bash
+python3 netaudit.py web --host 127.0.0.1 --port 8000
+```
+Then go to `http://127.0.0.1:8000`, tick some checks in the left sidebar (start with the
+"🔒 Site audit (external)" preset if you're not sure), and click "Run Audit". The web UI has its
+own in-app "Help" tab covering every single check in detail, with exact terminal equivalents.
+
+**Set up your Anthropic API key** (for "AI analysis: what to do" in both CLI and web) either via
+the web UI (Settings tab → Anthropic API) or as an environment variable:
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+**Recommended first real audit**, if you have SSH access to a server you're allowed to test:
+```bash
+python3 netaudit.py run server_audit lynis_audit cve_audit --host 1.2.3.4 --user root --ai
+```
+This combines a general security audit, a Lynis hardening score, and a CVE check against
+installed software versions — then has the AI cross-reference the findings and tell you what
+actually needs fixing versus what's not critical.
 
 ## Full server install (from scratch)
 

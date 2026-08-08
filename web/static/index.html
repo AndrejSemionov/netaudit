@@ -209,6 +209,15 @@
     </div>
 
     <div class="settings-group">
+      <h2 data-i18n="settings.hibp.title">HaveIBeenPwned API</h2>
+      <p class="hint" data-i18n="settings.hibp.hint">Ключ для проверки утечек данных через HaveIBeenPwned (платный сервис). Без ключа проверка «Утечки данных» всё равно работает через бесплатный XposedOrNot.</p>
+      <div class="field">
+        <label><span data-i18n="settings.hibp.key.label">HIBP API-ключ</span> <span id="hibpKeyStatus" class="key-status"></span></label>
+        <input type="password" id="hibpApiKey" data-i18n="settings.hibp.key.placeholder" placeholder="оставь пустым, чтобы не менять">
+      </div>
+    </div>
+
+    <div class="settings-group">
       <h2 data-i18n="settings.threshold.title">Режим sync / async</h2>
       <p class="hint" data-i18n="settings.threshold.hint">Порог: проверки с оценкой времени ≤ порога идут синхронно (сразу), длиннее — в фоне. EMA — скорость адаптации оценок (0..1).</p>
       <div class="field-row">
@@ -389,13 +398,19 @@
         Установка: <code>sudo apt install curl</code><br>
         Терминал: <code>curl -sI https://example.com</code></p>
 
-        <p class="hint"><b>Внешний web-аудит (без доступа)</b> — комбинированная проверка сайта снаружи: заголовки, SSL, базовые сигналы — без SSH-доступа к серверу.<br>
+        <p class="hint"><b>Внешний web-аудит (без доступа)</b> — комбинированная проверка сайта снаружи: security-заголовки, устаревшие TLS, доступность чувствительных путей (.git/.env/бэкапы/composer.json и т.д.), флаги cookie (Secure/HttpOnly/SameSite), CORS-misconfiguration (отражение чужого Origin, Allow-Origin=* с Allow-Credentials=true), verbose error pages (stack trace/debug-режим в ответе на несуществующий путь) — всё без SSH-доступа к серверу.<br>
         UI: URL.<br>
         Установка: <code>sudo apt install curl</code></p>
 
         <p class="hint"><b>Проверка SQL-инъекций</b> — пассивное сканирование точек ввода (форм, параметров URL) на признаки уязвимости. Пассивный режим ничего не эксплуатирует, только проверяет реакцию.<br>
         UI: URL + режим (пассив/актив) + краулинг (да/нет).<br>
         Установка: не нужна, работает без внешних утилит. Используй только на своих сайтах — сканирование чужих без разрешения может быть незаконно.</p>
+
+        <p class="hint"><b>Проверка утечек данных (email)</b> — OSINT-проверка: засветились ли указанные email-адреса в известных утечках баз данных. Проверяет не сервер, а публичную историю утечек по конкретным адресам — полезно перед аудитом инфраструктуры: если пароль от почты сотрудника уже слит в паблик, это фактор риска независимо от того, насколько хорошо защищён сам сервер.<br>
+        UI: список email через запятую + источник(и): XposedOrNot (бесплатно, без ключа) и/или HaveIBeenPwned (нужен платный ключ, задаётся во вкладке «Настройки»).<br>
+        Установка: не нужна, оба источника — обычные HTTPS API.<br>
+        Ни один провайдер не отдаёт «весь домен» без подтверждённого владения им через их личный кабинет — поэтому здесь всегда конкретный список адресов, а не домен целиком.<br>
+        Терминал (аналог XposedOrNot): <code>curl -s https://api.xposedornot.com/v1/check-email/user@example.com</code></p>
       </div>
 
       <div class="settings-group">
@@ -458,6 +473,21 @@ print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168
         <p class="hint"><b>Вкладка «Динамика»</b> — график изменения потерь пакетов (mtr) по выбранной цели во времени, из истории прошлых прогонов.</p>
         <p class="hint"><b>Вкладка «Настройки»</b> → Anthropic API — ключ для кнопки «AI-анализ: что делать»; История трафика — фоновый сборщик снимков через MikroTik (настраивается там же, работает без кнопки, копит историю в БД); Списки репутации — свои белый/чёрный списки для оценки трафика; Инструменты системы — что установлено, можно доставить недостающее прямо из интерфейса; Пресеты — сохранённые наборы проверок.</p>
         <p class="hint"><b>Пресеты на вкладке «Аудит»</b> — отметь нужные проверки, нажми «Сохранить как пресет», потом применяй одним кликом сверху над списком проверок.</p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Безопасность (Lynis, DNS)</h2>
+        <p class="hint"><b>Lynis security-аудит (SSH)</b> — комплексная проверка защищённости сервера через утилиту Lynis: hardening index (число от 0 до 100) + список конкретных находок с уровнем важности. Подключается по SSH, сам ставит Lynis на целевом сервере если его там нет (нужен sudo).<br>
+        UI: Host + User + Port + Key path (или Password) + опция «Установить lynis, если не найден» → «Запустить аудит».<br>
+        Установка на машине с NetAudit: не требуется (только SSH-клиент, уже есть). На целевом сервере: <code>sudo apt install lynis</code> — можно поставить заранее руками, либо доверить это самой проверке.<br>
+        Терминал напрямую на целевом сервере: <code>sudo lynis audit system --quick</code>, результат смотреть в <code>/var/log/lynis-report.dat</code>.<br>
+        Если получаешь low hardening index — не паникуй, это нормально для свежей системы; смотри конкретные findings и их severity, начинай с high.</p>
+
+        <p class="hint"><b>DNS-аудит домена</b> — проверка настроек email-безопасности и DNS-гигиены домена: SPF (включая превышение лимита в 10 DNS-lookup, из-за которого SPF может сломаться), DKIM (перебор популярных селекторов), DMARC (наличие и строгость политики), DNSSEC (валидность цепочки подписи), dangling CNAME (риск subdomain takeover — когда CNAME указывает на несуществующий или чужой ресурс), плюс список сторонних сервисов, обнаруженных через TXT verification-токены (Google, Microsoft, и т.д.). Работает только через DNS-запросы, доступ к серверу не нужен.<br>
+        UI: Domain + список поддоменов для проверки CNAME (через запятую, опционально).<br>
+        Установка: не требуется, использует встроенный DNS-резолвер Python.<br>
+        Терминал (частичный аналог): <code>dig TXT example.com</code> (SPF), <code>dig TXT _dmarc.example.com</code> (DMARC), <code>dig DNSKEY example.com</code> (DNSSEC).<br>
+        Полезно запускать регулярно — dangling CNAME может появиться спустя месяцы после того, как удалили привязанный сервис (например, старый CDN или хостинг), и превратиться в дыру для захвата поддомена.</p>
       </div>
     </div>
 
@@ -525,13 +555,19 @@ print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168
         Install: <code>sudo apt install curl</code><br>
         Terminal: <code>curl -sI https://example.com</code></p>
 
-        <p class="hint"><b>External web audit (no access)</b> — combined outside-in check: headers, SSL, basic signals — without SSH access to the server.<br>
+        <p class="hint"><b>External web audit (no access)</b> — combined outside-in check: security headers, outdated TLS, exposed sensitive paths (.git/.env/backups/composer.json etc), cookie flags (Secure/HttpOnly/SameSite), CORS misconfiguration (reflecting an arbitrary Origin, Allow-Origin=* with Allow-Credentials=true), verbose error pages (stack trace/debug mode leaking in a response to a nonexistent path) — all without SSH access to the server.<br>
         UI: URL.<br>
         Install: <code>sudo apt install curl</code></p>
 
         <p class="hint"><b>SQL injection check</b> — passive scan of input points (forms, URL parameters) for signs of vulnerability. Passive mode doesn't exploit anything, only checks the response.<br>
         UI: URL + mode (passive/active) + crawl (yes/no).<br>
         Install: none needed, works without external utilities. Only use on your own sites — scanning others without permission may be illegal.</p>
+
+        <p class="hint"><b>Data breach check (email)</b> — an OSINT check: have the given email addresses shown up in known data breaches. Checks not the server but the public breach history of specific addresses — useful before auditing infrastructure: if an employee's mailbox password has already leaked, that's a risk factor regardless of how well the server itself is hardened.<br>
+        UI: comma-separated email list + source(s): XposedOrNot (free, no key) and/or HaveIBeenPwned (needs a paid key, set on the "Settings" tab).<br>
+        Install: none needed, both sources are plain HTTPS APIs.<br>
+        Neither provider hands over "the whole domain" without verified ownership through their own dashboard — so this always takes a concrete list of addresses, not a domain as a whole.<br>
+        Terminal (XposedOrNot equivalent): <code>curl -s https://api.xposedornot.com/v1/check-email/user@example.com</code></p>
       </div>
 
       <div class="settings-group">
@@ -594,6 +630,21 @@ print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168
         <p class="hint"><b>"Trends" tab</b> — a chart of packet loss (mtr) over time for a chosen target, from the history of past runs.</p>
         <p class="hint"><b>"Settings" tab</b> → Anthropic API — key for the "AI analysis: what to do" button; Traffic history — a background snapshot collector via MikroTik (configured there, runs without a button, builds up history in the DB); Reputation lists — your own allow/block lists for traffic scoring; System tools — what's installed, missing ones can be installed right from the interface; Presets — your saved check sets.</p>
         <p class="hint"><b>Presets on the "Audit" tab</b> — tick the checks you want, click "Save as preset", then apply it later with one click above the check list.</p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Security (Lynis, DNS)</h2>
+        <p class="hint"><b>Lynis security audit (SSH)</b> — a comprehensive server hardening check via the Lynis utility: a hardening index (0–100) plus a list of specific findings with severity levels. Connects over SSH and can install Lynis on the target server itself if it's missing (needs sudo).<br>
+        UI: Host + User + Port + Key path (or Password) + "Install lynis if missing" option → "Run Audit".<br>
+        Install on the NetAudit machine: none needed (just an SSH client, already present). On the target server: <code>sudo apt install lynis</code> — install it yourself ahead of time, or let the check handle it.<br>
+        Terminal, run directly on the target server: <code>sudo lynis audit system --quick</code>, results in <code>/var/log/lynis-report.dat</code>.<br>
+        A low hardening index isn't cause for panic on a fresh system — look at the specific findings and their severity, start with high.</p>
+
+        <p class="hint"><b>DNS domain audit</b> — checks a domain's email security and DNS hygiene: SPF (including exceeding the 10-DNS-lookup limit, which can silently break SPF), DKIM (probing common selectors), DMARC (presence and strictness of the policy), DNSSEC (validity of the signing chain), dangling CNAME (subdomain takeover risk — when a CNAME points at a resource that no longer exists or belongs to someone else), plus a list of third-party services discovered via TXT verification tokens (Google, Microsoft, etc). Pure DNS queries only, no server access needed.<br>
+        UI: Domain + comma-separated list of subdomains to check for CNAME (optional).<br>
+        Install: none needed, uses Python's built-in DNS resolver.<br>
+        Terminal (partial equivalent): <code>dig TXT example.com</code> (SPF), <code>dig TXT _dmarc.example.com</code> (DMARC), <code>dig DNSKEY example.com</code> (DNSSEC).<br>
+        Worth running regularly — a dangling CNAME can appear months after a linked service (an old CDN or host, say) gets decommissioned, turning into a subdomain takeover hole.</p>
       </div>
     </div>
 
@@ -1237,6 +1288,8 @@ async function loadSettings() {
   document.getElementById('keyStatus').style.color = (s.anthropic_api_key && s.anthropic_api_key.set) ? 'var(--ok)' : 'var(--muted)';
   document.getElementById('tgStatus').textContent = (s.telegram_token && s.telegram_token.set) ? t('key.set') : t('key.unset');
   document.getElementById('tgStatus').style.color = (s.telegram_token && s.telegram_token.set) ? 'var(--ok)' : 'var(--muted)';
+  document.getElementById('hibpKeyStatus').textContent = (s.hibp_api_key && s.hibp_api_key.set) ? t('key.set') : t('key.unset');
+  document.getElementById('hibpKeyStatus').style.color = (s.hibp_api_key && s.hibp_api_key.set) ? 'var(--ok)' : 'var(--muted)';
   loadTargets();
   loadPresetsManage();
   loadTools();
@@ -1376,12 +1429,15 @@ async function saveSettings() {
   if (key) settings.anthropic_api_key = key;
   const tg = document.getElementById('telegramToken').value;
   if (tg) settings.telegram_token = tg;
+  const hibp = document.getElementById('hibpApiKey').value;
+  if (hibp) settings.hibp_api_key = hibp;
 
   await fetch('/api/settings', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ settings }) });
   const el = document.getElementById('settingsSaved');
   el.textContent = t('saved'); el.style.color = 'var(--ok)';
   document.getElementById('apiKey').value = '';
   document.getElementById('telegramToken').value = '';
+  document.getElementById('hibpApiKey').value = '';
   setTimeout(() => { el.textContent = ''; loadSettings(); }, 1500);
 }
 

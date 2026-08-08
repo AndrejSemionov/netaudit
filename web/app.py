@@ -186,7 +186,7 @@ def api_analyze(req: AnalyzeRequest) -> dict:
 
 # --- Настройки ---
 # ключи, которые не отдаём обратно на фронт в открытом виде
-SECRET_KEYS = {'anthropic_api_key', 'telegram_token'}
+SECRET_KEYS = {'anthropic_api_key', 'telegram_token', 'hibp_api_key'}
 
 
 @app.get('/api/settings')

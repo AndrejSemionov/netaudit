@@ -321,6 +321,9 @@ SENSITIVE_PATHS = [
     '/.git/config', '/.env', '/wp-config.php.bak', '/wp-config.php~',
     '/.htaccess', '/server-status', '/phpinfo.php', '/.svn/entries',
     '/config.php.bak', '/backup.sql', '/.DS_Store',
+    '/.aws/credentials', '/id_rsa', '/composer.json', '/package.json',
+    '/api/swagger.json', '/swagger.json', '/swagger-ui.html', '/api-docs',
+    '/docker-compose.yml', '/.npmrc',
 ]
 
 
@@ -337,11 +340,93 @@ def _check_tls_version(hostname, version_name, ssl_version) -> bool:
         return False
 
 
+def _parse_set_cookie_headers(head: str) -> list[str]:
+    """Извлекает все строки Set-Cookie из сырых заголовков ответа curl -I.
+    Заголовки регистронезависимы, значение может начинаться с новой строки после ':'."""
+    return re.findall(r'^set-cookie:\s*(.+)$', head, re.IGNORECASE | re.MULTILINE)
+
+
+def _audit_cookies(cookie_lines: list[str]) -> list[dict]:
+    """Проверяет флаги Secure/HttpOnly/SameSite для каждой найденной cookie."""
+    findings = []
+    for line in cookie_lines:
+        name = line.split('=', 1)[0].strip()
+        lower = line.lower()
+        missing = []
+        if 'secure' not in lower:
+            missing.append('Secure')
+        if 'httponly' not in lower:
+            missing.append('HttpOnly')
+        samesite_m = re.search(r'samesite=(\w+)', lower)
+        samesite_val = samesite_m.group(1) if samesite_m else None
+        if samesite_val is None:
+            missing.append('SameSite')
+        elif samesite_val == 'none' and 'secure' not in lower:
+            findings.append(_finding('high', f'cookie "{name}": SameSite=None без Secure',
+                                      'кука отправляется в кросс-сайтовых запросах и доступна не по HTTPS'))
+        if missing:
+            sev = 'high' if 'HttpOnly' in missing and 'Secure' in missing else 'medium'
+            findings.append(_finding(sev, f'cookie "{name}": нет флага(ов) {", ".join(missing)}',
+                                      line[:120]))
+    return findings
+
+
+def _audit_cors(base: str) -> list[dict]:
+    """Проверяет CORS-заголовки на опасную комбинацию: разрешён любой Origin + credentials.
+    Отправляет заведомо чужой Origin и смотрит, что сервер отражает в ответ."""
+    findings = []
+    if not tool_available('curl'):
+        return findings
+    fake_origin = 'https://evil-attacker-test.example'
+    code, head, _ = run_cmd(['curl', '-s', '-I', '-L', '--max-time', '10',
+                              '-H', f'Origin: {fake_origin}', base], timeout=15)
+    hl = head.lower()
+    acao_m = re.search(r'^access-control-allow-origin:\s*(.+)$', head, re.IGNORECASE | re.MULTILINE)
+    acac = 'access-control-allow-credentials: true' in hl
+    if acao_m:
+        acao_val = acao_m.group(1).strip()
+        if acao_val == '*' and acac:
+            findings.append(_finding('high', 'CORS: Allow-Origin=* вместе с Allow-Credentials=true',
+                                      'по спецификации браузеры должны такое отклонять, но неверные прокси/старые клиенты могут пропустить — исправь конфиг явно'))
+        elif acao_val == fake_origin:
+            findings.append(_finding('high', 'CORS: сервер отражает любой Origin обратно',
+                                      f'ответил Allow-Origin: {acao_val} на подставной Origin — любой сайт может читать ответы от имени пользователя'))
+    return findings
+
+
+def _audit_error_page(base: str) -> list[dict]:
+    """Запрашивает заведомо несуществующий путь и ищет признаки verbose error
+    (stack trace, путь на диске, версия фреймворка в теле ответа)."""
+    findings = []
+    if not tool_available('curl'):
+        return findings
+    probe_path = '/netaudit-probe-nonexistent-' + str(abs(hash(base)) % 10000)
+    code, body, _ = run_cmd(['curl', '-s', '-L', '--max-time', '10', base + probe_path], timeout=15)
+    if not body:
+        return findings
+    lower = body.lower()
+    signals = {
+        'stack trace': ['traceback (most recent call last)', 'at System.', 'stacktrace',
+                         'stack trace:', 'exception in thread'],
+        'путь на диске': ['/var/www/', '/home/', 'c:\\inetpub', 'c:\\users\\'],
+        'версия фреймворка/языка в ошибке': ['php version', 'django version', 'werkzeug', 'debug = true',
+                                              'whoops', 'laravel', 'yii2', '<title>fatal error'],
+    }
+    for label, needles in signals.items():
+        if any(n in lower for n in needles):
+            findings.append(_finding('medium', f'verbose error page: похоже на {label}',
+                                      f'страница ошибки на {probe_path} раскрывает внутренние детали — выключи debug-режим на проде'))
+            break  # одной находки достаточно, не дублируем по каждому сигналу
+    return findings
+
+
 @register(
     id='web_security_external', label='Внешний web-аудит (без доступа)', category='site',
     params=[{'name': 'url', 'type': 'text', 'label': 'URL сайта', 'default': 'https://example.com'}],
     required_tools=['curl'],
-    description='Аудит сайта снаружи: security-заголовки, устаревшие TLS, утечка версий, доступность .git/.env/бэкапов.',
+    description='Аудит сайта снаружи: security-заголовки, устаревшие TLS, утечка версий, доступность '
+                '.git/.env/бэкапов, флаги cookie (Secure/HttpOnly/SameSite), CORS-misconfiguration, '
+                'verbose error pages.',
 )
 def check_web_security_external(url='https://example.com') -> dict:
     from urllib.parse import urlparse
@@ -363,6 +448,17 @@ def check_web_security_external(url='https://example.com') -> dict:
                          ('x-content-type-options', 'low'), ('content-security-policy', 'low')]:
             if hdr not in hl:
                 findings.append(_finding(sev, f'нет заголовка {hdr}'))
+        for hdr in ('x-powered-by', 'x-aspnet-version', 'x-aspnetmvc-version'):
+            m = re.search(rf'^{hdr}:\s*(.+)$', head, re.IGNORECASE | re.MULTILINE)
+            if m:
+                findings.append(_finding('low', f'заголовок {hdr} раскрывает технологию',
+                                          m.group(1).strip()))
+        findings.extend(_audit_cookies(_parse_set_cookie_headers(head)))
+    else:
+        head = ''
+
+    findings.extend(_audit_cors(base))
+    findings.extend(_audit_error_page(base))
 
     # устаревшие TLS
     old_tls = []
