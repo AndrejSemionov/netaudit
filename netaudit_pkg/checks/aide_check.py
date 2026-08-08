@@ -45,8 +45,11 @@ except ImportError:
     paramiko = None
 
 
-def _finding(severity, title, detail=''):
-    return {'severity': severity, 'title': title, 'detail': detail}
+def _finding(severity, title, detail='', confidence='high', id=None):
+    f = {'severity': severity, 'title': title, 'detail': detail, 'confidence': confidence}
+    if id:
+        f['id'] = id
+    return f
 
 
 SUMMARY_RE = re.compile(

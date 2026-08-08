@@ -37,8 +37,11 @@ except ImportError:
     paramiko = None
 
 
-def _finding(severity, title, detail=''):
-    return {'severity': severity, 'title': title, 'detail': detail}
+def _finding(severity, title, detail='', confidence='high', id=None):
+    f = {'severity': severity, 'title': title, 'detail': detail, 'confidence': confidence}
+    if id:
+        f['id'] = id
+    return f
 
 
 # minimum "sane" backup file size - below this, it's almost certainly a dump

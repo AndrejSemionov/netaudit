@@ -40,8 +40,11 @@ REQUEST_TIMEOUT = 12
 WILDCARD_RE = re.compile(r'^\*\.')
 
 
-def _finding(severity, title, detail=''):
-    return {'severity': severity, 'title': title, 'detail': detail}
+def _finding(severity, title, detail='', confidence='high', id=None):
+    f = {'severity': severity, 'title': title, 'detail': detail, 'confidence': confidence}
+    if id:
+        f['id'] = id
+    return f
 
 
 def _fetch_certs(query: str) -> list[dict]:
@@ -142,8 +145,11 @@ def check_cert_transparency(domain: str = 'example.com', expected_issuer_contain
     if interesting:
         findings.append(_finding(
             'medium',
-            f'found potentially forgotten/internal subdomains ({len(interesting)})',
-            ', '.join(interesting[:20]) + (' …' if len(interesting) > 20 else '')
+            f'potentially sensitive hostname(s) discovered ({len(interesting)})',
+            ', '.join(interesting[:20]) + (' …' if len(interesting) > 20 else '') +
+            ' — a hostname matching a keyword like staging/dev/admin doesn\'t by itself mean it was '
+            'forgotten or is exposed; verify whether it\'s still needed and properly access-controlled',
+            confidence='low'
         ))
 
     # ---- unexpected issuer ----

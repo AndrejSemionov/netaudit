@@ -34,8 +34,15 @@ except ImportError:
     paramiko = None
 
 
-def _finding(severity, title, detail=''):
-    return {'severity': severity, 'title': title, 'detail': detail}
+def _finding(severity, title, detail='', confidence='high', id=None):
+    """confidence: 'high' (default) - the finding is a direct fact (a file's mtime,
+    a config value). 'low'/'medium' - the finding comes from a heuristic or a tool
+    known for false positives (rkhunter/chkrootkit here) and needs a human to verify
+    it before treating it as confirmed."""
+    f = {'severity': severity, 'title': title, 'detail': detail, 'confidence': confidence}
+    if id:
+        f['id'] = id
+    return f
 
 
 # ===========================================================================
@@ -50,7 +57,7 @@ def _parse_rkhunter(raw: str) -> list[dict]:
         line = line.strip()
         if line.startswith('Warning:'):
             text = line[len('Warning:'):].strip()
-            findings.append(_finding('medium', text))
+            findings.append(_finding('medium', text, confidence='low'))
     return findings
 
 
@@ -85,7 +92,8 @@ def _parse_chkrootkit(raw: str) -> list[dict]:
         if status.startswith('INFECTED'):
             findings.append(_finding('high', f'{name}: {status}',
                                       'verify manually before drawing conclusions — false positives are known '
-                                      '(e.g. a legitimate bindshell on non-standard ports)'))
+                                      '(e.g. a legitimate bindshell on non-standard ports)',
+                                      confidence='low'))
         elif status.startswith('Vulnerable but disabled'):
             findings.append(_finding('low', f'{name}: {status}',
                                       'the command is vulnerable but not in use (not running/not in config)'))

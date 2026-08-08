@@ -41,8 +41,11 @@ TXT_SERVICE_PATTERNS = [
 ]
 
 
-def _finding(severity, title, detail=''):
-    return {'severity': severity, 'title': title, 'detail': detail}
+def _finding(severity, title, detail='', confidence='high', id=None):
+    f = {'severity': severity, 'title': title, 'detail': detail, 'confidence': confidence}
+    if id:
+        f['id'] = id
+    return f
 
 
 def _dig_txt(name: str) -> list[str]:

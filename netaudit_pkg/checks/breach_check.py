@@ -37,8 +37,11 @@ HIBP_ENDPOINT = 'https://haveibeenpwned.com/api/v3/breachedaccount/{email}'
 _XON_MIN_INTERVAL = 0.55
 
 
-def _finding(severity, title, detail=''):
-    return {'severity': severity, 'title': title, 'detail': detail}
+def _finding(severity, title, detail='', confidence='high', id=None):
+    f = {'severity': severity, 'title': title, 'detail': detail, 'confidence': confidence}
+    if id:
+        f['id'] = id
+    return f
 
 
 def _resolve_hibp_key() -> str | None:
