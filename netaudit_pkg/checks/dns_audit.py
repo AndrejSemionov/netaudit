@@ -1,8 +1,8 @@
 """
-DNS-аудит домена: SPF, DKIM, DMARC, DNSSEC, висящие CNAME.
+DNS domain audit: SPF, DKIM, DMARC, DNSSEC, dangling CNAME.
 
-Все проверки через `dig` (без прямого доступа к серверу — чисто DNS-запросы,
-работает для любого домена). Каждая находка — severity (high/medium/low/ok).
+All checks via `dig` (no direct server access needed - pure DNS queries,
+works for any domain). Each finding gets a severity (high/medium/low/ok).
 """
 
 from __future__ import annotations
@@ -12,17 +12,17 @@ import re
 from ..registry import register
 from ..utils import run_cmd, tool_available
 
-# частые DKIM-селекторы — DKIM не публикует список селекторов нигде в DNS,
-# так что приходится перебирать самые распространённые (mail-провайдеры и
-# популярные ESP используют предсказуемые имена)
+# common DKIM selectors - DKIM doesn't publish a list of selectors anywhere in
+# DNS, so the most common ones have to be brute-forced (mail providers and
+# popular ESPs use predictable names)
 COMMON_DKIM_SELECTORS = [
     'default', 'selector1', 'selector2', 'google', 'k1', 'k2',
     'dkim', 'mail', 's1', 's2', 'smtp', 'mx',
 ]
 
-# verification-токены в TXT-записях домена выдают, какими сторонними сервисами
-# пользуется владелец — полезно для профилирования инфраструктуры цели
-# (Atlassian/Jira, Google Workspace, DocuSign, MS 365, Facebook Business и т.д.)
+# verification tokens in domain TXT records reveal which third-party services
+# the owner uses - useful for profiling a target's infrastructure
+# (Atlassian/Jira, Google Workspace, DocuSign, MS 365, Facebook Business, etc)
 TXT_SERVICE_PATTERNS = [
     (r'google-site-verification=', 'Google (Search Console / Workspace)'),
     (r'atlassian-domain-verification=', 'Atlassian (Jira/Confluence)'),
@@ -36,8 +36,8 @@ TXT_SERVICE_PATTERNS = [
     (r'hubspot-developer-verification=', 'HubSpot'),
     (r'AFDVERIFICATION=|AFDVALIDATION=', 'Azure Front Door'),
     (r'MSFT=', 'Microsoft (generic)'),
-    (r'v=spf1', None),   # уже разбирается отдельно как SPF, не дублируем
-    (r'v=DMARC1', None),  # уже разбирается отдельно как DMARC
+    (r'v=spf1', None),   # already handled separately as SPF, don't duplicate
+    (r'v=DMARC1', None),  # already handled separately as DMARC
 ]
 
 
@@ -46,7 +46,7 @@ def _finding(severity, title, detail=''):
 
 
 def _dig_txt(name: str) -> list[str]:
-    """TXT-записи для имени, возвращает список сырых строк (без кавычек)."""
+    """TXT records for a name, returns a list of raw strings (unquoted)."""
     code, out, _ = run_cmd(['dig', '+short', 'TXT', name], timeout=10)
     if code != 0:
         return []
@@ -55,7 +55,7 @@ def _dig_txt(name: str) -> list[str]:
         line = line.strip()
         if not line:
             continue
-        # dig отдаёт значения в кавычках, склеенные части — убираем кавычки
+        # dig returns values quoted, with parts concatenated - strip the quotes
         records.append(line.strip('"').replace('" "', ''))
     return records
 
@@ -68,7 +68,7 @@ def _dig_cname(name: str) -> str | None:
 
 
 def _resolves(name: str) -> bool:
-    """Есть ли хоть какой-то A/AAAA/CNAME-ответ для имени."""
+    """Whether there's any A/AAAA/CNAME response for the name."""
     for rtype in ('A', 'AAAA'):
         code, out, _ = run_cmd(['dig', '+short', rtype, name], timeout=10)
         if code == 0 and out.strip():
@@ -86,36 +86,36 @@ def _check_spf(domain: str) -> list[dict]:
     spf_records = [t for t in txts if t.startswith('v=spf1')]
 
     if not spf_records:
-        findings.append(_finding('high', 'нет SPF-записи',
-                                 f'домен {domain} не публикует SPF — письма легко подделать (спуфинг)'))
+        findings.append(_finding('high', 'no SPF record',
+                                 f'domain {domain} doesn\'t publish SPF — emails are easy to spoof'))
         return findings
 
     if len(spf_records) > 1:
-        findings.append(_finding('high', 'несколько SPF-записей',
-                                 'RFC разрешает только одну TXT со spf1 — приёмники должны игнорировать все, почта может не проходить'))
+        findings.append(_finding('high', 'multiple SPF records',
+                                 'RFC allows only one spf1 TXT — receivers should ignore all of them, mail may not go through'))
 
     spf = spf_records[0]
-    # приблизительный подсчёт DNS-lookup-механизмов (include/a/mx/exists/redirect
-    # без параметра IP) — лимит RFC 7208 — 10, превышение ломает всю SPF-проверку
+    # rough count of DNS-lookup mechanisms (include/a/mx/exists/redirect
+    # without an IP argument) - the RFC 7208 limit is 10, exceeding it breaks the whole SPF check
     lookup_mechanisms = re.findall(r'(?:include|a|mx|exists|redirect)(?::\S+)?(?=\s|$)', spf)
     lookup_count = len(lookup_mechanisms)
     if lookup_count > 10:
-        findings.append(_finding('high', f'SPF превышает лимит DNS-lookup ({lookup_count}/10)',
-                                 'RFC 7208: >10 lookup — приёмники обязаны считать SPF ошибочным, вся защита отключается'))
+        findings.append(_finding('high', f'SPF exceeds the DNS-lookup limit ({lookup_count}/10)',
+                                 'RFC 7208: >10 lookups — receivers must treat SPF as an error, all protection is disabled'))
     elif lookup_count > 7:
-        findings.append(_finding('medium', f'SPF близко к лимиту lookup ({lookup_count}/10)',
-                                 'запас небольшой — добавление ещё одного include может сломать SPF'))
+        findings.append(_finding('medium', f'SPF is close to the lookup limit ({lookup_count}/10)',
+                                 'not much headroom left — adding one more include could break SPF'))
 
     if not spf.rstrip().endswith(('-all', '~all')):
         if spf.rstrip().endswith('?all') or spf.rstrip().endswith('+all'):
-            findings.append(_finding('high', 'SPF заканчивается на +all/?all',
-                                     'фактически разрешает слать от имени домена откуда угодно — SPF бесполезен'))
+            findings.append(_finding('high', 'SPF ends with +all/?all',
+                                     'effectively allows sending as this domain from anywhere — SPF is useless'))
         else:
-            findings.append(_finding('low', 'SPF не завершён явным all',
-                                     'без -all/~all политика неопределённая для приёмника'))
+            findings.append(_finding('low', 'SPF has no explicit all mechanism at the end',
+                                     'without -all/~all the policy is undefined for the receiver'))
 
     if not findings:
-        findings.append(_finding('ok', 'SPF настроен корректно', spf))
+        findings.append(_finding('ok', 'SPF is configured correctly', spf))
     return findings
 
 
@@ -133,17 +133,17 @@ def _check_dkim(domain: str) -> list[dict]:
             found.append((selector, dkim_txt))
 
     if not found:
-        return [_finding('medium', 'DKIM не обнаружен (по частым селекторам)',
-                         'проверены стандартные имена: ' + ', '.join(COMMON_DKIM_SELECTORS) +
-                         ' — реальный селектор может отличаться, спроси у провайдера почты')]
+        return [_finding('medium', 'no DKIM found (checked common selectors)',
+                         'checked standard names: ' + ', '.join(COMMON_DKIM_SELECTORS) +
+                         ' — the real selector may differ, ask your mail provider')]
 
     findings = []
     for selector, txt in found:
         if 'p=' in txt and re.search(r'p=\s*;', txt):
-            findings.append(_finding('high', f'DKIM-селектор {selector} отозван (пустой p=)',
-                                     'ключ отозван или ещё не сгенерирован — подпись не работает'))
+            findings.append(_finding('high', f'DKIM selector {selector} is revoked (empty p=)',
+                                     'the key was revoked or hasn\'t been generated yet — signing isn\'t working'))
         else:
-            findings.append(_finding('ok', f'DKIM-селектор {selector} найден и активен'))
+            findings.append(_finding('ok', f'DKIM selector {selector} found and active'))
     return findings
 
 
@@ -157,8 +157,8 @@ def _check_dmarc(domain: str) -> list[dict]:
     dmarc_txt = next((t for t in txts if t.startswith('v=DMARC1')), None)
 
     if not dmarc_txt:
-        return [_finding('high', 'нет DMARC-записи',
-                         'без DMARC приёмники не знают, что делать с письмами, не прошедшими SPF/DKIM')]
+        return [_finding('high', 'no DMARC record',
+                         'without DMARC, receivers don\'t know what to do with emails that fail SPF/DKIM')]
 
     findings = []
     policy_m = re.search(r'p=(\w+)', dmarc_txt)
@@ -167,15 +167,15 @@ def _check_dmarc(domain: str) -> list[dict]:
     if policy == 'none':
         has_rua = 'rua=' in dmarc_txt
         if has_rua:
-            findings.append(_finding('low', 'DMARC p=none (только мониторинг)',
-                                     'отчёты собираются (rua настроен), но реальной защиты от спуфинга нет — план перехода на quarantine/reject'))
+            findings.append(_finding('low', 'DMARC p=none (monitoring only)',
+                                     'reports are being collected (rua is set), but there\'s no real spoofing protection — plan a move to quarantine/reject'))
         else:
-            findings.append(_finding('medium', 'DMARC p=none без отчётов (rua)',
-                                     'ни защиты, ни видимости — DMARC фактически бесполезен в этом виде'))
+            findings.append(_finding('medium', 'DMARC p=none with no reporting (rua)',
+                                     'neither protection nor visibility — DMARC is effectively useless in this state'))
     elif policy in ('quarantine', 'reject'):
-        findings.append(_finding('ok', f'DMARC активен: p={policy}', dmarc_txt))
+        findings.append(_finding('ok', f'DMARC is active: p={policy}', dmarc_txt))
     else:
-        findings.append(_finding('medium', 'DMARC без распознанной политики p=', dmarc_txt))
+        findings.append(_finding('medium', 'DMARC has no recognized p= policy', dmarc_txt))
 
     return findings
 
@@ -187,23 +187,23 @@ def _check_dmarc(domain: str) -> list[dict]:
 def _check_dnssec(domain: str) -> list[dict]:
     code, out, _ = run_cmd(['dig', '+dnssec', '+short', 'DNSKEY', domain], timeout=10)
     if code != 0 or not out.strip():
-        return [_finding('medium', 'DNSSEC не включён',
-                         'зона не подписана — DNS-ответы можно подделать (cache poisoning), особенно на открытых резолверах')]
+        return [_finding('medium', 'DNSSEC is not enabled',
+                         'the zone is unsigned — DNS responses can be forged (cache poisoning), especially on open resolvers')]
 
     code_ds, out_ds, _ = run_cmd(['dig', '+short', 'DS', domain], timeout=10)
     if code_ds == 0 and out_ds.strip():
-        return [_finding('ok', 'DNSSEC включён, DS-запись у родительской зоны присутствует')]
-    return [_finding('medium', 'DNSKEY есть, но нет DS-записи у регистратора',
-                     'зона подписана, но цепочка доверия не замкнута — добавь DS-запись у регистратора домена')]
+        return [_finding('ok', 'DNSSEC is enabled, a DS record is present at the parent zone')]
+    return [_finding('medium', 'DNSKEY exists but no DS record at the registrar',
+                     'the zone is signed, but the chain of trust isn\'t closed — add a DS record at the domain registrar')]
 
 
 # ===========================================================================
-# Висящие CNAME (subdomain takeover risk)
+# Dangling CNAME (subdomain takeover risk)
 # ===========================================================================
 
-# частые "мусорные" цели, оставшиеся от закрытых сервисов — если CNAME
-# указывает сюда, а сам таргет не резолвится в этот сервис активно, это
-# классический subdomain takeover
+# common "orphaned" targets left over from decommissioned services - if a
+# CNAME points here and the target itself doesn't actively resolve into this
+# service, it's a classic subdomain takeover
 DANGLING_TARGET_HINTS = [
     'github.io', 'herokuapp.com', 'azurewebsites.net', 's3.amazonaws.com',
     'cloudfront.net', 'netlify.app', 'vercel.app', 'wordpress.com',
@@ -223,16 +223,16 @@ def _check_dangling_cnames(domain: str, subdomains: list[str]) -> list[dict]:
         if not _resolves(cname):
             hint = next((h for h in DANGLING_TARGET_HINTS if h in cname), None)
             severity = 'high' if hint else 'medium'
-            findings.append(_finding(severity, f'висящий CNAME: {full} → {cname}',
-                                     'цель не резолвится — риск subdomain takeover, если сервис-платформа свободно раздаёт такие имена'
-                                     + (f' (похоже на {hint})' if hint else '')))
+            findings.append(_finding(severity, f'dangling CNAME: {full} → {cname}',
+                                     'the target doesn\'t resolve — subdomain takeover risk if the platform freely gives out such names'
+                                     + (f' (looks like {hint})' if hint else '')))
     if checked and not findings:
-        findings.append(_finding('ok', f'проверено CNAME-целей: {checked}, висящих не найдено'))
+        findings.append(_finding('ok', f'checked {checked} CNAME target(s), no dangling ones found'))
     return findings
 
 
 # ===========================================================================
-# Обнаруженные сторонние сервисы (через verification-токены в TXT)
+# Discovered third-party services (via verification tokens in TXT)
 # ===========================================================================
 
 def _check_discovered_services(domain: str) -> list[dict]:
@@ -241,39 +241,39 @@ def _check_discovered_services(domain: str) -> list[dict]:
     for txt in txts:
         for pattern, label in TXT_SERVICE_PATTERNS:
             if label is None:
-                continue  # SPF/DMARC — не дублируем, у них своя секция
+                continue  # SPF/DMARC — don't duplicate, they have their own section
             if re.search(pattern, txt, re.IGNORECASE):
                 found.append(label)
 
     if not found:
-        return [_finding('ok', 'сторонних verification-токенов в TXT не обнаружено')]
+        return [_finding('ok', 'no third-party verification tokens found in TXT')]
 
     findings = []
     for label in sorted(set(found)):
-        findings.append(_finding('low', f'обнаружен сервис: {label}',
-                                 'verification-токен в TXT-записи — раскрывает используемую инфраструктуру'))
+        findings.append(_finding('low', f'service detected: {label}',
+                                 'a verification token in a TXT record — reveals infrastructure in use'))
     return findings
 
 
 # ===========================================================================
-# Комбинированная проверка
+# Combined check
 # ===========================================================================
 
 @register(
-    id='dns_audit', label='DNS-аудит домена', category='site',
+    id='dns_audit', label='DNS domain audit', category='site',
     params=[
-        {'name': 'domain', 'type': 'text', 'label': 'Домен', 'default': 'example.com'},
-        {'name': 'subdomains_to_check', 'type': 'text', 'label': 'Поддомены для CNAME-проверки (через запятую)',
+        {'name': 'domain', 'type': 'text', 'label': 'Domain', 'default': 'example.com'},
+        {'name': 'subdomains_to_check', 'type': 'text', 'label': 'Subdomains for CNAME check (comma-separated)',
          'default': 'www,mail,blog,shop,cdn,static'},
     ],
     required_tools=['dig'],
-    description='SPF/DKIM/DMARC/DNSSEC + поиск висящих CNAME (subdomain takeover). Только DNS-запросы, без доступа к серверу.',
+    description='SPF/DKIM/DMARC/DNSSEC + dangling CNAME detection (subdomain takeover). DNS queries only, no server access.',
 )
 def check_dns_audit(domain: str = 'example.com', subdomains_to_check: str = 'www,mail,blog,shop,cdn,static') -> dict:
     if not tool_available('dig'):
-        return {'error': 'dig не установлен (apt install dnsutils)'}
+        return {'error': 'dig is not installed (apt install dnsutils)'}
     if not domain:
-        return {'error': 'не указан domain'}
+        return {'error': 'domain not specified'}
 
     domain = domain.strip().rstrip('.')
     subs = [s.strip() for s in subdomains_to_check.split(',') if s.strip()]

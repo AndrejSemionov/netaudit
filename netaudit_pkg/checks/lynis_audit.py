@@ -1,13 +1,13 @@
 """
-Lynis-аудит удалённого сервера по SSH.
+Lynis audit of a remote server over SSH.
 
-Запускает `lynis audit system` на целевом хосте, читает машиночитаемый
-/var/log/lynis-report.dat и мапит warnings/suggestions в тот же формат
-findings (severity/title/detail), что и server_audit.
+Runs `lynis audit system` on the target host, reads the machine-readable
+/var/log/lynis-report.dat, and maps warnings/suggestions into the same
+findings format (severity/title/detail) as server_audit.
 
-Требует: lynis установлен на удалённом сервере, sudo без пароля
-(либо запуск под root) — иначе покрытие проверок сильно урезано.
-Ничего не меняет на сервере — сам lynis в audit-режиме readonly.
+Requires: lynis installed on the remote server, passwordless sudo (or
+running as root) - otherwise check coverage is significantly reduced.
+Doesn't change anything on the server - lynis itself is read-only in audit mode.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ except ImportError:
 
 
 # ===========================================================================
-# Вспомогательное (тот же паттерн, что в server_security.py)
+# Helpers (same pattern as server_security.py)
 # ===========================================================================
 
 def _ssh_connect(host, user, port, key_path, password):
@@ -47,12 +47,12 @@ def _run(client, cmd, timeout=15):
 
 def _run_sudo(client, cmd, sudo_password, timeout=15):
     """
-    sudo без TTY: обычный `sudo cmd` падает 'a terminal is required to
-    authenticate', если для пользователя не настроен NOPASSWD (частый
-    случай на чужих/клиентских серверах, где sudoers не подкрутить).
-    `sudo -S` читает пароль из stdin — работает без TTY, не требует
-    предварительной настройки sudoers на целевой машине.
-    Если passwordless sudo всё же есть, пустой stdin тоже пройдёт.
+    sudo without a TTY: a plain `sudo cmd` fails with 'a terminal is required
+    to authenticate' if NOPASSWD isn't set up for the user (a common case on
+    other people's/client servers where sudoers can't be tweaked).
+    `sudo -S` reads the password from stdin - works without a TTY, no need
+    to pre-configure sudoers on the target machine.
+    If passwordless sudo is actually available, an empty stdin also works fine.
     """
     stdin, so, se = client.exec_command(f'sudo -S -p "" {cmd}', timeout=timeout)
     stdin.write((sudo_password or '') + '\n')
@@ -66,13 +66,13 @@ def _finding(severity, title, detail=''):
 
 
 # ===========================================================================
-# Парсинг lynis-report.dat
+# Parsing lynis-report.dat
 # ===========================================================================
 
 def _parse_report(raw: str) -> dict:
     """
-    Формат report.dat — плоский key=value, повторяющиеся ключи (warning[],
-    suggestion[]) идут списком строк. Значения внутри — Test:ID|текст|доп.
+    report.dat format - flat key=value, repeated keys (warning[], suggestion[])
+    come as a list of lines. Values inside are Test:ID|text|extra.
     """
     hardening_index = None
     warnings = []
@@ -122,83 +122,84 @@ def _parse_report(raw: str) -> dict:
 
 def _to_findings(parsed: dict) -> list[dict]:
     findings = []
-    # warnings у Lynis — реальные проблемы, маппим в high
+    # Lynis warnings are real problems - map to high
     for test_id, text in parsed['warnings']:
         findings.append(_finding('high', text.strip(), f'Lynis [{test_id}]'))
-    # suggestions — рекомендации по улучшению, маппим в low
+    # suggestions are improvement recommendations - map to low
     for test_id, text in parsed['suggestions']:
         findings.append(_finding('low', text.strip(), f'Lynis [{test_id}]'))
     if not findings:
-        findings.append(_finding('ok', 'Lynis не выявил замечаний'))
+        findings.append(_finding('ok', 'Lynis found no issues'))
     return findings
 
 
 # ===========================================================================
-# Проверка
+# Check
 # ===========================================================================
 
 @register(
-    id='lynis_audit', label='Lynis security-аудит (SSH)', category='server',
+    id='lynis_audit', label='Lynis security audit (SSH)', category='server',
     params=[
-        {'name': 'host', 'type': 'text', 'label': 'Хост', 'default': ''},
-        {'name': 'user', 'type': 'text', 'label': 'Пользователь', 'default': 'root'},
-        {'name': 'port', 'type': 'number', 'label': 'SSH-порт', 'default': 22},
-        {'name': 'key_path', 'type': 'text', 'label': 'Путь к ключу', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'Пароль (если без ключа)', 'default': ''},
-        {'name': 'auto_install', 'type': 'checkbox', 'label': 'Установить lynis, если отсутствует',
+        {'name': 'host', 'type': 'text', 'label': 'Host', 'default': ''},
+        {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
+        {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
+        {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
+        {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
+        {'name': 'auto_install', 'type': 'checkbox', 'label': 'Install lynis if missing',
          'default': False},
     ],
     required_tools=[],
-    description='Security-аудит сервера через Lynis (hardening index + findings) по SSH. Readonly.',
+    description='Server security audit via Lynis (hardening index + findings) over SSH. Read-only.',
 )
 def check_lynis_audit(host='', user='root', port=22, key_path='', password='',
                        auto_install=False) -> dict:
     if paramiko is None:
-        return {'error': 'paramiko не установлен'}
+        return {'error': 'paramiko not installed'}
     if not host:
-        return {'error': 'не указан host'}
+        return {'error': 'host not specified'}
     try:
         client = _ssh_connect(host, user, port, key_path, password)
     except Exception as e:
-        return {'error': f'не подключиться: {e}'}
+        return {'error': f'could not connect: {e}'}
 
     try:
         which_out, _ = _run(client, 'which lynis || echo NOTFOUND')
         if 'NOTFOUND' in which_out:
             if not auto_install:
-                return {'error': 'lynis не установлен на сервере',
-                        'hint': 'apt install lynis -y (или включи auto_install)'}
+                return {'error': 'lynis is not installed on the server',
+                        'hint': 'apt install lynis -y (or enable auto_install)'}
             install_out, install_err = _run(
                 client, 'sudo apt-get install -y lynis 2>&1', timeout=90
             )
             which_out, _ = _run(client, 'which lynis || echo NOTFOUND')
             if 'NOTFOUND' in which_out:
-                return {'error': 'не удалось установить lynis',
+                return {'error': 'failed to install lynis',
                         'detail': (install_out + install_err)[-500:]}
 
-        # sudo без пароля? если нет — используем sudo -S с паролем через stdin,
-        # это работает без TTY и без предварительной настройки sudoers на
-        # целевой машине (актуально для чужих/клиентских серверов)
+        # passwordless sudo? if not - use sudo -S with the password over stdin,
+        # this works without a TTY and without pre-configuring sudoers on the
+        # target machine (relevant for other people's/client servers)
         sudo_check, _ = _run(client, 'sudo -n true 2>&1 && echo OK || echo NOPASS')
         no_sudo = 'NOPASS' in sudo_check
 
         if no_sudo and not password:
-            return {'error': 'нужен sudo, но passwordless sudo не настроен и пароль не передан',
-                    'hint': 'укажи «Пароль (если без ключа)» — он будет использован и для sudo -S'}
+            return {'error': 'sudo is needed, but passwordless sudo isn\'t set up and no password was given',
+                    'hint': 'set "Password (if not using a key)" — it will also be used for sudo -S'}
 
         if no_sudo:
             _run_sudo(client, 'lynis audit system --quiet --no-colors', password, timeout=180)
             report_raw, report_err = _run_sudo(client, 'cat /var/log/lynis-report.dat', password)
         else:
             _run(client, 'sudo lynis audit system --quiet --no-colors', timeout=180)
-            # файл всегда root:root с правами 640, читаем через sudo вне зависимости
-            # от того, каким запускался сам аудит — иначе cat молча падает Permission denied
+            # the file is always root:root with 640 permissions, read it via sudo
+            # regardless of how the audit itself was run - otherwise cat silently
+            # fails with Permission denied
             report_raw, report_err = _run(client, 'sudo cat /var/log/lynis-report.dat 2>&1')
 
         if not report_raw.strip() or 'hardening_index' not in report_raw:
-            return {'error': 'не удалось прочитать /var/log/lynis-report.dat',
+            return {'error': 'failed to read /var/log/lynis-report.dat',
                     'detail': report_err.strip()[:500] or report_raw.strip()[:500],
-                    'hint': 'проверь пароль sudo или права: ls -la /var/log/lynis-report.dat'}
+                    'hint': 'check the sudo password or permissions: ls -la /var/log/lynis-report.dat'}
 
     finally:
         client.close()
