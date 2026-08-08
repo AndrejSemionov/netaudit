@@ -22,6 +22,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from . import storage, threat
+from .ssh import SSHExecutor, HostKeyMismatchError
 
 try:
     import paramiko
@@ -74,17 +75,16 @@ def _take_snapshot(s: dict) -> None:
     if not s['target_ip']:
         raise RuntimeError('target_ip not specified')
 
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(hostname=s['router'], port=s['port'], username=s['user'],
-                   password=s['password'], timeout=10, look_for_keys=False, allow_agent=False)
+    try:
+        ssh = SSHExecutor(s['router'], s['user'], s['port'], key_path='', password=s['password']).connect()
+    except HostKeyMismatchError as e:
+        raise RuntimeError(str(e))
+
     try:
         cmd = f'/ip firewall connection print terse where src-address~"{s["target_ip"]}"'
-        _, stdout, stderr = client.exec_command(cmd, timeout=20)
-        out = stdout.read().decode(errors='replace')
-        err = stderr.read().decode(errors='replace')
+        out, err = ssh.run(cmd, timeout=20)
     finally:
-        client.close()
+        ssh.close()
 
     if err.strip():
         raise RuntimeError(f'router returned an error: {err.strip()[:300]}')

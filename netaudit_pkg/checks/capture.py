@@ -25,6 +25,7 @@ from collections import defaultdict
 from ..registry import register
 from ..utils import run_cmd, tool_available
 from .. import threat
+from ..ssh import SSHExecutor, HostKeyMismatchError
 
 try:
     import paramiko
@@ -269,11 +270,10 @@ def check_mikrotik_sniffer(router: str = '192.168.88.1', user: str = 'admin',
         return {'error': 'provide the device IP (target_ip) whose traffic to view'}
     port = int(port)
 
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        client.connect(hostname=router, port=port, username=user, password=password, timeout=10,
-                       look_for_keys=False, allow_agent=False)
+        ssh = SSHExecutor(router, user, port, key_path='', password=password).connect()
+    except HostKeyMismatchError as e:
+        return {'error': str(e)}
     except (paramiko.AuthenticationException, paramiko.SSHException, socket.error, OSError) as e:
         return {'error': f'could not connect to the router: {e}'}
 
@@ -281,14 +281,12 @@ def check_mikrotik_sniffer(router: str = '192.168.88.1', user: str = 'admin',
     # connection tracking shows the device's active connections: where and over which protocol.
     cmd = f'/ip firewall connection print terse where src-address~"{target_ip}"'
     try:
-        _, stdout, stderr = client.exec_command(cmd, timeout=20)
-        out = stdout.read().decode(errors='replace')
-        err = stderr.read().decode(errors='replace')
+        out, err = ssh.run(cmd, timeout=20)
     except (paramiko.SSHException, socket.timeout) as e:
-        client.close()
+        ssh.close()
         return {'error': f'error running the command on the router: {e}'}
     finally:
-        client.close()
+        ssh.close()
 
     if err.strip():
         return {'error': f'the router returned an error: {err.strip()[:300]}'}

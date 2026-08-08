@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from ..registry import register
 from ..utils import run_cmd, tool_available
+from ..ssh import SSHExecutor, HostKeyMismatchError
 
 try:
     import psutil
@@ -110,29 +111,22 @@ def check_ssh_audit(host: str = '', user: str = 'root', port: int = 22,
         return {'error': 'paramiko not installed (pip install paramiko --break-system-packages)'}
     if not host:
         return {'error': 'host not specified'}
-    from pathlib import Path
-    port = int(port)
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        kwargs = {'hostname': host, 'port': port, 'username': user, 'timeout': 10}
-        if key_path and key_path.strip():
-            kwargs['key_filename'] = str(Path(key_path).expanduser())
-        elif password:
-            kwargs['password'] = password
-        client.connect(**kwargs)
-    except (paramiko.AuthenticationException, paramiko.SSHException, socket.error, OSError) as e:
+        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+    except HostKeyMismatchError as e:
+        return {'error': str(e)}
+    except Exception as e:
         return {'error': f'could not connect: {e}'}
     results = {}
     try:
         for name, cmd in REMOTE_CHECKS.items():
             try:
-                _, so, se = client.exec_command(cmd, timeout=15)
-                results[name] = so.read().decode(errors='replace').strip() or se.read().decode(errors='replace').strip() or '(empty)'
+                out, err = ssh.run(cmd, timeout=15)
+                results[name] = out.strip() or err.strip() or '(empty)'
             except (paramiko.SSHException, socket.timeout) as e:
                 results[name] = f'error: {e}'
     finally:
-        client.close()
+        ssh.close()
     return {'host': host, 'user': user, 'checks': results}
 
 
