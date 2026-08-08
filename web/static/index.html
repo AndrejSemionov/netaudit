@@ -503,6 +503,19 @@ print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168
         Терминал напрямую на целевом сервере: <code>sudo lynis audit system --quick</code>, результат смотреть в <code>/var/log/lynis-report.dat</code>.<br>
         Если получаешь low hardening index — не паникуй, это нормально для свежей системы; смотри конкретные findings и их severity, начинай с high.</p>
 
+        <p class="hint"><b>Проверка на руткиты (rkhunter/chkrootkit, SSH)</b> — поиск известных руткитов и подменённых системных команд. Оба инструмента ищут по разным базам сигнатур, поэтому по умолчанию запускаются вместе, находки не дедуплицируются — что заметил только один из них, тоже показываем.<br>
+        UI: Host + User + Port + Key path (или Password) + галочки «rkhunter» / «chkrootkit» + «Установить недостающие инструменты».<br>
+        Установка на целевом сервере: <code>sudo apt install rkhunter chkrootkit</code> — можно заранее руками, либо доверить проверке.<br>
+        Терминал напрямую: <code>sudo rkhunter --check --skip-keypress --report-warnings-only --nocolors</code>, <code>sudo chkrootkit</code>.<br>
+        ⚠️ Оба инструмента известны ложными срабатываниями (например легитимный bindshell на Exim TLS-порту, «hidden processes» на некоторых VPS из-за особенностей виртуализации) — находка это повод разобраться вручную, а не готовый вердикт «сервер взломан».</p>
+
+        <p class="hint"><b>File Integrity Monitoring (AIDE, SSH)</b> — отслеживает изменения системных файлов вне обычных обновлений. В отличие от rkhunter/chkrootkit требует предварительного состояния: сначала строится база «эталонных» хэшей всех файлов, и только потом есть с чем сравнивать текущее состояние.<br>
+        UI: Host + User + Port + Key path (или Password) + режим («проверить изменения» или «инициализировать базу заново») + «Установить aide, если отсутствует».<br>
+        Первый запуск — обязательно с режимом «инициализировать базу заново» (создаёт эталон = текущее состояние файлов). Дальше на каждый последующий аудит — «проверить изменения» (сравнивает с этим эталоном).<br>
+        Установка на целевом сервере: <code>sudo apt install aide</code>.<br>
+        Терминал напрямую: <code>sudo aide --init</code> (первый раз, плюс переименовать <code>aide.db.new</code> в <code>aide.db</code>), затем <code>sudo aide --check</code>.<br>
+        ⚠️ После каждого легитимного обновления системы (apt upgrade и т.п.) базу нужно пересоздавать заново (снова режим «инициализировать»), иначе штатные обновления будут постоянно показываться как «подозрительные изменения».</p>
+
         <p class="hint"><b>DNS-аудит домена</b> — проверка настроек email-безопасности и DNS-гигиены домена: SPF (включая превышение лимита в 10 DNS-lookup, из-за которого SPF может сломаться), DKIM (перебор популярных селекторов), DMARC (наличие и строгость политики), DNSSEC (валидность цепочки подписи), dangling CNAME (риск subdomain takeover — когда CNAME указывает на несуществующий или чужой ресурс), плюс список сторонних сервисов, обнаруженных через TXT verification-токены (Google, Microsoft, и т.д.). Работает только через DNS-запросы, доступ к серверу не нужен.<br>
         UI: Domain + список поддоменов для проверки CNAME (через запятую, опционально).<br>
         Установка: не требуется, использует встроенный DNS-резолвер Python.<br>
@@ -665,6 +678,19 @@ print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168
         Install on the NetAudit machine: none needed (just an SSH client, already present). On the target server: <code>sudo apt install lynis</code> — install it yourself ahead of time, or let the check handle it.<br>
         Terminal, run directly on the target server: <code>sudo lynis audit system --quick</code>, results in <code>/var/log/lynis-report.dat</code>.<br>
         A low hardening index isn't cause for panic on a fresh system — look at the specific findings and their severity, start with high.</p>
+
+        <p class="hint"><b>Rootkit check (rkhunter/chkrootkit, SSH)</b> — searches for known rootkits and tampered system commands. Both tools use different signature databases, so by default they run together and findings aren't deduplicated — anything caught by only one of them still shows up.<br>
+        UI: Host + User + Port + Key path (or Password) + "rkhunter" / "chkrootkit" checkboxes + "Install missing tools".<br>
+        Install on the target server: <code>sudo apt install rkhunter chkrootkit</code> — ahead of time yourself, or let the check handle it.<br>
+        Terminal, run directly: <code>sudo rkhunter --check --skip-keypress --report-warnings-only --nocolors</code>, <code>sudo chkrootkit</code>.<br>
+        ⚠️ Both tools are known for false positives (a legitimate bindshell on Exim's TLS port, "hidden processes" on some VPS due to virtualization quirks) — a finding is a reason to investigate manually, not a ready-made verdict that the server is compromised.</p>
+
+        <p class="hint"><b>File Integrity Monitoring (AIDE, SSH)</b> — tracks changes to system files outside normal updates. Unlike rkhunter/chkrootkit it requires prior state: a database of "reference" file hashes has to be built first before there's anything to compare the current state against.<br>
+        UI: Host + User + Port + Key path (or Password) + mode ("check for changes" or "reinitialize the database") + "Install aide if missing".<br>
+        First run must use "reinitialize the database" (creates a reference = the current file state). Every subsequent audit — "check for changes" (compares against that reference).<br>
+        Install on the target server: <code>sudo apt install aide</code>.<br>
+        Terminal, run directly: <code>sudo aide --init</code> (first time, plus rename <code>aide.db.new</code> to <code>aide.db</code>), then <code>sudo aide --check</code>.<br>
+        ⚠️ After every legitimate system update (apt upgrade etc), the database needs to be rebuilt (reinitialize mode again), otherwise routine updates will keep showing up as "suspicious changes".</p>
 
         <p class="hint"><b>DNS domain audit</b> — checks a domain's email security and DNS hygiene: SPF (including exceeding the 10-DNS-lookup limit, which can silently break SPF), DKIM (probing common selectors), DMARC (presence and strictness of the policy), DNSSEC (validity of the signing chain), dangling CNAME (subdomain takeover risk — when a CNAME points at a resource that no longer exists or belongs to someone else), plus a list of third-party services discovered via TXT verification tokens (Google, Microsoft, etc). Pure DNS queries only, no server access needed.<br>
         UI: Domain + comma-separated list of subdomains to check for CNAME (optional).<br>

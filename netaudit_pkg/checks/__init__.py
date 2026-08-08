@@ -10,3 +10,5 @@ from . import lynis_audit      # noqa: F401
 from . import dns_audit        # noqa: F401
 from . import breach_check     # noqa: F401
 from . import cert_transparency  # noqa: F401
+from . import rootkit_check    # noqa: F401
+from . import aide_check       # noqa: F401
