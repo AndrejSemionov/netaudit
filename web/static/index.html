@@ -522,6 +522,13 @@ print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168
         Установка: не требуется, работает через стандартные <code>find</code>/<code>gzip -t</code>/<code>tar -tzf</code>/<code>df</code> на целевом сервере.<br>
         Полностью readonly — ничего не распаковывает на диск, только проверяет заголовки архивов.</p>
 
+        <p class="hint"><b>Аудит Docker-контейнеров (SSH)</b> — проверяет не что внутри контейнеров, а КАК они запущены: отдельная категория рисков, которую обычный аудит сервера не видит вообще.<br>
+        Смотрит по каждому запущенному контейнеру: процесс от root (при container escape — сразу root на хосте), режим <code>--privileged</code>, добавленные опасные capabilities (SYS_ADMIN, SYS_PTRACE и т.д. — обоснованные вроде NET_RAW не считаются проблемой), публичные порты (0.0.0.0 вместо 127.0.0.1), docker.sock или другие чувствительные пути хоста (/, /etc) смонтированные внутрь, образы без пиннинга версии (тег latest). Отдельно — не слушает ли сам Docker daemon TCP без TLS (порт 2375 — фактически root-доступ по сети).<br>
+        UI: Host + User + Port + Key path (или Password) + «Включать остановленные контейнеры».<br>
+        Установка: не требуется, использует уже установленный на целевом сервере <code>docker</code> (сам NetAudit его не ставит — контейнеризация обычно осознанный выбор, не то, что стоит автоматизировать).<br>
+        Терминал (аналог): <code>docker inspect &lt;container&gt;</code>, смотреть поля <code>HostConfig.Privileged</code>, <code>HostConfig.CapAdd</code>, <code>HostConfig.Binds</code>.<br>
+        Полностью readonly — только <code>docker ps</code>/<code>docker inspect</code>, ничего не меняет и не перезапускает.</p>
+
         <p class="hint"><b>DNS-аудит домена</b> — проверка настроек email-безопасности и DNS-гигиены домена: SPF (включая превышение лимита в 10 DNS-lookup, из-за которого SPF может сломаться), DKIM (перебор популярных селекторов), DMARC (наличие и строгость политики), DNSSEC (валидность цепочки подписи), dangling CNAME (риск subdomain takeover — когда CNAME указывает на несуществующий или чужой ресурс), плюс список сторонних сервисов, обнаруженных через TXT verification-токены (Google, Microsoft, и т.д.). Работает только через DNS-запросы, доступ к серверу не нужен.<br>
         UI: Domain + список поддоменов для проверки CNAME (через запятую, опционально).<br>
         Установка: не требуется, использует встроенный DNS-резолвер Python.<br>
@@ -703,6 +710,13 @@ print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168
         UI: Host + User + Port + Key path (or Password) + Backup directories (comma-separated) + Expected freshness, hours + Minimum copies.<br>
         Install: none needed, works via standard <code>find</code>/<code>gzip -t</code>/<code>tar -tzf</code>/<code>df</code> on the target server.<br>
         Fully read-only — nothing is extracted to disk, only archive headers are checked.</p>
+
+        <p class="hint"><b>Docker container audit (SSH)</b> — checks not what's inside containers, but HOW they're run: a separate risk category a regular server audit doesn't see at all.<br>
+        Looks at each running container: process running as root (on container escape — immediate root on the host), <code>--privileged</code> mode, dangerous added capabilities (SYS_ADMIN, SYS_PTRACE etc — justified ones like NET_RAW aren't flagged as a problem), public ports (0.0.0.0 instead of 127.0.0.1), docker.sock or other sensitive host paths (/, /etc) mounted inside, images without a version pin (latest tag). Separately — whether the Docker daemon itself listens on TCP without TLS (port 2375 — effectively root access over the network).<br>
+        UI: Host + User + Port + Key path (or Password) + "Include stopped containers".<br>
+        Install: none needed, uses <code>docker</code> already installed on the target server (NetAudit doesn't install it itself — containerization is usually a deliberate choice, not something to automate).<br>
+        Terminal equivalent: <code>docker inspect &lt;container&gt;</code>, look at the fields <code>HostConfig.Privileged</code>, <code>HostConfig.CapAdd</code>, <code>HostConfig.Binds</code>.<br>
+        Fully read-only — only <code>docker ps</code>/<code>docker inspect</code>, nothing changed or restarted.</p>
 
         <p class="hint"><b>DNS domain audit</b> — checks a domain's email security and DNS hygiene: SPF (including exceeding the 10-DNS-lookup limit, which can silently break SPF), DKIM (probing common selectors), DMARC (presence and strictness of the policy), DNSSEC (validity of the signing chain), dangling CNAME (subdomain takeover risk — when a CNAME points at a resource that no longer exists or belongs to someone else), plus a list of third-party services discovered via TXT verification tokens (Google, Microsoft, etc). Pure DNS queries only, no server access needed.<br>
         UI: Domain + comma-separated list of subdomains to check for CNAME (optional).<br>
