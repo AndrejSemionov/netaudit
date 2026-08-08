@@ -69,5 +69,6 @@ def list_available() -> list[dict]:
             'description': spec.description, 'params': spec.params,
             'required_tools': spec.required_tools,
             'missing_tools': missing_tools(spec.required_tools),
+            'risk_level': spec.risk_level,
         })
     return out

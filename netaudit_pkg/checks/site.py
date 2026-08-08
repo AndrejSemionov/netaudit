@@ -35,7 +35,7 @@ def _ssl_stdlib(hostname: str, port: int = 443) -> dict:
 
 
 @register(
-    id='ssl', label='SSL/TLS certificate', category='site',
+    id='ssl', label='SSL/TLS certificate', category='site', risk_level='PASSIVE',
     params=[
         {'name': 'url', 'type': 'text', 'label': 'URL', 'default': 'https://example.com'},
         {'name': 'method', 'type': 'select', 'label': 'Tool',
@@ -79,7 +79,7 @@ def check_ssl(url: str = 'https://example.com', method: str = 'auto') -> dict:
 
 
 @register(
-    id='http', label='HTTP timings', category='site',
+    id='http', label='HTTP timings', category='site', risk_level='PASSIVE',
     params=[
         {'name': 'url', 'type': 'text', 'label': 'URL', 'default': 'https://example.com'},
         {'name': 'method', 'type': 'select', 'label': 'Tool',
@@ -130,7 +130,7 @@ def _http_python(url: str) -> dict:
 
 
 @register(
-    id='security_headers', label='Security headers', category='site',
+    id='security_headers', label='Security headers', category='site', risk_level='PASSIVE',
     params=[{'name': 'url', 'type': 'text', 'label': 'URL', 'default': 'https://example.com'}],
     required_tools=['curl'],
     description='HSTS, X-Frame-Options, X-Content-Type-Options, CSP.',

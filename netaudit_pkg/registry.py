@@ -11,6 +11,27 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Any
 
+# What a check actually does to the target, in increasing order of consequence.
+# This isn't decoration - it's meant to let the CLI/web UI warn appropriately
+# before a check runs, and let future callers (scripts, CI) filter checks by
+# how much they're willing to risk touching a target.
+#
+#   PASSIVE     external/local observation with zero interaction with the target
+#               beyond what a normal DNS/TLS/HTTP client already does (dns_audit,
+#               cert_transparency, ssl, http, breach_check)
+#   READ_ONLY   reads the target over SSH/API but changes nothing (server_audit,
+#               lynis_audit, docker_audit, aide_check in 'check' mode, backup_check)
+#   ACTIVE      actively probes/tests the target beyond passive observation, in a
+#               way that could be logged, rate-limited, or trip alerting on the
+#               other end (sql_injection active mode, port scans)
+#   MODIFYING   installs packages, writes files, changes configuration on the
+#               target (auto_install=True paths, aide_check mode='init')
+#   DESTRUCTIVE could plausibly damage data or availability if something goes
+#               wrong (not currently used by any check - reserved for anything
+#               like this added later, so it's flagged loudly rather than
+#               silently defaulting to something safer-sounding)
+RISK_LEVELS = ('PASSIVE', 'READ_ONLY', 'ACTIVE', 'MODIFYING', 'DESTRUCTIVE')
+
 
 @dataclass
 class CheckSpec:
@@ -22,6 +43,14 @@ class CheckSpec:
     params: list[dict] = field(default_factory=list)  # UI params (name/type/label/default)
     required_tools: list[str] = field(default_factory=list)  # which binaries are needed
     description: str = ''             # hint shown in the UI
+    risk_level: str = 'READ_ONLY'     # see RISK_LEVELS above; READ_ONLY is the most
+                                       # common case among existing checks, so it's
+                                       # the default rather than forcing every
+                                       # @register(...) call to specify one
+
+    def __post_init__(self):
+        if self.risk_level not in RISK_LEVELS:
+            raise ValueError(f'{self.id}: risk_level must be one of {RISK_LEVELS}, got {self.risk_level!r}')
 
 
 class Registry:
@@ -53,13 +82,14 @@ registry = Registry()
 
 
 def register(id: str, label: str, category: str, params: list[dict] | None = None,
-             required_tools: list[str] | None = None, description: str = ''):
+             required_tools: list[str] | None = None, description: str = '',
+             risk_level: str = 'READ_ONLY'):
     """Decorator for registering a check."""
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         registry.register(CheckSpec(
             id=id, label=label, category=category, func=func,
             params=params or [], required_tools=required_tools or [],
-            description=description,
+            description=description, risk_level=risk_level,
         ))
         return func
     return decorator

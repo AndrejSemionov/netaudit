@@ -409,7 +409,7 @@ def _audit_error_page(base: str) -> list[dict]:
 
 
 @register(
-    id='web_security_external', label='External web audit (no access)', category='site',
+    id='web_security_external', label='External web audit (no access)', category='site', risk_level='PASSIVE',
     params=[{'name': 'url', 'type': 'text', 'label': 'Site URL', 'default': 'https://example.com'}],
     required_tools=['curl'],
     description='Audits a site from the outside: security headers, outdated TLS, version leaks, exposed '

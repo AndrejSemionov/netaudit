@@ -22,7 +22,7 @@ except ImportError:
 
 
 @register(
-    id='ports', label='Open ports', category='security',
+    id='ports', label='Open ports', category='security', risk_level='PASSIVE',
     required_tools=['ss'],
     description='Listening TCP/UDP ports (ss).',
 )
@@ -43,7 +43,7 @@ def check_ports() -> dict:
 
 
 @register(
-    id='firewall', label='Firewall', category='security',
+    id='firewall', label='Firewall', category='security', risk_level='PASSIVE',
     description='ufw status / nftables rule count.',
 )
 def check_firewall() -> dict:
@@ -58,7 +58,7 @@ def check_firewall() -> dict:
 
 
 @register(
-    id='performance', label='CPU / RAM / disk', category='performance',
+    id='performance', label='CPU / RAM / disk', category='performance', risk_level='PASSIVE',
     description='System resource usage (psutil).',
 )
 def check_performance() -> dict:
@@ -131,7 +131,7 @@ def check_ssh_audit(host: str = '', user: str = 'root', port: int = 22,
 
 
 @register(
-    id='iperf', label='iperf3 throughput', category='performance',
+    id='iperf', label='iperf3 throughput', category='performance', risk_level='ACTIVE',
     params=[
         {'name': 'server', 'type': 'text', 'label': 'iperf3 server', 'default': ''},
         {'name': 'port', 'type': 'number', 'label': 'Port', 'default': 5201},

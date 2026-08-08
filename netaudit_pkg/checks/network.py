@@ -12,7 +12,7 @@ from ..utils import run_cmd, tool_available
 
 
 @register(
-    id='mtr', label='MTR (ICMP traceroute)', category='network',
+    id='mtr', label='MTR (ICMP traceroute)', category='network', risk_level='PASSIVE',
     params=[
         {'name': 'target', 'type': 'text', 'label': 'Target (IP/host)', 'default': '8.8.8.8'},
         {'name': 'duration_sec', 'type': 'number', 'label': 'Duration, sec', 'default': 15},
@@ -85,7 +85,7 @@ def check_mtr(target: str = '8.8.8.8', duration_sec: float = 15) -> dict:
 
 
 @register(
-    id='tcptraceroute', label='TCP traceroute', category='network',
+    id='tcptraceroute', label='TCP traceroute', category='network', risk_level='PASSIVE',
     params=[
         {'name': 'target', 'type': 'text', 'label': 'Target (IP/host)', 'default': '8.8.8.8'},
         {'name': 'port', 'type': 'number', 'label': 'Port', 'default': 80},
@@ -127,7 +127,7 @@ def check_tcptraceroute(target: str = '8.8.8.8', port: int = 80, max_hops: int =
 
 
 @register(
-    id='ping', label='Ping', category='network',
+    id='ping', label='Ping', category='network', risk_level='PASSIVE',
     params=[
         {'name': 'target', 'type': 'text', 'label': 'Target', 'default': '8.8.8.8'},
         {'name': 'count', 'type': 'number', 'label': 'Packets', 'default': 10},
@@ -153,7 +153,7 @@ def check_ping(target: str = '8.8.8.8', count: int = 10) -> dict:
 
 
 @register(
-    id='dig', label='DNS (dig)', category='network',
+    id='dig', label='DNS (dig)', category='network', risk_level='PASSIVE',
     params=[
         {'name': 'hostname', 'type': 'text', 'label': 'Domain', 'default': 'google.com'},
         {'name': 'record_type', 'type': 'text', 'label': 'Record type', 'default': 'A'},
@@ -185,7 +185,7 @@ def check_dig(hostname: str = 'google.com', record_type: str = 'A') -> dict:
 
 
 @register(
-    id='arping', label='ARPing (L2, local network)', category='network',
+    id='arping', label='ARPing (L2, local network)', category='network', risk_level='PASSIVE',
     params=[
         {'name': 'target', 'type': 'text', 'label': 'IP on the local subnet', 'default': '192.168.88.1'},
         {'name': 'count', 'type': 'number', 'label': 'Packets', 'default': 5},

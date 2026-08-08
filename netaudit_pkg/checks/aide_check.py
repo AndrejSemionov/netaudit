@@ -79,7 +79,7 @@ def _parse_summary(raw: str) -> dict | None:
 
 
 @register(
-    id='aide_check', label='File Integrity Monitoring (AIDE, SSH)', category='server',
+    id='aide_check', label='File Integrity Monitoring (AIDE, SSH)', category='server', risk_level='MODIFYING',
     params=[
         {'name': 'host', 'type': 'text', 'label': 'Host', 'default': ''},
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},

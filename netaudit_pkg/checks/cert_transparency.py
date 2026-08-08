@@ -76,7 +76,7 @@ def _parse_crtsh_date(s: str) -> datetime | None:
 
 
 @register(
-    id='cert_transparency', label='Certificate Transparency monitoring', category='site',
+    id='cert_transparency', label='Certificate Transparency monitoring', category='site', risk_level='PASSIVE',
     params=[
         {'name': 'domain', 'type': 'text', 'label': 'Domain', 'default': 'example.com'},
         {'name': 'expected_issuer_contains', 'type': 'text',

@@ -263,7 +263,7 @@ def _check_discovered_services(domain: str) -> list[dict]:
 # ===========================================================================
 
 @register(
-    id='dns_audit', label='DNS domain audit', category='site',
+    id='dns_audit', label='DNS domain audit', category='site', risk_level='PASSIVE',
     params=[
         {'name': 'domain', 'type': 'text', 'label': 'Domain', 'default': 'example.com'},
         {'name': 'subdomains_to_check', 'type': 'text', 'label': 'Subdomains for CNAME check (comma-separated)',

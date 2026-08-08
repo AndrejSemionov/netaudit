@@ -111,7 +111,7 @@ def _check_email_hibp(email: str, api_key: str) -> dict:
 
 
 @register(
-    id='breach_check', label='Data breach check (email)', category='security',
+    id='breach_check', label='Data breach check (email)', category='security', risk_level='PASSIVE',
     params=[
         {'name': 'emails', 'type': 'text', 'label': 'Email addresses (comma-separated)', 'default': ''},
         {'name': 'use_xposedornot', 'type': 'checkbox', 'label': 'Check via XposedOrNot (free)',
