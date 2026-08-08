@@ -488,6 +488,12 @@ print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168
         Установка: не требуется, использует встроенный DNS-резолвер Python.<br>
         Терминал (частичный аналог): <code>dig TXT example.com</code> (SPF), <code>dig TXT _dmarc.example.com</code> (DMARC), <code>dig DNSKEY example.com</code> (DNSSEC).<br>
         Полезно запускать регулярно — dangling CNAME может появиться спустя месяцы после того, как удалили привязанный сервис (например, старый CDN или хостинг), и превратиться в дыру для захвата поддомена.</p>
+
+        <p class="hint"><b>Certificate Transparency мониторинг</b> — поиск сертификатов и поддоменов домена через публичные CT-логи (crt.sh). Каждый публично доверенный TLS-сертификат обязан попасть в CT-логи (RFC 6962), поэтому это способ найти забытые поддомены (staging/dev/old-admin и т.д.), о которых нет записи в обычном DNS-переборе, но сертификат на них когда-то выпускался. Также помогает заметить сертификат, выпущенный неожиданным издателем — например, если аккаунт у твоего CA скомпрометирован или произошла ошибка валидации домена у стороннего провайдера.<br>
+        UI: Domain + опционально «Ожидаемый издатель содержит» (например, «Let's Encrypt» — тогда всё, что выпущено не от него, подсветится как high) + «Включать истёкшие сертификаты».<br>
+        Установка: не требуется, простой HTTPS-запрос к публичному API crt.sh, без ключа.<br>
+        Терминал (аналог): <code>curl -s "https://crt.sh/?q=%.example.com&output=json"</code><br>
+        ⚠️ crt.sh на практике нестабилен и иногда медленно отвечает или временно недоступен — проверка использует короткий таймаут и в этом случае просто вернёт понятную ошибку, не блокируя остальной аудит. Если не получилось с первого раза — попробуй ещё раз чуть позже.</p>
       </div>
     </div>
 
@@ -645,6 +651,12 @@ print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168
         Install: none needed, uses Python's built-in DNS resolver.<br>
         Terminal (partial equivalent): <code>dig TXT example.com</code> (SPF), <code>dig TXT _dmarc.example.com</code> (DMARC), <code>dig DNSKEY example.com</code> (DNSSEC).<br>
         Worth running regularly — a dangling CNAME can appear months after a linked service (an old CDN or host, say) gets decommissioned, turning into a subdomain takeover hole.</p>
+
+        <p class="hint"><b>Certificate Transparency monitoring</b> — searches for certificates and subdomains of a domain via public CT logs (crt.sh). Every publicly trusted TLS certificate must be logged there (RFC 6962), which makes it a way to find forgotten subdomains (staging/dev/old-admin etc) that never show up in a normal DNS brute-force but had a certificate issued at some point. It also helps spot a certificate issued by an unexpected authority — for example if your CA account was compromised or a third-party provider made a domain-validation mistake.<br>
+        UI: Domain + optional "Expected issuer contains" (e.g. "Let's Encrypt" — anything issued by someone else gets flagged as high) + "Include expired certificates".<br>
+        Install: none needed, a plain HTTPS request to the public crt.sh API, no key.<br>
+        Terminal equivalent: <code>curl -s "https://crt.sh/?q=%.example.com&output=json"</code><br>
+        ⚠️ crt.sh is known to be unstable in practice — sometimes slow, sometimes briefly unavailable. This check uses a short timeout and returns a plain error in that case instead of blocking the rest of the audit. If it doesn't work the first time, just try again a bit later.</p>
       </div>
     </div>
 

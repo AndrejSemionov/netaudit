@@ -9,3 +9,4 @@ from . import cve_audit        # noqa: F401
 from . import lynis_audit      # noqa: F401
 from . import dns_audit        # noqa: F401
 from . import breach_check     # noqa: F401
+from . import cert_transparency  # noqa: F401
