@@ -29,30 +29,12 @@ from __future__ import annotations
 import re
 
 from ..registry import register
+from ..ssh import SSHExecutor, HostKeyMismatchError
 
 try:
     import paramiko
 except ImportError:
     paramiko = None
-
-
-def _ssh_connect(host, user, port, key_path, password):
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    kwargs = {'hostname': host, 'port': int(port), 'username': user, 'timeout': 10,
-              'look_for_keys': bool(key_path), 'allow_agent': bool(key_path)}
-    if key_path and key_path.strip():
-        from pathlib import Path
-        kwargs['key_filename'] = str(Path(key_path).expanduser())
-    elif password:
-        kwargs['password'] = password
-    client.connect(**kwargs)
-    return client
-
-
-def _run(client, cmd, timeout=20):
-    _, so, se = client.exec_command(cmd, timeout=timeout)
-    return so.read().decode(errors='replace'), se.read().decode(errors='replace')
 
 
 def _finding(severity, title, detail=''):
@@ -66,14 +48,14 @@ MIN_SANE_BACKUP_BYTES = 1024  # 1 KB
 ARCHIVE_EXT_RE = re.compile(r'\.(tar\.gz|tgz|gz|zip|sql|sql\.gz|bz2|tar\.bz2|xz)$', re.IGNORECASE)
 
 
-def _find_files(client, directory: str) -> list[dict]:
+def _find_files(ssh: SSHExecutor, directory: str) -> list[dict]:
     """Machine-readable ls -la via stat, each line:
     epoch_mtime|size_bytes|filename"""
     # find instead of ls -la - doesn't break on files with spaces/special chars
     # in the name, and gives the needed fields directly via -printf
     cmd = (f"find {directory!r} -maxdepth 1 -type f "
            r"-printf '%T@|%s|%f\n' 2>&1")
-    out, err = _run(client, cmd)
+    out, err = ssh.run(cmd)
     if 'No such file or directory' in out or 'No such file or directory' in err:
         return None  # directory doesn't exist - distinguish from "exists but empty"
     files = []
@@ -93,7 +75,7 @@ def _find_files(client, directory: str) -> list[dict]:
     return files
 
 
-def _check_archive_integrity(client, directory: str, filename: str) -> str | None:
+def _check_archive_integrity(ssh: SSHExecutor, directory: str, filename: str) -> str | None:
     """Returns None if integrity is fine or the format isn't recognized (not checked),
     otherwise an error message. All checks are read-only, nothing is extracted to disk."""
     path = f'{directory.rstrip("/")}/{filename}'
@@ -101,18 +83,18 @@ def _check_archive_integrity(client, directory: str, filename: str) -> str | Non
     quoted = path.replace("'", "'\\''")
 
     if lower.endswith(('.tar.gz', '.tgz')):
-        out, err = _run(client, f"tar -tzf '{quoted}' > /dev/null 2>&1 && echo OK || echo FAIL")
+        out, err = ssh.run(f"tar -tzf '{quoted}' > /dev/null 2>&1 && echo OK || echo FAIL")
     elif lower.endswith('.gz'):
-        out, err = _run(client, f"gzip -t '{quoted}' 2>&1 && echo OK || echo FAIL")
+        out, err = ssh.run(f"gzip -t '{quoted}' 2>&1 && echo OK || echo FAIL")
     elif lower.endswith('.zip'):
-        out, err = _run(client, f"unzip -t '{quoted}' > /dev/null 2>&1 && echo OK || echo FAIL")
+        out, err = ssh.run(f"unzip -t '{quoted}' > /dev/null 2>&1 && echo OK || echo FAIL")
     elif lower.endswith(('.tar.bz2', '.tbz2')):
-        out, err = _run(client, f"tar -tjf '{quoted}' > /dev/null 2>&1 && echo OK || echo FAIL")
+        out, err = ssh.run(f"tar -tjf '{quoted}' > /dev/null 2>&1 && echo OK || echo FAIL")
     elif lower.endswith('.sql'):
         # a bare .sql file has no real "integrity" check - only verify it isn't
         # empty and doesn't look like an HTML error page (a common sign that
         # the dump was cut short by a redirect/authentication error instead of SQL)
-        out, err = _run(client, f"head -c 200 '{quoted}' 2>&1")
+        out, err = ssh.run(f"head -c 200 '{quoted}' 2>&1")
         if '<html' in out.lower() or '<!doctype' in out.lower():
             return 'the start of the file looks like HTML, not an SQL dump — likely an error instead of data'
         return None
@@ -124,9 +106,9 @@ def _check_archive_integrity(client, directory: str, filename: str) -> str | Non
     return None
 
 
-def _check_disk_space(client, directory: str) -> tuple[int | None, str | None]:
+def _check_disk_space(ssh: SSHExecutor, directory: str) -> tuple[int | None, str | None]:
     """Returns (percent_used, error)."""
-    out, err = _run(client, f"df -P {directory!r} 2>&1 | tail -1")
+    out, err = ssh.run(f"df -P {directory!r} 2>&1 | tail -1")
     parts = out.split()
     if len(parts) >= 5 and parts[4].endswith('%'):
         try:
@@ -147,12 +129,15 @@ def _check_disk_space(client, directory: str) -> tuple[int | None, str | None]:
         {'name': 'directories', 'type': 'text', 'label': 'Backup directories (comma-separated)',
          'default': '/var/backups'},
         {'name': 'max_age_hours', 'type': 'number', 'label': 'Expected freshness, hours', 'default': 26},
-        {'name': 'min_copies', 'type': 'number', 'label': 'Minimum copies (for 3-2-1)', 'default': 2},
+        {'name': 'min_copies', 'type': 'number', 'label': 'Minimum copies (local retention)', 'default': 2},
     ],
     required_tools=[],
     description='Backup verification over SSH: latest file freshness, suspiciously small size '
-                '(a failed dump), archive integrity (gz/tar.gz/zip/sql), number of copies on disk, '
-                'partition usage. Read-only — only reads files and metadata.',
+                '(a failed dump), archive integrity (gz/tar.gz/zip/sql), local copy count, '
+                'partition usage. Read-only — only reads files and metadata. '
+                'Note: this only checks local retention, not the full 3-2-1 rule (3 copies, '
+                '2 media types, 1 off-site) — a healthy count here does not by itself confirm '
+                'an off-site or cross-media copy exists.',
 )
 def check_backup(host='', user='root', port=22, key_path='', password='',
                   directories='/var/backups', max_age_hours=26, min_copies=2) -> dict:
@@ -166,7 +151,9 @@ def check_backup(host='', user='root', port=22, key_path='', password='',
         return {'error': 'no directories specified'}
 
     try:
-        client = _ssh_connect(host, user, port, key_path, password)
+        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+    except HostKeyMismatchError as e:
+        return {'error': str(e)}
     except Exception as e:
         return {'error': f'could not connect: {e}'}
 
@@ -180,7 +167,7 @@ def check_backup(host='', user='root', port=22, key_path='', password='',
 
         for directory in dir_list:
             entry = {'directory': directory}
-            files = _find_files(client, directory)
+            files = _find_files(ssh, directory)
 
             if files is None:
                 entry['error'] = 'directory does not exist'
@@ -219,12 +206,13 @@ def check_backup(host='', user='root', port=22, key_path='', password='',
 
             if len(files) < min_copies:
                 all_findings.append(_finding(
-                    'medium', f'{directory}: fewer backup copies than expected ({len(files)}, need ≥{min_copies})',
-                    'a single copy violates the 3-2-1 rule — if it gets corrupted, there\'s nothing to restore from'
+                    'medium', f'{directory}: fewer local backup copies than expected ({len(files)}, need ≥{min_copies})',
+                    'this only counts files in this one directory on this one server — it does not confirm '
+                    'an off-site or cross-media copy exists (the actual 3-2-1 rule), only that local retention is thin'
                 ))
 
             if ARCHIVE_EXT_RE.search(latest['name']):
-                integrity_error = _check_archive_integrity(client, directory, latest['name'])
+                integrity_error = _check_archive_integrity(ssh, directory, latest['name'])
                 entry['integrity_ok'] = integrity_error is None
                 if integrity_error:
                     all_findings.append(_finding(
@@ -232,7 +220,7 @@ def check_backup(host='', user='root', port=22, key_path='', password='',
                         f'{latest["name"]}: {integrity_error}'
                     ))
 
-            disk_pct, disk_err = _check_disk_space(client, directory)
+            disk_pct, disk_err = _check_disk_space(ssh, directory)
             if disk_pct is not None:
                 entry['disk_used_pct'] = disk_pct
                 if disk_pct >= 90:
@@ -244,7 +232,7 @@ def check_backup(host='', user='root', port=22, key_path='', password='',
             results.append(entry)
 
     finally:
-        client.close()
+        ssh.close()
 
     if not all_findings:
         all_findings.append(_finding('ok', 'backups are fresh, intact, with enough copies'))

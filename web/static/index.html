@@ -517,8 +517,9 @@ print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168
         ⚠️ После каждого легитимного обновления системы (apt upgrade и т.п.) базу нужно пересоздавать заново (снова режим «инициализировать»), иначе штатные обновления будут постоянно показываться как «подозрительные изменения».</p>
 
         <p class="hint"><b>Проверка бэкапов (SSH)</b> — не «cron вроде настроен», а факт: бэкапы реально есть, свежие, не битые и копий больше одной. Самый частый сценарий провала — тихий: скрипт годами «работает» по крону, но давно падает с ошибкой в лог, и дыра вскрывается только в момент реального disaster recovery.<br>
-        Проверяет по каждой указанной директории: свежесть последнего файла относительно ожидаемого интервала, аномально маленький размер (подозрение на упавший на середине дамп), целостность архива (gz/tar.gz/zip, плюс эвристика для голых .sql — не HTML ли там вместо дампа), число копий (правило 3-2-1), занятость партиции.<br>
+        Проверяет по каждой указанной директории: свежесть последнего файла относительно ожидаемого интервала, аномально маленький размер (подозрение на упавший на середине дамп), целостность архива (gz/tar.gz/zip, плюс эвристика для голых .sql — не HTML ли там вместо дампа), число локальных копий, занятость партиции.<br>
         UI: Host + User + Port + Key path (или Password) + Директории с бэкапами (через запятую) + Ожидаемая свежесть, часов + Минимум копий.<br>
+        ⚠️ Это проверяет только локальное хранение в указанной директории на этом сервере, а не полное правило 3-2-1 (3 копии, 2 типа носителей, 1 копия вне площадки) — здоровое число файлов здесь само по себе не подтверждает наличие резервной копии на другом носителе или вне площадки.<br>
         Установка: не требуется, работает через стандартные <code>find</code>/<code>gzip -t</code>/<code>tar -tzf</code>/<code>df</code> на целевом сервере.<br>
         Полностью readonly — ничего не распаковывает на диск, только проверяет заголовки архивов.</p>
 
@@ -706,8 +707,9 @@ print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168
         ⚠️ After every legitimate system update (apt upgrade etc), the database needs to be rebuilt (reinitialize mode again), otherwise routine updates will keep showing up as "suspicious changes".</p>
 
         <p class="hint"><b>Backup check (SSH)</b> — not "cron looks configured", but the fact: backups actually exist, are recent, aren't corrupted, and there's more than one copy. The most common failure mode is silent: a backup script "works" for years via cron but has been failing quietly into a log nobody reads, and the gap only surfaces during an actual disaster recovery, when it's too late.<br>
-        Checks per directory: freshness of the latest file against the expected interval, suspiciously small size (a sign of a dump that failed midway), archive integrity (gz/tar.gz/zip, plus a heuristic for bare .sql files — checking it isn't HTML instead of a dump), copy count (the 3-2-1 rule), partition usage.<br>
+        Checks per directory: freshness of the latest file against the expected interval, suspiciously small size (a sign of a dump that failed midway), archive integrity (gz/tar.gz/zip, plus a heuristic for bare .sql files — checking it isn't HTML instead of a dump), local copy count, partition usage.<br>
         UI: Host + User + Port + Key path (or Password) + Backup directories (comma-separated) + Expected freshness, hours + Minimum copies.<br>
+        ⚠️ This only checks local retention in the given directory on this server, not the full 3-2-1 rule (3 copies, 2 media types, 1 off-site) — a healthy file count here doesn't by itself confirm a cross-media or off-site copy exists.<br>
         Install: none needed, works via standard <code>find</code>/<code>gzip -t</code>/<code>tar -tzf</code>/<code>df</code> on the target server.<br>
         Fully read-only — nothing is extracted to disk, only archive headers are checked.</p>
 
