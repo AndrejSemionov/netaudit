@@ -33,38 +33,12 @@ from __future__ import annotations
 import json
 
 from ..registry import register
+from ..ssh import SSHExecutor, HostKeyMismatchError
 
 try:
     import paramiko
 except ImportError:
     paramiko = None
-
-
-def _ssh_connect(host, user, port, key_path, password):
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    kwargs = {'hostname': host, 'port': int(port), 'username': user, 'timeout': 10,
-              'look_for_keys': bool(key_path), 'allow_agent': bool(key_path)}
-    if key_path and key_path.strip():
-        from pathlib import Path
-        kwargs['key_filename'] = str(Path(key_path).expanduser())
-    elif password:
-        kwargs['password'] = password
-    client.connect(**kwargs)
-    return client
-
-
-def _run(client, cmd, timeout=20):
-    _, so, se = client.exec_command(cmd, timeout=timeout)
-    return so.read().decode(errors='replace'), se.read().decode(errors='replace')
-
-
-def _run_sudo(client, cmd, sudo_password, timeout=20):
-    stdin, so, se = client.exec_command(f'sudo -S -p "" {cmd}', timeout=timeout)
-    stdin.write((sudo_password or '') + '\n')
-    stdin.flush()
-    stdin.channel.shutdown_write()
-    return so.read().decode(errors='replace'), se.read().decode(errors='replace')
 
 
 def _finding(severity, title, detail=''):
@@ -196,31 +170,28 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='',
         return {'error': 'host not specified'}
 
     try:
-        client = _ssh_connect(host, user, port, key_path, password)
+        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+    except HostKeyMismatchError as e:
+        return {'error': str(e)}
     except Exception as e:
         return {'error': f'could not connect: {e}'}
 
     try:
-        which_out, _ = _run(client, 'which docker || echo NOTFOUND')
+        which_out, _ = ssh.run('which docker || echo NOTFOUND')
         if 'NOTFOUND' in which_out:
             return {'error': 'docker is not installed on the server'}
 
         # docker usually requires being in the docker group or root - try without
         # sudo first, that's the most common working case (user added to docker group)
-        ps_out, ps_err = _run(client, 'docker ps -q' + (' -a' if include_stopped else ''))
+        ps_out, ps_err = ssh.run('docker ps -q' + (' -a' if include_stopped else ''))
         needs_sudo = 'permission denied' in (ps_out + ps_err).lower()
 
         if needs_sudo:
-            sudo_check, _ = _run(client, 'sudo -n true 2>&1 && echo OK || echo NOPASS')
-            no_sudo_pass = 'NOPASS' in sudo_check
-            if no_sudo_pass and not password:
+            if ssh.needs_sudo_password():
                 return {'error': 'docker isn\'t accessible without sudo, and passwordless sudo isn\'t set up and no password was given',
                         'hint': 'add the user to the docker group (usermod -aG docker <user>), '
                                 'or set "Password (if not using a key)" for sudo -S'}
-            if no_sudo_pass:
-                ps_out, ps_err = _run_sudo(client, 'docker ps -q' + (' -a' if include_stopped else ''), password)
-            else:
-                ps_out, ps_err = _run(client, 'sudo docker ps -q' + (' -a' if include_stopped else ''))
+            ps_out, ps_err = ssh.sudo('docker ps -q' + (' -a' if include_stopped else ''))
 
         container_ids = [c.strip() for c in ps_out.splitlines() if c.strip()]
 
@@ -231,7 +202,7 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='',
             "grep -rE 'tcp://.*2375' /etc/docker/daemon.json /lib/systemd/system/docker.service "
             "/etc/systemd/system/docker.service.d/*.conf 2>/dev/null || true"
         )
-        socket_out, _ = _run(client, socket_check_cmd)
+        socket_out, _ = ssh.run(socket_check_cmd)
 
         all_findings = []
         if socket_out.strip():
@@ -250,14 +221,10 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='',
             return {'host': host, 'containers_checked': 0, 'findings': all_findings, 'summary': counts}
 
         for cid in container_ids:
-            inspect_cmd = f"docker inspect '{cid}' 2>&1" if not needs_sudo else None
             if needs_sudo:
-                if no_sudo_pass:
-                    raw, _ = _run_sudo(client, f"docker inspect '{cid}'", password, timeout=15)
-                else:
-                    raw, _ = _run(client, f"sudo docker inspect '{cid}'", timeout=15)
+                raw, _ = ssh.sudo(f"docker inspect '{cid}'", timeout=15)
             else:
-                raw, _ = _run(client, inspect_cmd, timeout=15)
+                raw, _ = ssh.run(f"docker inspect '{cid}' 2>&1", timeout=15)
 
             try:
                 data = json.loads(raw)
@@ -269,7 +236,7 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='',
             all_findings.extend(_audit_one_container(info))
 
     finally:
-        client.close()
+        ssh.close()
 
     if not all_findings:
         all_findings.append(_finding('ok', 'no notable issues found in container configuration'))
