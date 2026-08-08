@@ -1,11 +1,11 @@
 """
-Security-аудит сервера. Два режима:
-  server_audit          — изнутри по SSH: nginx, fail2ban, firewall, SQL, SSH hardening.
-  web_security_external — снаружи без доступа: заголовки, TLS-версии, утечка версий,
-                          доступность чувствительных путей (.git, .env, wp-config...).
+Server security audit. Two modes:
+  server_audit          — from the inside over SSH: nginx, fail2ban, firewall, SQL, SSH hardening.
+  web_security_external — from the outside, no access: headers, TLS versions, version leaks,
+                          exposed sensitive paths (.git, .env, wp-config...).
 
-Все SSH-команды readonly — ничего не меняют на сервере клиента.
-Каждая находка имеет severity (high/medium/low/ok) и объяснение.
+All SSH commands are read-only — nothing on the client's server is ever changed.
+Each finding has a severity (high/medium/low/ok) and an explanation.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ except ImportError:
 
 
 # ===========================================================================
-# Вспомогательное
+# Helpers
 # ===========================================================================
 
 def _ssh_connect(host, user, port, key_path, password):
@@ -65,35 +65,35 @@ def audit_nginx(client) -> dict:
 
     if not conf:
         return {'installed': True, 'version': ver.strip(),
-                'findings': [_finding('low', 'нет доступа к конфигу', 'nginx -T требует root')]}
+                'findings': [_finding('low', 'no access to the config', 'nginx -T requires root')]}
 
     # server_tokens
     if 'server_tokens off' not in conf:
-        findings.append(_finding('medium', 'server_tokens не выключен',
-                                 'nginx раскрывает свою версию в заголовках и страницах ошибок — добавь server_tokens off;'))
+        findings.append(_finding('medium', 'server_tokens is not disabled',
+                                 'nginx reveals its version in headers and error pages — add server_tokens off;'))
 
-    # устаревшие TLS
+    # outdated TLS
     ssl_proto_m = re.search(r'ssl_protocols\s+([^;]+);', conf)
     if ssl_proto_m:
         protos = ssl_proto_m.group(1)
         if 'TLSv1 ' in protos or 'TLSv1;' in protos or 'TLSv1.1' in protos or protos.strip().endswith('TLSv1'):
-            findings.append(_finding('high', 'включены устаревшие TLS 1.0/1.1', f'ssl_protocols: {protos.strip()}'))
+            findings.append(_finding('high', 'outdated TLS 1.0/1.1 is enabled', f'ssl_protocols: {protos.strip()}'))
     else:
         if 'ssl_certificate' in conf:
-            findings.append(_finding('low', 'ssl_protocols не задан явно', 'полагается на дефолт'))
+            findings.append(_finding('low', 'ssl_protocols is not set explicitly', 'relying on the default'))
 
-    # security-заголовки в конфиге
+    # security headers in the config
     for hdr, sev in [('Strict-Transport-Security', 'medium'), ('X-Frame-Options', 'low'),
                      ('X-Content-Type-Options', 'low')]:
         if hdr.lower() not in conf.lower():
-            findings.append(_finding(sev, f'нет заголовка {hdr}', 'не задан add_header в конфиге'))
+            findings.append(_finding(sev, f'missing header {hdr}', 'no add_header set in the config'))
 
-    # опасные директивы
+    # dangerous directives
     if re.search(r'autoindex\s+on', conf):
-        findings.append(_finding('medium', 'autoindex on', 'листинг директорий включён — раскрывает структуру файлов'))
+        findings.append(_finding('medium', 'autoindex on', 'directory listing is enabled — exposes the file structure'))
 
     if not findings:
-        findings.append(_finding('ok', 'явных проблем в конфиге nginx не найдено'))
+        findings.append(_finding('ok', 'no obvious issues found in the nginx config'))
 
     return {'installed': True, 'version': ver.strip(), 'findings': findings}
 
@@ -106,13 +106,13 @@ def audit_fail2ban(client) -> dict:
     out, _ = _run(client, 'which fail2ban-client || echo NONE')
     if 'NONE' in out:
         return {'installed': False,
-                'findings': [_finding('medium', 'fail2ban не установлен',
-                                      'нет защиты от брутфорса SSH/веб — рекомендуется установить')]}
+                'findings': [_finding('medium', 'fail2ban is not installed',
+                                      'no brute-force protection for SSH/web — recommended to install')]}
 
     status, err = _run(client, 'fail2ban-client status 2>&1')
     if 'Failed' in status or 'ERROR' in status or err.strip():
         return {'installed': True,
-                'findings': [_finding('low', 'нет доступа к статусу fail2ban', 'нужен root')]}
+                'findings': [_finding('low', 'no access to fail2ban status', 'requires root')]}
 
     jail_m = re.search(r'Jail list:\s*(.+)', status)
     jails = [j.strip() for j in jail_m.group(1).split(',')] if jail_m else []
@@ -131,11 +131,11 @@ def audit_fail2ban(client) -> dict:
         jail_info.append({'jail': jail, 'currently_banned': banned, 'total_banned': total})
 
     if not jails or jails == ['']:
-        findings.append(_finding('medium', 'нет активных jail', 'fail2ban запущен, но не защищает сервисы'))
+        findings.append(_finding('medium', 'no active jails', 'fail2ban is running, but isn\'t protecting any services'))
     else:
         if not any('ssh' in j.lower() for j in jails):
-            findings.append(_finding('medium', 'нет jail для SSH', 'SSH не защищён от брутфорса'))
-        findings.append(_finding('ok', f'активно jail: {len(jails)}', f'всего банов: {total_banned}'))
+            findings.append(_finding('medium', 'no jail for SSH', 'SSH isn\'t protected against brute-force'))
+        findings.append(_finding('ok', f'active jails: {len(jails)}', f'total bans: {total_banned}'))
 
     return {'installed': True, 'jails': jail_info, 'findings': findings}
 
@@ -147,10 +147,11 @@ def audit_fail2ban(client) -> dict:
 def audit_firewall(client) -> dict:
     findings = []
 
-    # nftables: сначала пробуем прочитать конфиг-файл напрямую (не требует root,
-    # если у файла обычные права на чтение) — это надёжнее live-'nft list ruleset',
-    # которая без root/CAP_NET_ADMIN всегда падает с 'Operation not permitted'
-    # и даёт ложный вывод "firewall не настроен", хотя он реально есть.
+    # nftables: try reading the config file directly first (doesn't require root
+    # if the file has normal read permissions) - this is more reliable than
+    # live 'nft list ruleset', which always fails with 'Operation not permitted'
+    # without root/CAP_NET_ADMIN and gives a false "firewall not configured"
+    # even though one actually exists.
     nft_conf = ''
     nft_conf_path = ''
     for path in ('/etc/nftables.conf', '/etc/nftables/nftables.conf', '/etc/nftables/main.nft'):
@@ -168,38 +169,38 @@ def audit_firewall(client) -> dict:
     active = False
     if 'Status: active' in ufw:
         active = True
-        findings.append(_finding('ok', 'ufw активен'))
+        findings.append(_finding('ok', 'ufw is active'))
     elif 'NOUFW' not in ufw and 'Status: inactive' in ufw:
-        findings.append(_finding('high', 'ufw установлен, но выключен'))
+        findings.append(_finding('high', 'ufw is installed but disabled'))
 
     if nft_conf:
         active = True
         rules = len([l for l in nft_conf.splitlines() if l.strip() and not l.strip().startswith('#')])
-        findings.append(_finding('ok', f'nftables: конфиг {nft_conf_path}, строк правил ~{rules}',
-                                 'прочитано из файла (без root — live nft list ruleset требует root/CAP_NET_ADMIN)'))
+        findings.append(_finding('ok', f'nftables: config {nft_conf_path}, ~{rules} rule lines',
+                                 'read from the file (without root - live nft list ruleset requires root/CAP_NET_ADMIN)'))
     elif 'NONFT' not in nft and nft.strip():
         rules = len([l for l in nft.splitlines() if l.strip()])
         active = True
-        findings.append(_finding('ok', f'nftables: правил ~{rules}'))
+        findings.append(_finding('ok', f'nftables: ~{rules} rules'))
 
     if not active:
         if 'NOIPT' not in ipt and ipt.strip():
-            # проверим политику INPUT
+            # check the INPUT policy
             if '-P INPUT ACCEPT' in ipt and ipt.count('-A INPUT') == 0:
-                findings.append(_finding('high', 'firewall фактически открыт',
-                                         'iptables INPUT policy ACCEPT без правил — всё разрешено'))
+                findings.append(_finding('high', 'firewall is effectively open',
+                                         'iptables INPUT policy ACCEPT with no rules — everything is allowed'))
             else:
-                findings.append(_finding('ok', 'iptables: правила присутствуют'))
+                findings.append(_finding('ok', 'iptables: rules are present'))
         else:
-            findings.append(_finding('low', 'не удалось определить статус firewall',
-                                     'ни ufw, ни nftables (live), ни iptables-правил не обнаружено по SSH без root; '
-                                     'если nftables настроен через конфиг не по стандартным путям — проверь вручную'))
+            findings.append(_finding('low', 'could not determine firewall status',
+                                     'neither ufw, nor nftables (live), nor iptables rules were detected over SSH '
+                                     'without root; if nftables is configured via a non-standard config path — check manually'))
 
     return {'findings': findings}
 
 
 # ===========================================================================
-# SQL (MySQL/MariaDB) — конфиг и экспозиция, без входа в БД
+# SQL (MySQL/MariaDB) — config and exposure, without logging into the DB
 # ===========================================================================
 
 def audit_sql(client) -> dict:
@@ -209,23 +210,23 @@ def audit_sql(client) -> dict:
         return {'installed': False}
 
     findings = []
-    # 3306 наружу?
+    # 3306 exposed externally?
     if 'NOPORT' not in running:
         if re.search(r'0\.0\.0\.0:3306|\*:3306|:::3306', running):
-            findings.append(_finding('high', 'MySQL слушает на всех интерфейсах (0.0.0.0:3306)',
-                                     'БД доступна извне — должно быть bind-address=127.0.0.1, если не нужен внешний доступ'))
+            findings.append(_finding('high', 'MySQL is listening on all interfaces (0.0.0.0:3306)',
+                                     'the DB is reachable externally — should be bind-address=127.0.0.1 unless external access is needed'))
         else:
-            findings.append(_finding('ok', 'MySQL слушает локально'))
+            findings.append(_finding('ok', 'MySQL is listening locally'))
 
-    # bind-address в конфиге (игнорируем закомментированные строки — grep выше
-    # находил и '#bind-address = 0.0.0.0', что давало ложное high на дефолтном,
-    # ничем не активированном значении из шаблона конфига)
+    # bind-address in the config (ignore commented-out lines — the earlier grep
+    # also matched '#bind-address = 0.0.0.0', giving a false high on the default,
+    # never-activated value from the template config)
     bind, _ = _run(client, "grep -rh '^\\s*bind-address' /etc/mysql/ 2>/dev/null | head -3")
     if bind.strip() and '127.0.0.1' not in bind and '0.0.0.0' in bind:
-        findings.append(_finding('high', 'bind-address=0.0.0.0 в конфиге MySQL', bind.strip()))
+        findings.append(_finding('high', 'bind-address=0.0.0.0 in the MySQL config', bind.strip()))
 
     if not findings:
-        findings.append(_finding('ok', 'MySQL/MariaDB: явных проблем экспозиции не найдено'))
+        findings.append(_finding('ok', 'MySQL/MariaDB: no obvious exposure issues found'))
 
     return {'installed': True, 'findings': findings}
 
@@ -237,7 +238,7 @@ def audit_sql(client) -> dict:
 def audit_ssh_hardening(client) -> dict:
     conf, _ = _run(client, "cat /etc/ssh/sshd_config 2>/dev/null; cat /etc/ssh/sshd_config.d/*.conf 2>/dev/null")
     if not conf.strip():
-        return {'findings': [_finding('low', 'нет доступа к sshd_config')]}
+        return {'findings': [_finding('low', 'no access to sshd_config')]}
 
     findings = []
 
@@ -247,51 +248,51 @@ def audit_ssh_hardening(client) -> dict:
 
     root_login = directive('PermitRootLogin', 'prohibit-password')
     if root_login in ('yes',):
-        findings.append(_finding('high', 'PermitRootLogin yes', 'вход под root разрешён — отключи или ставь prohibit-password'))
+        findings.append(_finding('high', 'PermitRootLogin yes', 'root login is allowed — disable it or set prohibit-password'))
 
     pw_auth = directive('PasswordAuthentication', 'yes')
     if pw_auth == 'yes':
         findings.append(_finding('medium', 'PasswordAuthentication yes',
-                                 'разрешён вход по паролю — уязвим к брутфорсу, лучше только ключи'))
+                                 'password login is allowed — vulnerable to brute-force, keys-only is better'))
 
     if directive('PermitEmptyPasswords', 'no') == 'yes':
-        findings.append(_finding('high', 'PermitEmptyPasswords yes', 'разрешены пустые пароли!'))
+        findings.append(_finding('high', 'PermitEmptyPasswords yes', 'empty passwords are allowed!'))
 
     port = directive('Port', '22')
     max_auth = directive('MaxAuthTries', '6')
 
     if not findings:
-        findings.append(_finding('ok', 'SSH настроен разумно'))
+        findings.append(_finding('ok', 'SSH is configured sensibly'))
 
     return {'port': port, 'root_login': root_login, 'password_auth': pw_auth,
             'max_auth_tries': max_auth, 'findings': findings}
 
 
 # ===========================================================================
-# Комбинированный SSH-аудит
+# Combined SSH audit
 # ===========================================================================
 
 @register(
-    id='server_audit', label='Security-аудит сервера (SSH)', category='server',
+    id='server_audit', label='Server security audit (SSH)', category='server',
     params=[
-        {'name': 'host', 'type': 'text', 'label': 'Хост', 'default': ''},
-        {'name': 'user', 'type': 'text', 'label': 'Пользователь', 'default': 'root'},
-        {'name': 'port', 'type': 'number', 'label': 'SSH-порт', 'default': 22},
-        {'name': 'key_path', 'type': 'text', 'label': 'Путь к ключу', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'Пароль (если без ключа)', 'default': ''},
+        {'name': 'host', 'type': 'text', 'label': 'Host', 'default': ''},
+        {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
+        {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
+        {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
+        {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
     ],
     required_tools=[],
-    description='Полный security-аудит сервера по SSH: nginx, fail2ban, firewall, MySQL, SSH hardening. Readonly.',
+    description='Full server security audit over SSH: nginx, fail2ban, firewall, MySQL, SSH hardening. Read-only.',
 )
 def check_server_audit(host='', user='root', port=22, key_path='', password='') -> dict:
     if paramiko is None:
-        return {'error': 'paramiko не установлен'}
+        return {'error': 'paramiko not installed'}
     if not host:
-        return {'error': 'не указан host'}
+        return {'error': 'host not specified'}
     try:
         client = _ssh_connect(host, user, port, key_path, password)
     except Exception as e:
-        return {'error': f'не подключиться: {e}'}
+        return {'error': f'could not connect: {e}'}
 
     try:
         sections = {
@@ -304,7 +305,7 @@ def check_server_audit(host='', user='root', port=22, key_path='', password='') 
     finally:
         client.close()
 
-    # сводка по severity
+    # severity summary
     counts = {'high': 0, 'medium': 0, 'low': 0, 'ok': 0}
     for sec in sections.values():
         for f in sec.get('findings', []):
@@ -314,7 +315,7 @@ def check_server_audit(host='', user='root', port=22, key_path='', password='') 
 
 
 # ===========================================================================
-# Внешний web-аудит (без доступа к серверу)
+# External web audit (no server access)
 # ===========================================================================
 
 SENSITIVE_PATHS = [
@@ -328,7 +329,7 @@ SENSITIVE_PATHS = [
 
 
 def _check_tls_version(hostname, version_name, ssl_version) -> bool:
-    """Пытается подключиться конкретной версией TLS. True если сервер её принял."""
+    """Tries connecting with a specific TLS version. True if the server accepted it."""
     try:
         ctx = ssl.SSLContext(ssl_version)
         ctx.check_hostname = False
@@ -341,13 +342,13 @@ def _check_tls_version(hostname, version_name, ssl_version) -> bool:
 
 
 def _parse_set_cookie_headers(head: str) -> list[str]:
-    """Извлекает все строки Set-Cookie из сырых заголовков ответа curl -I.
-    Заголовки регистронезависимы, значение может начинаться с новой строки после ':'."""
+    """Extracts all Set-Cookie lines from raw curl -I response headers.
+    Headers are case-insensitive, the value may start on a new line after ':'."""
     return re.findall(r'^set-cookie:\s*(.+)$', head, re.IGNORECASE | re.MULTILINE)
 
 
 def _audit_cookies(cookie_lines: list[str]) -> list[dict]:
-    """Проверяет флаги Secure/HttpOnly/SameSite для каждой найденной cookie."""
+    """Checks Secure/HttpOnly/SameSite flags for each cookie found."""
     findings = []
     for line in cookie_lines:
         name = line.split('=', 1)[0].strip()
@@ -362,18 +363,18 @@ def _audit_cookies(cookie_lines: list[str]) -> list[dict]:
         if samesite_val is None:
             missing.append('SameSite')
         elif samesite_val == 'none' and 'secure' not in lower:
-            findings.append(_finding('high', f'cookie "{name}": SameSite=None без Secure',
-                                      'кука отправляется в кросс-сайтовых запросах и доступна не по HTTPS'))
+            findings.append(_finding('high', f'cookie "{name}": SameSite=None without Secure',
+                                      'the cookie is sent in cross-site requests and is accessible over non-HTTPS'))
         if missing:
             sev = 'high' if 'HttpOnly' in missing and 'Secure' in missing else 'medium'
-            findings.append(_finding(sev, f'cookie "{name}": нет флага(ов) {", ".join(missing)}',
+            findings.append(_finding(sev, f'cookie "{name}": missing flag(s) {", ".join(missing)}',
                                       line[:120]))
     return findings
 
 
 def _audit_cors(base: str) -> list[dict]:
-    """Проверяет CORS-заголовки на опасную комбинацию: разрешён любой Origin + credentials.
-    Отправляет заведомо чужой Origin и смотрит, что сервер отражает в ответ."""
+    """Checks CORS headers for the dangerous combination: any Origin allowed + credentials.
+    Sends a known-foreign Origin and sees what the server reflects back."""
     findings = []
     if not tool_available('curl'):
         return findings
@@ -386,17 +387,17 @@ def _audit_cors(base: str) -> list[dict]:
     if acao_m:
         acao_val = acao_m.group(1).strip()
         if acao_val == '*' and acac:
-            findings.append(_finding('high', 'CORS: Allow-Origin=* вместе с Allow-Credentials=true',
-                                      'по спецификации браузеры должны такое отклонять, но неверные прокси/старые клиенты могут пропустить — исправь конфиг явно'))
+            findings.append(_finding('high', 'CORS: Allow-Origin=* together with Allow-Credentials=true',
+                                      'per spec, browsers should reject this, but broken proxies/older clients might let it through — fix the config explicitly'))
         elif acao_val == fake_origin:
-            findings.append(_finding('high', 'CORS: сервер отражает любой Origin обратно',
-                                      f'ответил Allow-Origin: {acao_val} на подставной Origin — любой сайт может читать ответы от имени пользователя'))
+            findings.append(_finding('high', 'CORS: the server reflects any Origin back',
+                                      f'responded with Allow-Origin: {acao_val} to a fake Origin — any site can read responses as the user'))
     return findings
 
 
 def _audit_error_page(base: str) -> list[dict]:
-    """Запрашивает заведомо несуществующий путь и ищет признаки verbose error
-    (stack trace, путь на диске, версия фреймворка в теле ответа)."""
+    """Requests a known-nonexistent path and looks for signs of a verbose error
+    (stack trace, filesystem path, framework version in the response body)."""
     findings = []
     if not tool_available('curl'):
         return findings
@@ -408,24 +409,24 @@ def _audit_error_page(base: str) -> list[dict]:
     signals = {
         'stack trace': ['traceback (most recent call last)', 'at System.', 'stacktrace',
                          'stack trace:', 'exception in thread'],
-        'путь на диске': ['/var/www/', '/home/', 'c:\\inetpub', 'c:\\users\\'],
-        'версия фреймворка/языка в ошибке': ['php version', 'django version', 'werkzeug', 'debug = true',
+        'filesystem path': ['/var/www/', '/home/', 'c:\\inetpub', 'c:\\users\\'],
+        'framework/language version in the error': ['php version', 'django version', 'werkzeug', 'debug = true',
                                               'whoops', 'laravel', 'yii2', '<title>fatal error'],
     }
     for label, needles in signals.items():
         if any(n in lower for n in needles):
-            findings.append(_finding('medium', f'verbose error page: похоже на {label}',
-                                      f'страница ошибки на {probe_path} раскрывает внутренние детали — выключи debug-режим на проде'))
-            break  # одной находки достаточно, не дублируем по каждому сигналу
+            findings.append(_finding('medium', f'verbose error page: looks like {label}',
+                                      f'the error page at {probe_path} exposes internal details — turn off debug mode in production'))
+            break  # one finding is enough, don't duplicate per signal
     return findings
 
 
 @register(
-    id='web_security_external', label='Внешний web-аудит (без доступа)', category='site',
-    params=[{'name': 'url', 'type': 'text', 'label': 'URL сайта', 'default': 'https://example.com'}],
+    id='web_security_external', label='External web audit (no access)', category='site',
+    params=[{'name': 'url', 'type': 'text', 'label': 'Site URL', 'default': 'https://example.com'}],
     required_tools=['curl'],
-    description='Аудит сайта снаружи: security-заголовки, устаревшие TLS, утечка версий, доступность '
-                '.git/.env/бэкапов, флаги cookie (Secure/HttpOnly/SameSite), CORS-misconfiguration, '
+    description='Audits a site from the outside: security headers, outdated TLS, version leaks, exposed '
+                '.git/.env/backups, cookie flags (Secure/HttpOnly/SameSite), CORS misconfiguration, '
                 'verbose error pages.',
 )
 def check_web_security_external(url='https://example.com') -> dict:
@@ -433,25 +434,25 @@ def check_web_security_external(url='https://example.com') -> dict:
     parsed = urlparse(url if '://' in url else f'https://{url}')
     hostname = parsed.hostname
     if not hostname:
-        return {'error': f'не распарсить URL: {url}'}
+        return {'error': f'could not parse URL: {url}'}
     base = f'https://{hostname}'
     findings = []
 
-    # заголовки
+    # headers
     if tool_available('curl'):
         code, head, _ = run_cmd(['curl', '-s', '-I', '-L', '--max-time', '10', base], timeout=15)
         hl = head.lower()
         server_m = re.search(r'server:\s*(.+)', head, re.IGNORECASE)
         if server_m and re.search(r'\d+\.\d+', server_m.group(1)):
-            findings.append(_finding('low', 'сервер раскрывает версию', f'Server: {server_m.group(1).strip()}'))
+            findings.append(_finding('low', 'the server discloses its version', f'Server: {server_m.group(1).strip()}'))
         for hdr, sev in [('strict-transport-security', 'medium'), ('x-frame-options', 'low'),
                          ('x-content-type-options', 'low'), ('content-security-policy', 'low')]:
             if hdr not in hl:
-                findings.append(_finding(sev, f'нет заголовка {hdr}'))
+                findings.append(_finding(sev, f'missing header {hdr}'))
         for hdr in ('x-powered-by', 'x-aspnet-version', 'x-aspnetmvc-version'):
             m = re.search(rf'^{hdr}:\s*(.+)$', head, re.IGNORECASE | re.MULTILINE)
             if m:
-                findings.append(_finding('low', f'заголовок {hdr} раскрывает технологию',
+                findings.append(_finding('low', f'header {hdr} discloses the technology',
                                           m.group(1).strip()))
         findings.extend(_audit_cookies(_parse_set_cookie_headers(head)))
     else:
@@ -460,7 +461,7 @@ def check_web_security_external(url='https://example.com') -> dict:
     findings.extend(_audit_cors(base))
     findings.extend(_audit_error_page(base))
 
-    # устаревшие TLS
+    # outdated TLS
     old_tls = []
     if hasattr(ssl, 'PROTOCOL_TLSv1'):
         if _check_tls_version(hostname, 'TLS 1.0', ssl.PROTOCOL_TLSv1):
@@ -469,9 +470,9 @@ def check_web_security_external(url='https://example.com') -> dict:
         if _check_tls_version(hostname, 'TLS 1.1', ssl.PROTOCOL_TLSv1_1):
             old_tls.append('TLS 1.1')
     if old_tls:
-        findings.append(_finding('high', 'поддерживаются устаревшие TLS', ', '.join(old_tls)))
+        findings.append(_finding('high', 'outdated TLS versions are supported', ', '.join(old_tls)))
 
-    # чувствительные пути
+    # sensitive paths
     exposed = []
     if tool_available('curl'):
         for path in SENSITIVE_PATHS:
@@ -480,10 +481,10 @@ def check_web_security_external(url='https://example.com') -> dict:
             if out.strip() == '200':
                 exposed.append(path)
     if exposed:
-        findings.append(_finding('high', 'доступны чувствительные пути', ', '.join(exposed)))
+        findings.append(_finding('high', 'sensitive paths are exposed', ', '.join(exposed)))
 
     if not findings:
-        findings.append(_finding('ok', 'внешних проблем не обнаружено'))
+        findings.append(_finding('ok', 'no external issues found'))
 
     counts = {'high': 0, 'medium': 0, 'low': 0, 'ok': 0}
     for f in findings:
