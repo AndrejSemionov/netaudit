@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "netaudit"
+version = "0.1.0"
+description = "Modular, universal network and security audit tool — network, site, and server checks over a CLI and a web UI."
+readme = "README.md"
+license = { text = "AGPL-3.0-or-later" }
+requires-python = ">=3.11"
+authors = [
+    { name = "Andrej Semionov" },
+]
+keywords = ["network", "security", "audit", "sysadmin", "server-hardening"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Networking :: Monitoring",
+    "Topic :: Security",
+]
+
+dependencies = [
+    "psutil>=5.9",
+    "httpx>=0.24",
+    "paramiko>=3.0",
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.23",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.12",
+    "ruff",
+]
+
+[project.urls]
+Homepage = "https://github.com/AndrejSemionov/netaudit"
+Repository = "https://github.com/AndrejSemionov/netaudit"
+Issues = "https://github.com/AndrejSemionov/netaudit/issues"
+
+[project.scripts]
+netaudit = "netaudit:main"
+
+[tool.setuptools]
+py-modules = ["netaudit"]
+packages = ["netaudit_pkg", "netaudit_pkg.checks", "web"]
+
+[tool.setuptools.package-data]
+web = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

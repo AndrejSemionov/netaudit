@@ -27,6 +27,15 @@ sudo apt install mtr-tiny tcptraceroute dnsutils iputils-arping iperf3 -y
 pip install -r requirements.txt --break-system-packages
 ```
 
+Or as an installed package, giving you a `netaudit` command instead of `python3 netaudit.py`:
+```bash
+pip install . --break-system-packages
+netaudit list
+```
+Both ways work identically — the commands below use `python3 netaudit.py` since that's the
+more common way to run it straight from a git checkout, but every one of them also works as
+`netaudit ...` if you installed the package.
+
 ## Getting started (2 minutes)
 
 The fastest way to see what NetAudit actually does — no server setup, no config, just run one check against a public site:
