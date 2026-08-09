@@ -1,18 +1,23 @@
 """
 Tests for netaudit_pkg.checks.systemd_hardening: JSON parsing from
-`systemd-analyze security --json=short` and exposure-weight -> severity mapping.
+`systemd-analyze security --json=short`, exposure-weight -> severity
+mapping, and extracting the exact overall score from the plain-text form.
 
-Schema confirmed against real output (systemd 257, Ubuntu 24.04):
-a flat array of {set, name, json_field, description, exposure} rows, where
-`set=false` means the directive is NOT restricted (exposed), `exposure` is
-a string weight or null. There is no trailing overall-score row in --json
-mode (unlike text mode) - overall_exposure is computed by summing weights.
+Schema confirmed against real output (systemd 255, Ubuntu 24.04):
+--json=short returns a flat array of {set, name, json_field, description,
+exposure} rows, where `set=false` means the directive is NOT restricted
+(exposed), `exposure` is a string weight or null. It does NOT include the
+"Overall exposure level" line or the weight/badness/range values needed to
+recompute it - naively summing per-directive `exposure` over-counts (12.7
+computed vs 9.6 actual, verified against a live nginx.service) since the
+official formula normalizes over weight_sum, which isn't exposed in JSON.
+So the overall score/predicate is parsed from a separate plain-text call.
 """
 
 from __future__ import annotations
 
 from netaudit_pkg.checks.systemd_hardening import (
-    _parse_json, _to_findings, _severity_for_weight,
+    _parse_json, _parse_overall, _to_findings, _severity_for_weight,
 )
 
 
@@ -54,11 +59,31 @@ def test_parse_json_extracts_directives():
 
 def test_parse_json_handles_null_exposure():
     raw = '''[
-        {"set": true, "name": "NotifyAccess=", "json_field": "NotifyAccess",
-         "description": "Service child processes cannot alter service state", "exposure": null}
+        {"set": null, "name": "SupplementaryGroups=", "json_field": "SupplementaryGroups",
+         "description": "Service runs as root, option does not matter", "exposure": null}
     ]'''
     parsed = _parse_json(raw)
     assert parsed['directives'][0]['exposure'] is None
+
+
+# ===========================================================================
+# _parse_overall
+# ===========================================================================
+
+def test_parse_overall_extracts_score_and_predicate():
+    text = (
+        '  UMask=  Files created by service are world-readable by default  0.1\n\n'
+        '\u2192 Overall exposure level for nginx.service: 9.6 UNSAFE \U0001F628\n'
+    )
+    score, predicate = _parse_overall(text)
+    assert score == 9.6
+    assert predicate == 'UNSAFE'
+
+
+def test_parse_overall_missing_line_returns_none():
+    score, predicate = _parse_overall('garbage output, no summary line here')
+    assert score is None
+    assert predicate is None
 
 
 # ===========================================================================
@@ -72,11 +97,10 @@ def test_to_findings_maps_unset_directives_by_weight():
         {'set': False, 'name': 'NoNewPrivileges=',
          'description': 'Service processes may acquire new privileges', 'exposure': '0.2'},
     ]}
-    findings, total = _to_findings(parsed, 'nginx.service')
+    findings = _to_findings(parsed, 'nginx.service')
     severities = {f['title']: f['severity'] for f in findings}
     assert severities['PrivateNetwork= not restricted'] == 'high'
     assert severities['NoNewPrivileges= not restricted'] == 'medium'
-    assert total == 0.7
 
 
 def test_to_findings_set_directives_are_skipped():
@@ -84,28 +108,27 @@ def test_to_findings_set_directives_are_skipped():
         {'set': True, 'name': 'PrivateNetwork=',
          'description': "Service has access to the host's network", 'exposure': '0.5'},
     ]}
-    findings, total = _to_findings(parsed, 'nginx.service')
+    findings = _to_findings(parsed, 'nginx.service')
     assert len(findings) == 1
     assert findings[0]['severity'] == 'ok'
-    assert total == 0.0
 
 
-def test_to_findings_null_exposure_is_skipped_from_findings():
+def test_to_findings_not_applicable_directive_is_skipped():
+    """set=null (not applicable to this unit type) should not be flagged,
+    same as set=true."""
     parsed = {'directives': [
-        {'set': False, 'name': 'NotifyAccess=', 'description': 'no exposure weight',
-         'exposure': None},
+        {'set': None, 'name': 'SupplementaryGroups=',
+         'description': 'not applicable', 'exposure': None},
     ]}
-    findings, total = _to_findings(parsed, 'nginx.service')
-    # no exposure weight -> nothing to flag, falls through to the "ok" case
+    findings = _to_findings(parsed, 'nginx.service')
     assert len(findings) == 1
     assert findings[0]['severity'] == 'ok'
-    assert total == 0.0
 
 
 def test_to_findings_no_exposed_directives_gives_ok():
     parsed = {'directives': [
         {'set': True, 'name': 'PrivateNetwork=', 'description': 'ok', 'exposure': '0.5'},
     ]}
-    findings, total = _to_findings(parsed, 'nginx.service')
+    findings = _to_findings(parsed, 'nginx.service')
     assert len(findings) == 1
     assert findings[0]['severity'] == 'ok'
