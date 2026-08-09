@@ -32,6 +32,25 @@ from typing import Callable, Any
 #               silently defaulting to something safer-sounding)
 RISK_LEVELS = ('PASSIVE', 'READ_ONLY', 'ACTIVE', 'MODIFYING', 'DESTRUCTIVE')
 
+# Shared confirmation string for any param that gates a MODIFYING action
+# (installing a package, initializing a database, etc). Using one shared
+# string/param shape everywhere means every such gate looks and behaves the
+# same in the CLI and the web UI, instead of each check inventing its own
+# wording (see sql_injection's separate AUTH_CONFIRM before this existed).
+CONFIRM_MODIFY = 'yes — modify the target system'
+
+
+def confirm_param(label: str = 'Confirm system modification', default: str = 'no') -> dict:
+    """A ready-made 'select' param spec for gating a MODIFYING action. Add
+    this to a check's params list, then check `<param_name> == CONFIRM_MODIFY`
+    in the check function before doing anything that installs/writes/changes
+    state on the target - exactly the same shape sql_injection's
+    'authorization' param already uses for ACTIVE scans."""
+    return {
+        'name': 'confirm_modify', 'type': 'select', 'label': label,
+        'options': ['no', CONFIRM_MODIFY], 'default': default,
+    }
+
 
 @dataclass
 class CheckSpec:

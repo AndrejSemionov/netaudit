@@ -12,7 +12,7 @@ Doesn't change anything on the server - lynis itself is read-only in audit mode.
 
 from __future__ import annotations
 
-from ..registry import register
+from ..registry import register, confirm_param, CONFIRM_MODIFY
 from ..findings import finding as _finding
 from ..ssh import SSHExecutor, HostKeyMismatchError
 
@@ -101,12 +101,14 @@ def _to_findings(parsed: dict) -> list[dict]:
         {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
         {'name': 'auto_install', 'type': 'checkbox', 'label': 'Install lynis if missing',
          'default': False},
+        confirm_param('Confirm: this may install packages on the target'),
     ],
     required_tools=[],
-    description='Server security audit via Lynis (hardening index + findings) over SSH. Read-only.',
+    description='Server security audit via Lynis (hardening index + findings) over SSH. Read-only, '
+                 'unless "Install lynis if missing" is enabled and confirmed.',
 )
 def check_lynis_audit(host='', user='root', port=22, key_path='', password='',
-                       auto_install=False) -> dict:
+                       auto_install=False, confirm_modify='no') -> dict:
     if paramiko is None:
         return {'error': 'paramiko not installed'}
     if not host:
@@ -123,6 +125,10 @@ def check_lynis_audit(host='', user='root', port=22, key_path='', password='',
             if not auto_install:
                 return {'error': 'lynis is not installed on the server',
                         'hint': 'apt install lynis -y (or enable auto_install)'}
+            if confirm_modify != CONFIRM_MODIFY:
+                return {'error': 'auto_install would modify the target system (install a package) '
+                                  'but was not confirmed',
+                        'hint': 'set "Confirm: this may install packages on the target" to proceed'}
             installed, install_err = ssh.ensure_tool_installed('lynis', timeout=90)
             if not installed:
                 return {'error': 'failed to install lynis', 'detail': install_err}

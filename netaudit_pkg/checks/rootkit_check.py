@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 
-from ..registry import register
+from ..registry import register, confirm_param, CONFIRM_MODIFY
 from ..findings import finding as _finding
 from ..ssh import SSHExecutor, HostKeyMismatchError
 
@@ -118,20 +118,27 @@ def _run_chkrootkit(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
         {'name': 'use_chkrootkit', 'type': 'checkbox', 'label': 'Run chkrootkit', 'default': True},
         {'name': 'auto_install', 'type': 'checkbox', 'label': 'Install missing tools',
          'default': False},
+        confirm_param('Confirm: this may install packages on the target'),
     ],
     required_tools=[],
     description='Searches for known rootkits and tampered system commands via rkhunter and/or '
-                'chkrootkit over SSH. Read-only, system reads only. Both tools produce '
+                'chkrootkit over SSH. Read-only, system reads only, unless "Install missing tools" '
+                'is enabled and confirmed. Both tools produce '
                 'false positives — findings need manual verification, not a ready-made verdict.',
 )
 def check_rootkit(host='', user='root', port=22, key_path='', password='',
-                   use_rkhunter=True, use_chkrootkit=True, auto_install=False) -> dict:
+                   use_rkhunter=True, use_chkrootkit=True, auto_install=False,
+                   confirm_modify='no') -> dict:
     if paramiko is None:
         return {'error': 'paramiko not installed'}
     if not host:
         return {'error': 'host not specified'}
     if not use_rkhunter and not use_chkrootkit:
         return {'error': 'select at least one tool (rkhunter or chkrootkit)'}
+    if auto_install and confirm_modify != CONFIRM_MODIFY:
+        return {'error': 'auto_install would modify the target system (install packages) '
+                          'but was not confirmed',
+                'hint': 'set "Confirm: this may install packages on the target" to proceed'}
 
     try:
         ssh = SSHExecutor(host, user, port, key_path, password).connect()

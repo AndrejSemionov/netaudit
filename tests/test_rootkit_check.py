@@ -120,6 +120,33 @@ def test_missing_tool_without_auto_install_reported_but_other_tool_still_runs(mo
     assert any('rkhunter' in w for w in result.get('warnings', []))
 
 
+def test_auto_install_without_confirmation_is_blocked():
+    """auto_install=True installs packages on the target - without an
+    explicit confirm_modify it must be refused before even connecting over
+    SSH, same gate as aide_check and lynis_audit."""
+    result = check_rootkit(host='1.2.3.4', auto_install=True, confirm_modify='no')
+    assert 'error' in result
+
+
+def test_auto_install_with_confirmation_proceeds(monkeypatch):
+    """With confirm_modify set, a missing tool must actually get installed
+    (not blocked) and then run normally - this is the gate's positive path,
+    the negative path is test_auto_install_without_confirmation_is_blocked."""
+    from netaudit_pkg.registry import CONFIRM_MODIFY
+    fake = FakeSSHExecutor(
+        installed_tools=set(),  # rkhunter/chkrootkit both missing - auto_install will "install" them
+        responses={
+            'rkhunter --check': ('[ Rootkit Hunter version 1.4.6 ]\nNo warnings.\n', ''),
+            'chkrootkit': ("Checking `bindshell'... not infected\n", ''),
+        },
+    )
+    monkeypatch.setattr('netaudit_pkg.checks.rootkit_check.SSHExecutor', lambda *a, **kw: fake)
+    result = check_rootkit(host='1.2.3.4', auto_install=True, confirm_modify=CONFIRM_MODIFY)
+    assert 'error' not in result
+    assert 'rkhunter' in fake.installed_tools
+    assert 'chkrootkit' in fake.installed_tools
+
+
 def test_findings_tagged_with_source_tool(monkeypatch):
     fake = FakeSSHExecutor(
         installed_tools={'rkhunter', 'chkrootkit'},

@@ -808,6 +808,9 @@ function renderCheckList() {
           const opts = (p.options || []).map(o => `<option value="${o}" ${o === p.default ? 'selected' : ''}>${tr.optLabel(o)}</option>`).join('');
           return `<label>${plabel}<select data-check="${c.id}" data-param="${p.name}">${opts}</select></label>`;
         }
+        if (p.type === 'checkbox') {
+          return `<label style="display:flex;align-items:center;gap:6px"><input type="checkbox" data-check="${c.id}" data-param="${p.name}" ${p.default ? 'checked' : ''} style="width:auto">${plabel}</label>`;
+        }
         const listAttr = isTarget ? 'list="savedTargets"' : '';
         return `<label>${plabel}<input ${listAttr} data-check="${c.id}" data-param="${p.name}" type="${p.type === 'number' ? 'number' : (p.type === 'password' ? 'password' : 'text')}" value="${p.default ?? ''}"></label>`;
       }).join('');
@@ -882,6 +885,7 @@ function getSelected() {
     el.querySelectorAll('input[data-param], select[data-param]').forEach(inp => {
       let v = inp.value;
       if (inp.type === 'number') v = Number(v);
+      if (inp.type === 'checkbox') v = inp.checked;
       params[inp.dataset.param] = v;
     });
     selected.push({ id, params });

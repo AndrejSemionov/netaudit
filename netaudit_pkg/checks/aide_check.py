@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import re
 
-from ..registry import register
+from ..registry import register, confirm_param, CONFIRM_MODIFY
 from ..findings import finding as _finding
 from ..ssh import SSHExecutor, HostKeyMismatchError
 
@@ -82,14 +82,16 @@ def _parse_summary(raw: str) -> dict | None:
          'default': 'check for changes'},
         {'name': 'auto_install', 'type': 'checkbox', 'label': 'Install aide if missing',
          'default': False},
+        confirm_param('Confirm: this may install packages / reinitialize the AIDE database'),
     ],
     required_tools=[],
     description='File Integrity Monitoring via AIDE over SSH - tracks changes to system files '
                 'outside normal updates (alerts if binaries changed not via unattended-upgrades). '
-                '"check" mode compares against an existing database, "init" creates a new reference.',
+                '"check" mode compares against an existing database (read-only); "init" overwrites '
+                'the reference database and requires confirmation, same as auto-installing aide.',
 )
 def check_aide(host='', user='root', port=22, key_path='', password='',
-                mode='check for changes', auto_install=False) -> dict:
+                mode='check for changes', auto_install=False, confirm_modify='no') -> dict:
     if paramiko is None:
         return {'error': 'paramiko not installed'}
     if not host:
@@ -99,6 +101,10 @@ def check_aide(host='', user='root', port=22, key_path='', password='',
     mode = mode_map.get(mode)
     if mode is None:
         return {'error': f'unknown mode: {mode}'}
+    if mode == 'init' and confirm_modify != CONFIRM_MODIFY:
+        return {'error': 'mode=init overwrites the AIDE reference database (a modifying action) '
+                          'but was not confirmed',
+                'hint': 'set "Confirm: this may install packages / reinitialize the AIDE database" to proceed'}
 
     try:
         ssh = SSHExecutor(host, user, port, key_path, password).connect()
@@ -116,6 +122,10 @@ def check_aide(host='', user='root', port=22, key_path='', password='',
             if not auto_install:
                 return {'error': 'aide is not installed on the server',
                         'hint': 'apt install aide -y (or enable auto_install)'}
+            if confirm_modify != CONFIRM_MODIFY:
+                return {'error': 'auto_install would modify the target system (install a package) '
+                                  'but was not confirmed',
+                        'hint': 'set "Confirm: this may install packages / reinitialize the AIDE database" to proceed'}
             installed, install_err = ssh.ensure_tool_installed('aide', timeout=120)
             if not installed:
                 return {'error': 'failed to install aide', 'detail': install_err}

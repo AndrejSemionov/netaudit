@@ -51,6 +51,11 @@ def test_parse_summary_zero_changes():
     ('init', 'init'),
 ])
 def test_mode_mapping(monkeypatch, mode_value, expected_internal):
+    """mode='init' is a modifying action (overwrites the reference database)
+    and requires confirm_modify - passed here since this test is about the
+    check/init string mapping, not the confirmation gate itself (see
+    test_init_without_confirmation_is_blocked below for that)."""
+    from netaudit_pkg.registry import CONFIRM_MODIFY
     fake = FakeSSHExecutor(
         installed_tools={'aide'},
         responses={
@@ -61,8 +66,36 @@ def test_mode_mapping(monkeypatch, mode_value, expected_internal):
         },
     )
     monkeypatch.setattr('netaudit_pkg.checks.aide_check.SSHExecutor', lambda *a, **kw: fake)
-    result = check_aide(host='1.2.3.4', mode=mode_value)
+    result = check_aide(host='1.2.3.4', mode=mode_value, confirm_modify=CONFIRM_MODIFY)
     assert result['mode'] == expected_internal
+
+
+def test_init_without_confirmation_is_blocked(monkeypatch):
+    """mode='init' overwrites the AIDE reference database on the target -
+    without an explicit confirm_modify, it must not run at all (not even
+    connect over SSH), mirroring the pattern sql_injection already uses for
+    ACTIVE scans (Mark's feedback: MODIFYING actions need an explicit gate)."""
+    fake = FakeSSHExecutor(installed_tools={'aide'})
+    monkeypatch.setattr('netaudit_pkg.checks.aide_check.SSHExecutor', lambda *a, **kw: fake)
+    result = check_aide(host='1.2.3.4', mode='init', confirm_modify='no')
+    assert 'error' in result
+    assert 'confirm' in result['error'].lower() or 'not confirmed' in result['error'].lower()
+
+
+def test_check_mode_needs_no_confirmation(monkeypatch):
+    """mode='check' (the default, read-only) must work with no confirm_modify
+    at all - the gate only applies to the modifying path."""
+    fake = FakeSSHExecutor(
+        installed_tools={'aide'},
+        responses={
+            'test -f /var/lib/aide/aide.db': ('EXISTS', ''),
+            'aide --check': ('Summary:\n  Total number of entries:\t1\n'
+                              '  Added entries:\t\t0\n  Removed entries:\t\t0\n  Changed entries:\t\t0\n', ''),
+        },
+    )
+    monkeypatch.setattr('netaudit_pkg.checks.aide_check.SSHExecutor', lambda *a, **kw: fake)
+    result = check_aide(host='1.2.3.4', mode='check')
+    assert 'error' not in result
 
 
 def test_unknown_mode_rejected():
@@ -125,12 +158,13 @@ def test_check_mode_no_changes_is_ok(monkeypatch):
 # ===========================================================================
 
 def test_init_mode_success(monkeypatch):
+    from netaudit_pkg.registry import CONFIRM_MODIFY
     fake = FakeSSHExecutor(
         installed_tools={'aide'},
         responses={'aide --init': ('Start timestamp: ...\nTotal number of entries: 54000\n', '')},
     )
     monkeypatch.setattr('netaudit_pkg.checks.aide_check.SSHExecutor', lambda *a, **kw: fake)
-    result = check_aide(host='1.2.3.4', mode='init')
+    result = check_aide(host='1.2.3.4', mode='init', confirm_modify=CONFIRM_MODIFY)
     assert result['mode'] == 'init'
     assert result['findings'][0]['severity'] == 'ok'
 
@@ -148,6 +182,7 @@ def test_missing_aide_without_auto_install(monkeypatch):
 
 
 def test_missing_aide_with_auto_install(monkeypatch):
+    from netaudit_pkg.registry import CONFIRM_MODIFY
     fake = FakeSSHExecutor(
         installed_tools=set(),
         responses={
@@ -157,9 +192,19 @@ def test_missing_aide_with_auto_install(monkeypatch):
         },
     )
     monkeypatch.setattr('netaudit_pkg.checks.aide_check.SSHExecutor', lambda *a, **kw: fake)
-    result = check_aide(host='1.2.3.4', mode='check', auto_install=True)
+    result = check_aide(host='1.2.3.4', mode='check', auto_install=True, confirm_modify=CONFIRM_MODIFY)
     assert 'error' not in result
     assert 'aide' in fake.installed_tools  # FakeSSHExecutor simulates a successful install
+
+
+def test_auto_install_without_confirmation_is_blocked(monkeypatch):
+    """auto_install=True installs a package on the target - without
+    confirm_modify it must be refused, same as mode='init'."""
+    fake = FakeSSHExecutor(installed_tools=set())
+    monkeypatch.setattr('netaudit_pkg.checks.aide_check.SSHExecutor', lambda *a, **kw: fake)
+    result = check_aide(host='1.2.3.4', mode='check', auto_install=True, confirm_modify='no')
+    assert 'error' in result
+    assert 'aide' not in fake.installed_tools  # install must not have run
 
 
 def test_empty_host_rejected():
