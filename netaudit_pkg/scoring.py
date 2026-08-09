@@ -42,13 +42,15 @@ class Component:
     redistributes its weight proportionally across the remaining applicable
     components, so a module's score is never silently inflated or deflated
     by a control it couldn't check. `score`/`max` are still required and
-    still validated even when not applicable (use 0/1 as a neutral
-    placeholder) so the dataclass shape stays uniform for serialization.
+    still validated even when not applicable (use 0/100 as a neutral
+    placeholder - see docs/scoring.md "Control score scale" for why hardening
+    modules use a 0-100 scale for every control, binary or not) so the
+    dataclass shape stays uniform for serialization.
 
     `finding_id` optionally links this component to a specific Finding (see
     findings.py) the same check produced for the same control - e.g. a
     'server_tokens' component links to the Finding titled "Server version
-    disclosure enabled" that explains *why* it scored 0/1. This is an
+    disclosure enabled" that explains *why* it scored 0/100. This is an
     explicit link (a string id set by the calling module) rather than an
     implicit one (matching Component.name against Finding.title/id by
     string) - implicit matching is a naming convention that silently breaks

@@ -1,6 +1,15 @@
 """
 Tests for netaudit_pkg.scoring: Component validation and the weighted_score()
 math, per the contract in docs/scoring.md.
+
+Note on scales used in these tests: weighted_score() is mathematically
+scale-agnostic - it normalizes each component to a 0-1 fraction of its own
+`max` before weighting, so these tests deliberately exercise several
+different `max` values (1, 10, 100) to prove the engine doesn't care. This is
+independent of docs/scoring.md's recommendation that hardening MODULES use
+`max: 100` uniformly for every control - that's a documentation convention
+for module authors, not a constraint the engine itself enforces or this
+suite needs to follow.
 """
 
 from __future__ import annotations

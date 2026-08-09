@@ -88,14 +88,68 @@ is auditable (a user can see *why* nginx scored 83, not just that it did).
   Findings and Components stay two separate lists in a check's result either way -
   `finding_id` doesn't merge them, it lets the web UI or AI analysis join them.
 
-**Binary controls** (pass/fail, no partial credit — e.g. Docker's "container running
-as root: yes/no") use `score: 0, max: 1` for fail and `score: 1, max: 1` for pass.
-Use this pattern consistently rather than inventing a per-module convention (some
-modules using `0/1`, others `0/100`) - it keeps components comparable and keeps
-`weighted_score()`'s normalization behaving the same way everywhere.
+### Control score scale
 
-**Every hardening module must document its own weights** (why TLS is 30% and not
-50%) in its own module docstring or a section here, before being merged - the
+Hardening controls use a normalized **0-100 scale**: `max` is always `100`,
+regardless of whether the underlying check is binary or has intermediate states.
+
+```
+PASS = 100
+WARN = some intermediate value, chosen deliberately (not a midpoint average - see
+        below)
+FAIL = 0
+```
+
+**Binary controls do not get their own `0/1` scale just because the underlying
+fact is a boolean.** An earlier version of this document recommended `score: 0/1,
+max: 1` for binary controls (e.g. "container running as root: yes/no"); that
+recommendation is superseded by this section once a real hardening module
+(`nginx_hardening`) needed a genuine three-state control (`WARN`) alongside
+several binary ones, and mixing `1/1` binary components with `80/100` three-state
+components in the same result would mean `82/100` doesn't mean the same thing
+consistently across components. A binary control still uses `score: 0` or
+`score: 100`, just on the same `max: 100` scale as every other control in the
+module - the result is a security assessment, not a restatement of the raw
+boolean. The raw pass/fail state remains fully available through the
+corresponding `Finding` (via `finding_id`), which is where "was this literally
+true or false" belongs; `score`/`max` describes the control's contribution to the
+hardening score, not the raw check outcome.
+
+**Choosing an intermediate WARN value is a judgment call the module must justify**,
+not a mechanical average of PASS and FAIL. `nginx_hardening`'s `NGX-TLS-002`
+(TLS-1.2-only scores `80`, not `75`) is the reference example — the value reflects
+where the state actually sits on a security-posture spectrum (TLS 1.2 is still an
+actively recommended fallback per OWASP/NIST, closer to acceptable than to broken),
+not the arithmetic midpoint between the two endpoints. Document the reasoning next
+to the control's definition (in the module's own `docs/checks/*.md`), the same way
+weights must be documented (see below).
+
+**`weight` and `score` are independent dimensions, and so are `weight` and Finding
+`severity`.** `weight` says how much a control matters to the *hardening score*;
+`score` says how that control's check turned out; `severity` says how significant
+the underlying issue is as a *Finding*, for a human reading the findings list. None
+of the three should be derived from either of the others:
+
+```
+NGX-TLS-001 (legacy protocols enabled):
+  Finding.severity = high
+  Component.score = 0, max = 100, weight = 0.15
+
+NGX-TLS-002 (TLS 1.2 only, no 1.3):
+  Finding.severity = low
+  Component.score = 80, max = 100, weight = 0.15
+```
+
+Both controls happen to share `weight = 0.15` here, but one is a `high`-severity
+Finding at `score = 0` and the other is a `low`-severity Finding at `score = 80` -
+a higher weight does not imply a higher severity, and a lower score does not imply
+a higher severity either. A reader (the web UI, the AI analysis) can show "NGINX
+Hardening: 82/100" and, separately, "HIGH — Legacy TLS enabled" without trying to
+derive one from the other.
+
+**Every hardening module must document its own weights** (why TLS is 40% and not
+30%, why `NGX-CONF-002` is weighted higher than `NGX-CONF-001` within its group)
+in its own module docstring or a section here, before being merged - the
 weights are a design decision, not an implementation detail to be picked ad hoc
 while writing the check.
 
@@ -110,15 +164,16 @@ proportionally** across the remaining applicable components, so their weighting
 relative to *each other* stays the same while together they cover the full 1.0.
 
 ```json
-{ "name": "http2_config", "weight": 0.10, "score": 0, "max": 1,
+{ "name": "http2_config", "weight": 0.10, "score": 0, "max": 100,
   "applicable": false, "reason": "http_v2 module not compiled in",
   "finding_id": "NGX-CONF-005" }
 ```
 
 `score`/`max` are still required and still validated even when `applicable: false`
-(use `0`/`1` as a neutral placeholder) so every component keeps the same shape for
-serialization - the `applicable: false` flag is what tells the reader (and
-`weighted_score()`) to disregard the value, not the value itself.
+(use `0`/`100` as a neutral placeholder, consistent with the 0-100 scale used
+everywhere else - see "Control score scale" above) so every component keeps the
+same shape for serialization - the `applicable: false` flag is what tells the
+reader (and `weighted_score()`) to disregard the value, not the value itself.
 
 If **every** component in a module's result is `applicable: false`,
 `weighted_score()` raises `ValueError` rather than returning a fabricated `0/100` -
