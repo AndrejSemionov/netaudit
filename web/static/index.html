@@ -1231,6 +1231,13 @@ function renderResult(id, r, canvasId) {
   if (r.findings && !r.sections) {
     const sevPill = s => ({critical:'<span class="pill bad">critical</span>', high:'<span class="pill bad">high</span>', medium:'<span class="pill warn">medium</span>', low:`<span class="pill" style="background:#2a3140;color:#9aa4b4">low</span>`, ok:'<span class="pill ok">ok</span>'}[s] || s);
     let html = '';
+    // systemd_hardening: overall exposure score (0-10) + predicate, straight
+    // from `systemd-analyze security`'s own text-mode summary line, shown
+    // as a headline pill above the per-directive severity counts.
+    if (r.overall_exposure != null) {
+      const predClass = r.overall_predicate === 'OK' ? 'ok' : (r.overall_predicate === 'MEDIUM' ? 'warn' : 'bad');
+      html += `<div style="margin-bottom:10px"><span class="pill ${predClass}">${t('res.exposure') || 'Exposure'}: ${r.overall_exposure}/10 ${r.overall_predicate||''}</span></div>`;
+    }
     if (r.summary) {
       const s = r.summary;
       html += `<div style="margin-bottom:12px">
