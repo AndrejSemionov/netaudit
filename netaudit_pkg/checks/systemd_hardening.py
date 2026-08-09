@@ -45,47 +45,46 @@ def _severity_for_weight(weight: float, is_exposed: bool) -> str:
 
 
 def _parse_json(raw: str) -> dict:
-    """systemd-analyze security --json=short returns a JSON array of
-    {name, description, json_field, exposure, happy}-shaped rows plus a
-    trailing overall score - the exact schema varies a bit across systemd
-    versions, so we're defensive about missing keys."""
+    """systemd-analyze security --json=short returns a flat JSON array of
+    directive rows: {set, name, json_field, description, exposure}. `set`
+    is true when the directive IS configured (safe/restricted) and false
+    when it's left at its permissive default (exposed) - `exposure` is the
+    weight contributed to the overall score, as a string, and can be null
+    for directives that don't carry an exposure weight (e.g. NotifyAccess=).
+    There is no trailing "overall score" row in --json=short output (unlike
+    the text/table mode) - the overall exposure level has to be computed
+    ourselves from the sum of exposed directives' weights, or left as None.
+    """
     data = json.loads(raw)
     rows = data if isinstance(data, list) else data.get('entries', [])
-
-    overall = None
-    directives = []
-    for row in rows:
-        name = row.get('name') or row.get('id') or ''
-        if name in ('OVERALL EXPOSURE LEVEL', 'overall'):
-            overall = row.get('exposure') or row.get('value')
-            continue
-        directives.append(row)
-
-    return {'overall': overall, 'directives': directives}
+    return {'directives': rows}
 
 
 def _to_findings(parsed: dict, unit: str) -> list[dict]:
     findings = []
+    total_exposure = 0.0
     for d in parsed['directives']:
         name = d.get('name', '')
         desc = d.get('description', '')
-        exposure = d.get('exposure', 0) or 0
-        # systemd marks a directive as exposed with an 'x' (unset/permissive)
-        # in text mode; in json mode this is typically a bool 'exposed' field
-        # or exposure > 0 with no 'happy'/'✓' marker - handle both shapes.
-        exposed = bool(d.get('exposed', exposure and not d.get('happy', False)))
-        if not exposed:
+        # 'set' is true when the directive is configured (restricted/safe).
+        # false means it's at its permissive default - that's what we flag.
+        is_set = bool(d.get('set'))
+        exposure_raw = d.get('exposure')
+        exposure = float(exposure_raw) if exposure_raw not in (None, '') else 0.0
+
+        if not is_set:
+            total_exposure += exposure
+        if is_set or exposure == 0:
             continue
-        severity = _severity_for_weight(float(exposure), exposed)
-        if severity == 'ok':
-            continue
+
+        severity = _severity_for_weight(exposure, is_exposed=True)
         findings.append(_finding(
             severity, f'{name} not restricted',
             f'{desc} (exposure weight {exposure}) — unit: {unit}',
         ))
     if not findings:
         findings.append(_finding('ok', f'systemd sandboxing for {unit} looks reasonably hardened'))
-    return findings
+    return findings, round(total_exposure, 1)
 
 
 # ===========================================================================
@@ -148,7 +147,7 @@ def check_systemd_hardening(host='', user='root', port=22, key_path='', password
         return {'error': 'failed to parse systemd-analyze output as JSON', 'detail': str(e),
                 'raw_excerpt': raw.strip()[:500]}
 
-    findings = _to_findings(parsed, unit)
+    findings, computed_exposure = _to_findings(parsed, unit)
 
     counts = {'high': 0, 'medium': 0, 'low': 0, 'ok': 0}
     for f in findings:
@@ -157,7 +156,9 @@ def check_systemd_hardening(host='', user='root', port=22, key_path='', password
     return {
         'host': host,
         'unit': unit,
-        'overall_exposure': parsed['overall'],
+        # computed by summing exposure weights of unrestricted directives -
+        # systemd-analyze itself only prints this in text mode, not --json.
+        'overall_exposure': computed_exposure,
         'findings': findings,
         'summary': counts,
     }
