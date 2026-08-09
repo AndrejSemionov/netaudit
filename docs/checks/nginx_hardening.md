@@ -158,12 +158,55 @@ scored without inventing data. This is deliberately shorter than 15-25 — a lon
 list would mean scoring facts `NginxConfig` doesn't have, which is exactly the
 "looks precise, means nothing" trap this whole exercise exists to avoid.
 
-### TLS (data: `ssl_protocols`, `has_ssl_certificate`)
+### 6.0 Status matrix (all 9 controls, at a glance)
 
-| ID | Name | PASS | FAIL | N/A | Severity |
+Full detail (data source, exact conditions, Finding text) lives in the per-group
+tables below (6.1 TLS onward) — this table is the overview. Only `NGX-TLS-002` is
+a genuine three-state control; the other eight are binary (PASS/FAIL) with no WARN,
+because a WARN state was not artificially added where the underlying fact has no
+real middle ground — see the `NGX-TLS-002` rationale below for why that one control
+earned a third state and the rest didn't.
+
+| ID | Control | PASS | WARN | FAIL | N/A |
 |---|---|---|---|---|---|
-| NGX-TLS-001 | Legacy protocols disabled | `TLSv1` and `TLSv1.1` both absent from `ssl_protocols` | either present | `ssl_protocols` empty AND no `ssl_certificate` (plain HTTP vhost — TLS controls don't apply) | high |
-| NGX-TLS-002 | Modern protocol present | `TLSv1.2` or `TLSv1.3` in `ssl_protocols` | neither present, but `ssl_protocols` non-empty | `ssl_protocols` empty (see NGX-TLS-001 N/A) or already covered by NGX-TLS-001's FAIL | medium |
+| NGX-CONF-001 | server_tokens | `== 'off'` | — | `== 'on'` or not set | never (§4) |
+| NGX-CONF-002 | autoindex | disabled | — | enabled | never |
+| NGX-TLS-001 | Legacy TLS disabled | TLSv1/1.1 both absent | — | either present | no TLS configured at all |
+| NGX-TLS-002 | Modern protocol level | TLSv1.3 present | only TLSv1.2 (no 1.3) | neither 1.2 nor 1.3 | `ssl_protocols` empty |
+| NGX-TLS-003 | `ssl_protocols` explicit | non-empty | — | empty + has cert | no TLS configured at all |
+| NGX-HDR-001 | HSTS | present | — | absent | never |
+| NGX-HDR-002 | X-Frame-Options | present | — | absent | never |
+| NGX-HDR-003 | X-Content-Type-Options | present | — | absent | never |
+| NGX-EXP-001 | TLS available | has cert | — | no cert | never |
+
+### 6.1 TLS (data: `ssl_protocols`, `has_ssl_certificate`)
+
+| ID | Name | PASS (score) | WARN (score) | FAIL (score) | N/A | Severity |
+|---|---|---|---|---|---|---|
+| NGX-TLS-001 | Legacy protocols disabled | `TLSv1` and `TLSv1.1` both absent from `ssl_protocols` (100) | — | either present (0) | `ssl_protocols` empty AND no `ssl_certificate` (plain HTTP vhost — TLS controls don't apply) | high |
+| NGX-TLS-002 | Modern protocol level | `TLSv1.3` present (100) | only `TLSv1.2` present, no `TLSv1.3` (80) | neither `TLSv1.2` nor `TLSv1.3` present, but `ssl_protocols` non-empty (0) | `ssl_protocols` empty (see NGX-TLS-001 N/A) | low |
+
+**NGX-TLS-002 rationale (2026-08-09):** three-state, not binary — per OWASP's
+Transport Layer Security Cheat Sheet, web applications should default to TLS 1.3
+and *may* support TLS 1.2 for compatibility, while TLS 1.0/1.1 are formally
+deprecated (RFC 8996) and must be disabled. TLS 1.2-only is therefore a real,
+distinct middle state: not a failure (it's still an actively supported, broadly
+recommended protocol — NIST SP 800-52 Rev. 2 requires TLS 1.2 support for the
+relevant government profile), but not the preferred modern baseline either. `80`
+was chosen deliberately over a plain average (`75`) of PASS/FAIL: the score should
+reflect security posture, not the arithmetic midpoint between two endpoints - TLS
+1.2 sits closer to "acceptable" than to "broken". Severity is `low` (not `medium`)
+because a TLS 1.2-only Finding describes a suboptimal-but-not-broken state, distinct
+from NGX-TLS-001's `high` severity for genuinely deprecated protocols being enabled.
+
+**Guarding against double-penalizing the same fact:** NGX-TLS-001 and NGX-TLS-002
+score two different properties of `ssl_protocols` (legacy-protocol *absence* vs.
+modern-protocol *level*), not the same fact twice. A config with `['TLSv1',
+'TLSv1.1', 'TLSv1.2']` correctly gets NGX-TLS-001=FAIL (legacy present) and
+NGX-TLS-002=WARN (1.2 present but not 1.3) — two distinct, real shortcomings, not
+duplicate punishment for one. A config with only `['TLSv1']` gets both controls at
+FAIL — also not duplication, since it genuinely lacks both legacy-protocol
+avoidance *and* any modern protocol at all; both facts are independently true.
 
 Note: `ssl_protocols` empty but `has_ssl_certificate == True` means TLS is
 configured but the protocol list wasn't explicitly set (relying on nginx's build
@@ -176,7 +219,7 @@ actionable state.
 
 | NGX-TLS-003 | Protocols explicitly configured | `ssl_protocols` non-empty (any value) | `ssl_protocols` empty AND `has_ssl_certificate` | `has_ssl_certificate == False` (no TLS vhost at all — see NGX-EXP group) | low |
 
-### Security Headers (data: `headers_present`)
+### 6.2 Security Headers (data: `headers_present`)
 
 Each of the four headers `audit_nginx()` already checks for gets its own control
 (not folded into one "headers score") so the AI analysis and the web UI can point
@@ -196,14 +239,14 @@ fixed here, since doing so would require expanding `NginxConfig` to capture head
 values, which is Tier 2 work (section 7) and out of scope for a first version that's
 supposed to reuse existing data, not extend the collector.
 
-### Configuration
+### 6.3 Configuration
 
 | ID | Name | PASS | FAIL | N/A | Severity |
 |---|---|---|---|---|---|
 | NGX-CONF-001 | server_tokens | see section 4 in full | see section 4 | never (see 4.1) | medium |
 | NGX-CONF-002 | autoindex disabled | `autoindex_on == False` | `autoindex_on == True` | never | medium |
 
-### Exposure
+### 6.4 Exposure
 
 | ID | Name | PASS | FAIL | N/A | Severity |
 |---|---|---|---|---|---|
@@ -213,7 +256,7 @@ supposed to reuse existing data, not extend the collector.
 Exposure). This is fewer than the 15-25 originally proposed, on purpose — see the
 opening of this section.
 
-### 6.1 Why fewer controls than originally sketched
+### 6.5 Why fewer controls than originally sketched
 
 The original proposal (`NGX-TLS-001..005`, `NGX-HDR-001..005`, `NGX-CONF-001..006`,
 `NGX-EXP-001..004`) listed ~20 controls including weak-cipher detection, CSP,
