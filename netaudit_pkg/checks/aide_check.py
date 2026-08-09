@@ -45,6 +45,14 @@ try:
 except ImportError:
     paramiko = None
 
+# The Debian/Ubuntu 'aide' package ships its config at /etc/aide/aide.conf, not
+# /etc/aide.conf - AIDE 0.19.2 (confirmed against the actual target during
+# testing) does NOT fall back to that path automatically and errors out with
+# "missing configuration (use '--config' ...)" without an explicit --config,
+# so every invocation below passes it explicitly rather than relying on a
+# compiled-in default this build doesn't have.
+AIDE_CONFIG = '/etc/aide/aide.conf'
+
 SUMMARY_RE = re.compile(
     r'Total number of entries:\s*(\d+).*?'
     r'Added entries:\s*(\d+).*?'
@@ -134,7 +142,7 @@ def check_aide(host='', user='root', port=22, key_path='', password='',
         # (writing a new one as aide.db.new on --init) - these paths are standard
         # for the repo package, a custom aide.conf might differ
         if mode == 'init':
-            out, err = ssh.sudo('aide --init 2>&1', timeout=600)
+            out, err = ssh.sudo(f'aide --config {AIDE_CONFIG} --init 2>&1', timeout=600)
             # --init writes the new database as aide.db.new, it has to be
             # explicitly activated by renaming - otherwise the next --check
             # would compare against the old (or missing) database
@@ -153,7 +161,7 @@ def check_aide(host='', user='root', port=22, key_path='', password='',
             return {'error': 'AIDE database not found — run this same check with mode=init first',
                     'hint': '/var/lib/aide/aide.db does not exist'}
 
-        out, err = ssh.sudo('aide --check 2>&1', timeout=300)
+        out, err = ssh.sudo(f'aide --config {AIDE_CONFIG} --check 2>&1', timeout=300)
 
     finally:
         ssh.close()

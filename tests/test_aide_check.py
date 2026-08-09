@@ -60,9 +60,9 @@ def test_mode_mapping(monkeypatch, mode_value, expected_internal):
         installed_tools={'aide'},
         responses={
             'test -f /var/lib/aide/aide.db': ('EXISTS', ''),
-            'aide --check': ('Summary:\n  Total number of entries:\t1\n'
+            '--check': ('Summary:\n  Total number of entries:\t1\n'
                               '  Added entries:\t\t0\n  Removed entries:\t\t0\n  Changed entries:\t\t0\n', ''),
-            'aide --init': ('Total number of entries: 1\n', ''),
+            '--init': ('Total number of entries: 1\n', ''),
         },
     )
     monkeypatch.setattr('netaudit_pkg.checks.aide_check.SSHExecutor', lambda *a, **kw: fake)
@@ -89,7 +89,7 @@ def test_check_mode_needs_no_confirmation(monkeypatch):
         installed_tools={'aide'},
         responses={
             'test -f /var/lib/aide/aide.db': ('EXISTS', ''),
-            'aide --check': ('Summary:\n  Total number of entries:\t1\n'
+            '--check': ('Summary:\n  Total number of entries:\t1\n'
                               '  Added entries:\t\t0\n  Removed entries:\t\t0\n  Changed entries:\t\t0\n', ''),
         },
     )
@@ -128,7 +128,7 @@ def test_check_mode_changed_files_flagged_high(monkeypatch):
         installed_tools={'aide'},
         responses={
             'test -f /var/lib/aide/aide.db': ('EXISTS', ''),
-            'aide --check': ('Summary:\n  Total number of entries:\t1000\n'
+            '--check': ('Summary:\n  Total number of entries:\t1000\n'
                               '  Added entries:\t\t0\n  Removed entries:\t\t0\n  Changed entries:\t\t3\n', ''),
         },
     )
@@ -143,7 +143,7 @@ def test_check_mode_no_changes_is_ok(monkeypatch):
         installed_tools={'aide'},
         responses={
             'test -f /var/lib/aide/aide.db': ('EXISTS', ''),
-            'aide --check': ('Summary:\n  Total number of entries:\t1000\n'
+            '--check': ('Summary:\n  Total number of entries:\t1000\n'
                               '  Added entries:\t\t0\n  Removed entries:\t\t0\n  Changed entries:\t\t0\n', ''),
         },
     )
@@ -161,7 +161,7 @@ def test_init_mode_success(monkeypatch):
     from netaudit_pkg.registry import CONFIRM_MODIFY
     fake = FakeSSHExecutor(
         installed_tools={'aide'},
-        responses={'aide --init': ('Start timestamp: ...\nTotal number of entries: 54000\n', '')},
+        responses={'--init': ('Start timestamp: ...\nTotal number of entries: 54000\n', '')},
     )
     monkeypatch.setattr('netaudit_pkg.checks.aide_check.SSHExecutor', lambda *a, **kw: fake)
     result = check_aide(host='1.2.3.4', mode='init', confirm_modify=CONFIRM_MODIFY)
@@ -187,7 +187,7 @@ def test_missing_aide_with_auto_install(monkeypatch):
         installed_tools=set(),
         responses={
             'test -f /var/lib/aide/aide.db': ('EXISTS', ''),
-            'aide --check': ('Summary:\n  Total number of entries:\t1\n'
+            '--check': ('Summary:\n  Total number of entries:\t1\n'
                               '  Added entries:\t\t0\n  Removed entries:\t\t0\n  Changed entries:\t\t0\n', ''),
         },
     )
