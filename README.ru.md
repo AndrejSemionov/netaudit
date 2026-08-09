@@ -221,6 +221,73 @@ python3 netaudit.py analyze ~/.netaudit/history/report_X.json  # AI-анализ
 Один и тот же движок и проверки — в консоли и вебе, отчёты пишутся в общую историю
 `~/.netaudit/history/`, так что можно запустить из CLI, а открыть и проанализировать в вебе.
 
+### Частые примеры
+
+Параметры любой проверки передаются как `--ключ значение` после id проверок. Точные имена
+параметров и значения по умолчанию — `netaudit.py list`.
+
+**Аудит публичного сайта (доступ к серверу не нужен):**
+
+```bash
+python3 netaudit.py run ssl security_headers web_security_external dns_audit --url https://example.com
+```
+
+**Быстрый набор по умолчанию** — то же самое, но без ручного выбора id проверок:
+
+```bash
+python3 netaudit.py run --quick --url https://example.com          # набор для сайта
+python3 netaudit.py run --quick --host 1.2.3.4 --user root         # набор для сервера
+```
+
+**Аудит сервера по SSH** (по ключу — обычный случай):
+
+```bash
+python3 netaudit.py run server_audit lynis_audit docker_audit \
+    --host 1.2.3.4 --user root --key_path ~/.ssh/id_rsa
+```
+
+По паролю вместо ключа — вводим интерактивно, чтобы пароль не осел в истории shell:
+
+```bash
+read -s -p "Password: " NA_PASS && echo
+python3 netaudit.py run server_audit --host 1.2.3.4 --user root --password "$NA_PASS"
+unset NA_PASS
+```
+
+**AI-анализ** (нужен ключ Anthropic API, см. «С чего начать» выше) — добавь `--ai` к любому `run`:
+
+```bash
+python3 netaudit.py run server_audit lynis_audit cve_audit --host 1.2.3.4 --user root --ai
+```
+
+**Проверки, изменяющие сервер** (`lynis_audit`/`rootkit_check`/`aide_check` с `auto_install=true`,
+или `aide_check` с `mode=init`) без явного подтверждения не выполняются вообще — это работает
+одинаково и в CLI, и в веб-интерфейсе, и проверка даже не подключается по SSH, пока
+подтверждение не дано:
+
+```bash
+# без подтверждения - отказ сразу, SSH-соединение не устанавливается
+python3 netaudit.py run lynis_audit --host 1.2.3.4 --user root --auto_install true
+
+# с подтверждением - выполняется
+python3 netaudit.py run lynis_audit --host 1.2.3.4 --user root --auto_install true \
+    --confirm_modify "yes — modify the target system"
+```
+
+**File Integrity Monitoring** (`aide_check`) перед `mode=check` требует однократной
+инициализации базы. И `--init`, и `--check` сканируют всю файловую систему целиком, так что
+закладывай несколько минут на реальном сервере (в реальном тесте — около 7 минут на скромной
+VM; внутренние таймауты проверки (600с/900с) это уже учитывают):
+
+```bash
+# разовая настройка - создаёт эталонную базу (нужно подтверждение, см. выше)
+python3 netaudit.py run aide_check --host 1.2.3.4 --user root --mode init --auto_install true \
+    --confirm_modify "yes — modify the target system"
+
+# дальнейшее использование - сравнивает текущее состояние с базой, только чтение
+python3 netaudit.py run aide_check --host 1.2.3.4 --user root --mode check
+```
+
 ## Доступные проверки
 
 | Категория | Проверки |
