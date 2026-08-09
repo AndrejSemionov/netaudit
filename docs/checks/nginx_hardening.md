@@ -306,16 +306,153 @@ something. This is a small, additive change (findings.py already supports `id`) 
 should land as a discrete step in the implementation checklist (section 9), not
 bundled invisibly into the first nginx_hardening.py commit.
 
+**Status (2026-08-09): done.** `audit_nginx()` now sets `id=` on every finding that
+corresponds to a Tier 1 control (`NGX-CONF-001/002`, `NGX-TLS-001/003`,
+`NGX-HDR-001/002/003`); the "no access to the config" and "no obvious issues found"
+findings deliberately have no id, since neither corresponds to one specific control
+(see `audit_nginx()`'s docstring in `server_security.py`). Covered by
+`tests/test_nginx_finding_ids.py` (id correctness, uniqueness within a run, and no
+id outside the documented catalogue) plus the existing `test_server_security_nginx.py`
+backward-compat suite (finding title/severity content unchanged by the id addition).
+
+### 8.1 Weights and synthetic validation
+
+Per this document's own principle (section 1: "if a control can't honestly answer
+PASS/FAIL/N/A ... it does not go into v1"), weights are not chosen by feel — they're
+fixed only after running synthetic configurations through the actual
+`weighted_score()` engine and checking the resulting scores make sense as a security
+assessment, not just as arithmetic. This section records that process and its
+result, since the weights below are the ones `nginx_hardening.py` implements.
+
+#### Group weights
+
+| Group | Weight | Rationale |
+|---|---|---|
+| TLS | 40% | The most consequential cryptographic portion of the config |
+| Security Headers | 20% | Real browser-side protection, but partly redundant with application-level controls |
+| Configuration | 20% | `server_tokens`/`autoindex` directly affect information disclosure and exposure |
+| Exposure | 20% | Whether TLS exists at all is a prerequisite security property, not a minor check — see the "No TLS" finding below for why this isn't 10% |
+
+#### Control weights within each group
+
+| ID | Control | Weight | Rationale |
+|---|---|---|---|
+| NGX-TLS-001 | Legacy protocols disabled | 0.20 | TLS 1.0/1.1 present is a direct, unambiguous configuration defect |
+| NGX-TLS-002 | Modern protocol level | 0.10 | TLS 1.2-without-1.3 is a real but comparatively minor degradation — TLS 1.2 remains an actively recommended fallback (OWASP/NIST, section 6.1) |
+| NGX-TLS-003 | Explicit `ssl_protocols` | 0.10 | Explicit configuration matters for policy control, but doesn't by itself prove protocol quality |
+| NGX-HDR-001 | HSTS | 0.10 | Directly enforces HTTPS use — more consequential than the other two headers |
+| NGX-HDR-002 | X-Frame-Options | 0.05 | Protects against a narrower attack class (clickjacking) |
+| NGX-HDR-003 | X-Content-Type-Options | 0.05 | Protects against a narrower attack class (MIME sniffing) |
+| NGX-CONF-001 | `server_tokens` | 0.08 | Reduces information disclosure, doesn't expose data directly |
+| NGX-CONF-002 | `autoindex` | 0.12 | Can expose actual file contents/structure — a more direct exposure risk than a version string |
+| NGX-EXP-001 | TLS available | 0.20 | See "No TLS" finding below |
+
+Sum: `0.20+0.10+0.10 + 0.10+0.05+0.05 + 0.08+0.12 + 0.20 = 1.00`.
+
+**Why `NGX-TLS-001` and `NGX-TLS-002` are not equal weight despite both being TLS
+protocol controls:** an earlier draft weighted them equally (0.15 each). Synthetic
+testing (below) showed that with equal weight, the fact "no TLS 1.3" competed too
+closely in impact with the fact "legacy TLS enabled" — two synthetic servers, one
+with `[TLSv1, TLSv1.1, TLSv1.2]` and one with just `[TLSv1.2]`, should score very
+differently (one has an active defect, the other is merely not-yet-optimal), and
+equal weighting didn't produce that gap clearly enough. `weight` and Finding
+`severity` remain independent per `docs/scoring.md` — NGX-TLS-001 is weighted
+higher not because its severity is `high` (weight and severity are deliberately not
+derived from each other), but because the underlying fact it checks is judged more
+consequential to the module's own hardening assessment.
+
+#### Synthetic validation results
+
+Ran through the actual `weighted_score()` implementation (not hand-computed), nine
+scenarios, everything held constant except the property under test:
+
+| Scenario | Score | Notes |
+|---|---|---|
+| A. Fully hardened | 100 | baseline |
+| B. TLS 1.2 only, everything else PASS | 98 | small delta from A — see "known limitation" below |
+| C. Legacy TLS present, everything else PASS | 78 | correctly well below B |
+| C2. Legacy present, no modern protocol at all | 70 | correctly the worst TLS-only case |
+| D. No security headers, TLS good | 80 | |
+| E. Bad configuration + bad TLS | 40 | |
+| F. No TLS configured at all | 50 | see below — this was the actual finding |
+| G. Realistic mixed server (TLS 1.2 only, no HSTS, `server_tokens on`) | 80 | plausible |
+
+**The "No TLS" finding.** The first weight iteration (Exposure at 10%, matching the
+group weights originally proposed) scored scenario F at **67/100** — implausibly
+high for a site with no TLS at all. The cause wasn't the TLS weights; it was `N/A`
+weight redistribution (`docs/scoring.md` "Handling N/A"): when all three TLS
+components become inapplicable (no `ssl_protocols` to evaluate), their combined 40%
+weight redistributes across the remaining six components, and the module ends up
+scoring "the rest of the configuration" while effectively omitting TLS from the
+assessment — which rewards the *absence* of a security capability rather than
+correctly penalizing it. Raising `NGX-EXP-001` (the one control that stays
+applicable and directly asks "does TLS exist at all") from 0.10 to 0.20 brought
+scenario F down to 50 — squarely in a "serious degradation" range instead of a
+misleadingly middling one. This is a **weights fix, not an engine fix**:
+`weighted_score()`'s N/A redistribution logic is unchanged and is not nginx-specific
+— see `docs/scoring.md` for why baking nginx semantics into the generic engine was
+deliberately rejected as an option (section "8.2" below has the fuller reasoning
+this document borrowed from).
+
+**Known limitation, accepted for v1:** scenario B (TLS 1.2-only, otherwise perfect)
+scores 98/100 — a smaller penalty than might be expected for "missing the preferred
+modern protocol". This is mathematically correct given `NGX-TLS-002`'s weight
+(0.10) and WARN score (80): `0.10 × (100-80)/100 × 100 = 2` points. Deliberately
+not fixed by inflating `NGX-TLS-002`'s weight or lowering its WARN score, per the
+principle above (component score reflects security posture, not a target output;
+weight reflects genuine relative importance, not a knob for hitting a "feels right"
+number). If real-world usage later shows 98 is too forgiving, the fix belongs in
+`NGX-TLS-002`'s weight specifically — not in inflating WARN's severity, which would
+misrepresent the actual state (TLS 1.2 alone is a recognized, non-broken
+configuration per OWASP/NIST, section 6.1).
+
+### 8.2 `mandatory` was considered and rejected for v1
+
+An earlier discussion considered adding a `mandatory: bool` flag to `Component`
+(`scoring.py`) — the idea being that some controls should be able to cap or
+dominate the overall score regardless of weight, the way "no TLS at all" seemed to
+require before the Exposure re-weighting above fixed it through weights alone.
+
+Rejected for now, because:
+
+- **`weight` and `mandatory` would be two different concepts wearing the same
+  hat.** `weight` says how much a control counts toward the weighted average.
+  `mandatory` would mean something structurally different — one control able to
+  override or cap the result independent of the arithmetic (e.g. "if SSH root
+  login is permitted, hardening score cannot exceed 50 regardless of everything
+  else"). That's not a weight at all; it's a policy/cap rule layered on top of the
+  score, and deserves its own design once there's a real control that needs it,
+  not a boolean bolted onto `Component` speculatively.
+- **The actual problem (scenario F) was solved by weights alone**, once Exposure
+  was correctly weighted at 20% instead of 10%. No control in this catalogue
+  currently needs to violate the "N/A redistributes proportionally" rule that
+  `weighted_score()` already implements.
+- **Keeping `weighted_score()` free of nginx-specific (or any module-specific)
+  logic is the whole point of the `docs/scoring.md` split** between the generic
+  engine and per-module semantics (`docs/scoring.md`'s closing line: "the scoring
+  engine doesn't know anything about nginx, SSH, kernel, or Docker; modules define
+  only their own controls, states, and weights"). Adding `mandatory` now, for a
+  problem already solved without it, would be exactly the kind of premature
+  engine complexity that split was meant to avoid.
+
+If a genuine `mandatory`/cap use case appears in a future module, it should be
+designed against that concrete case (what should the cap be, does it apply before
+or after weight redistribution, does it interact with `applicable=False`) rather
+than speculatively generalized from this one resolved scenario.
+
 ## 9. Implementation checklist (for when this spec is approved)
 
 1. Add `id=` to the relevant `audit_nginx()` findings (server_tokens, TLS, each
    header, autoindex) matching the control IDs in section 6 — see section 8.
-2. `netaudit_pkg/checks/nginx_hardening.py`: new check, `category='hardening'`,
+   **Done** (2026-08-09).
+2. Weight assignment for the 4 groups and the controls within each, validated
+   against synthetic configurations run through the real `weighted_score()`.
+   **Done** (2026-08-09) — see section 8.1 for the final weights and the
+   synthetic-validation results that shaped them (notably: Exposure raised from
+   10% to 20% after synthetic testing caught an implausible score for
+   "no TLS at all").
+3. `netaudit_pkg/checks/nginx_hardening.py`: new check, `category='hardening'`,
    consumes `collect_nginx_config(ssh)` (not a second independent `nginx -T` call).
-3. Weight assignment for the 4 groups and the controls within each — **not yet
-   decided**, deliberately left out of this document per the "structure first,
-   weights after review" ordering. A follow-up pass fills in section 6's table
-   with final `weight` values and a short justification for each, before code.
 4. Tests: pure-function tests for each control's PASS/FAIL/N/A logic (no SSH mock
    needed, same pattern as `test_scoring.py`), plus `FakeSSHExecutor` tests for the
    full check like `test_server_security_nginx.py`.
