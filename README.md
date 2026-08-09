@@ -207,6 +207,74 @@ python3 netaudit.py history              # past reports
 python3 netaudit.py install <tool>       # install a missing tool (nmap, tshark, ...)
 ```
 
+### Common examples
+
+Every check takes its params as `--key value` after the check ID(s). `netaudit.py list` shows
+each check's exact param names and defaults.
+
+**Audit a public website (no server access needed):**
+
+```bash
+python3 netaudit.py run ssl security_headers web_security_external dns_audit --url https://example.com
+```
+
+**Quick default bundle** — same idea, without picking check IDs by hand:
+
+```bash
+python3 netaudit.py run --quick --url https://example.com          # site bundle
+python3 netaudit.py run --quick --host 1.2.3.4 --user root         # server bundle
+```
+
+**Audit a server you have SSH access to** (key-based, the common case):
+
+```bash
+python3 netaudit.py run server_audit lynis_audit docker_audit \
+    --host 1.2.3.4 --user root --key_path ~/.ssh/id_rsa
+```
+
+Password-based instead of a key — read it interactively so it never lands in shell history:
+
+```bash
+read -s -p "Password: " NA_PASS && echo
+python3 netaudit.py run server_audit --host 1.2.3.4 --user root --password "$NA_PASS"
+unset NA_PASS
+```
+
+**Add AI analysis** (needs an Anthropic API key, see "Getting started" above) — append `--ai`
+to any `run`:
+
+```bash
+python3 netaudit.py run server_audit lynis_audit cve_audit --host 1.2.3.4 --user root --ai
+```
+
+**Checks that modify the target** (`lynis_audit`/`rootkit_check`/`aide_check` with
+`auto_install=true`, or `aide_check` with `mode=init`) refuse to run without an explicit
+confirmation — this is enforced the same way in the CLI and the web UI, and the check
+never even connects over SSH until it's given:
+
+```bash
+# without confirmation - refused immediately, no SSH connection made
+python3 netaudit.py run lynis_audit --host 1.2.3.4 --user root --auto_install true
+
+# with confirmation - proceeds
+python3 netaudit.py run lynis_audit --host 1.2.3.4 --user root --auto_install true \
+    --confirm_modify "yes — modify the target system"
+```
+
+**File Integrity Monitoring** (`aide_check`) needs a one-time database initialization before
+`mode=check` has anything to compare against. Both `--init` and `--check` do a full filesystem
+scan, so budget several minutes on a real server (a first-hand test took ~7 minutes on a
+modest VM — the check's internal timeouts (600s/900s) already account for this):
+
+```bash
+# one-time setup - creates the reference database (requires confirmation, see above)
+python3 netaudit.py run aide_check --host 1.2.3.4 --user root --mode init --auto_install true \
+    --confirm_modify "yes — modify the target system"
+
+# routine use afterwards - compares current state against that database, read-only
+python3 netaudit.py run aide_check --host 1.2.3.4 --user root --mode check
+```
+
 ## Checks
 
 27 checks across 6 categories: network (mtr, tcptraceroute, ping, dig, arping),
