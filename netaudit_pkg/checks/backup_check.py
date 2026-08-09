@@ -29,6 +29,7 @@ from __future__ import annotations
 import re
 
 from ..registry import register
+from ..findings import finding as _finding
 from ..ssh import SSHExecutor, HostKeyMismatchError
 
 try:
@@ -36,20 +37,11 @@ try:
 except ImportError:
     paramiko = None
 
-
-def _finding(severity, title, detail='', confidence='high', id=None):
-    f = {'severity': severity, 'title': title, 'detail': detail, 'confidence': confidence}
-    if id:
-        f['id'] = id
-    return f
-
-
 # minimum "sane" backup file size - below this, it's almost certainly a dump
 # that failed midway, not a legitimately small database
 MIN_SANE_BACKUP_BYTES = 1024  # 1 KB
 
 ARCHIVE_EXT_RE = re.compile(r'\.(tar\.gz|tgz|gz|zip|sql|sql\.gz|bz2|tar\.bz2|xz)$', re.IGNORECASE)
-
 
 def _find_files(ssh: SSHExecutor, directory: str) -> list[dict]:
     """Machine-readable ls -la via stat, each line:
@@ -76,7 +68,6 @@ def _find_files(ssh: SSHExecutor, directory: str) -> list[dict]:
             continue
         files.append({'mtime': mtime, 'size': size, 'name': parts[2]})
     return files
-
 
 def _check_archive_integrity(ssh: SSHExecutor, directory: str, filename: str) -> str | None:
     """Returns None if integrity is fine or the format isn't recognized (not checked),
@@ -108,7 +99,6 @@ def _check_archive_integrity(ssh: SSHExecutor, directory: str, filename: str) ->
         return 'archive fails the integrity check (corrupted or incomplete)'
     return None
 
-
 def _check_disk_space(ssh: SSHExecutor, directory: str) -> tuple[int | None, str | None]:
     """Returns (percent_used, error)."""
     out, err = ssh.run(f"df -P {directory!r} 2>&1 | tail -1")
@@ -119,7 +109,6 @@ def _check_disk_space(ssh: SSHExecutor, directory: str) -> tuple[int | None, str
         except ValueError:
             pass
     return None, 'could not determine disk usage'
-
 
 @register(
     id='backup_check', label='Backup check (SSH)', category='server',

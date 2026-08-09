@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 import httpx
 
 from ..registry import register
+from ..findings import finding as _finding
 
 CRTSH_URL = 'https://crt.sh/'
 # crt.sh is known to be unstable - don't wait long, a clean skip beats a hung audit
@@ -39,14 +40,6 @@ REQUEST_TIMEOUT = 12
 
 WILDCARD_RE = re.compile(r'^\*\.')
 
-
-def _finding(severity, title, detail='', confidence='high', id=None):
-    f = {'severity': severity, 'title': title, 'detail': detail, 'confidence': confidence}
-    if id:
-        f['id'] = id
-    return f
-
-
 def _fetch_certs(query: str) -> list[dict]:
     """Queries crt.sh, returns a list of records or raises an exception
     (handled by the caller - this keeps a purely network-layer function)."""
@@ -56,12 +49,10 @@ def _fetch_certs(query: str) -> list[dict]:
     resp.raise_for_status()
     return resp.json()
 
-
 def _extract_hostnames(cert: dict) -> set[str]:
     """A single certificate's name_value can contain multiple lines (SAN)."""
     raw = cert.get('name_value', '')
     return {line.strip().lower() for line in raw.split('\n') if line.strip()}
-
 
 def _parse_crtsh_date(s: str) -> datetime | None:
     """crt.sh returns dates like '2024-01-01T00:00:00' (sometimes with fractional seconds)."""
@@ -73,7 +64,6 @@ def _parse_crtsh_date(s: str) -> datetime | None:
         except ValueError:
             continue
     return None
-
 
 @register(
     id='cert_transparency', label='Certificate Transparency monitoring', category='site', risk_level='PASSIVE',

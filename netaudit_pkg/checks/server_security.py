@@ -15,6 +15,7 @@ import socket
 import ssl
 
 from ..registry import register
+from ..findings import finding as _finding
 from ..utils import run_cmd, tool_available
 from ..ssh import SSHExecutor, HostKeyMismatchError
 
@@ -23,17 +24,9 @@ try:
 except ImportError:
     paramiko = None
 
-
 # ===========================================================================
 # Helpers
 # ===========================================================================
-
-def _finding(severity, title, detail='', confidence='high', id=None):
-    f = {'severity': severity, 'title': title, 'detail': detail, 'confidence': confidence}
-    if id:
-        f['id'] = id
-    return f
-
 
 # ===========================================================================
 # nginx
@@ -82,7 +75,6 @@ def audit_nginx(ssh: SSHExecutor) -> dict:
 
     return {'installed': True, 'version': ver.strip(), 'findings': findings}
 
-
 # ===========================================================================
 # fail2ban
 # ===========================================================================
@@ -123,7 +115,6 @@ def audit_fail2ban(ssh: SSHExecutor) -> dict:
         findings.append(_finding('ok', f'active jails: {len(jails)}', f'total bans: {total_banned}'))
 
     return {'installed': True, 'jails': jail_info, 'findings': findings}
-
 
 # ===========================================================================
 # firewall
@@ -183,7 +174,6 @@ def audit_firewall(ssh: SSHExecutor) -> dict:
 
     return {'findings': findings}
 
-
 # ===========================================================================
 # SQL (MySQL/MariaDB) — config and exposure, without logging into the DB
 # ===========================================================================
@@ -214,7 +204,6 @@ def audit_sql(ssh: SSHExecutor) -> dict:
         findings.append(_finding('ok', 'MySQL/MariaDB: no obvious exposure issues found'))
 
     return {'installed': True, 'findings': findings}
-
 
 # ===========================================================================
 # SSH hardening
@@ -251,7 +240,6 @@ def audit_ssh_hardening(ssh: SSHExecutor) -> dict:
 
     return {'port': port, 'root_login': root_login, 'password_auth': pw_auth,
             'max_auth_tries': max_auth, 'findings': findings}
-
 
 # ===========================================================================
 # Combined SSH audit
@@ -300,7 +288,6 @@ def check_server_audit(host='', user='root', port=22, key_path='', password='') 
 
     return {'host': host, 'sections': sections, 'summary': counts}
 
-
 # ===========================================================================
 # External web audit (no server access)
 # ===========================================================================
@@ -314,7 +301,6 @@ SENSITIVE_PATHS = [
     '/docker-compose.yml', '/.npmrc',
 ]
 
-
 def _check_tls_version(hostname, version_name, ssl_version) -> bool:
     """Tries connecting with a specific TLS version. True if the server accepted it."""
     try:
@@ -327,12 +313,10 @@ def _check_tls_version(hostname, version_name, ssl_version) -> bool:
     except (ssl.SSLError, socket.error, OSError, ValueError):
         return False
 
-
 def _parse_set_cookie_headers(head: str) -> list[str]:
     """Extracts all Set-Cookie lines from raw curl -I response headers.
     Headers are case-insensitive, the value may start on a new line after ':'."""
     return re.findall(r'^set-cookie:\s*(.+)$', head, re.IGNORECASE | re.MULTILINE)
-
 
 def _audit_cookies(cookie_lines: list[str]) -> list[dict]:
     """Checks Secure/HttpOnly/SameSite flags for each cookie found."""
@@ -358,7 +342,6 @@ def _audit_cookies(cookie_lines: list[str]) -> list[dict]:
                                       line[:120]))
     return findings
 
-
 def _audit_cors(base: str) -> list[dict]:
     """Checks CORS headers for the dangerous combination: any Origin allowed + credentials.
     Sends a known-foreign Origin and sees what the server reflects back."""
@@ -380,7 +363,6 @@ def _audit_cors(base: str) -> list[dict]:
             findings.append(_finding('high', 'CORS: the server reflects any Origin back',
                                       f'responded with Allow-Origin: {acao_val} to a fake Origin — any site can read responses as the user'))
     return findings
-
 
 def _audit_error_page(base: str) -> list[dict]:
     """Requests a known-nonexistent path and looks for signs of a verbose error
@@ -406,7 +388,6 @@ def _audit_error_page(base: str) -> list[dict]:
                                       f'the error page at {probe_path} exposes internal details — turn off debug mode in production'))
             break  # one finding is enough, don't duplicate per signal
     return findings
-
 
 @register(
     id='web_security_external', label='External web audit (no access)', category='site', risk_level='PASSIVE',

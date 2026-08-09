@@ -12,22 +12,14 @@ Doesn't change anything on the server - lynis itself is read-only in audit mode.
 
 from __future__ import annotations
 
-
 from ..registry import register
+from ..findings import finding as _finding
 from ..ssh import SSHExecutor, HostKeyMismatchError
 
 try:
     import paramiko
 except ImportError:
     paramiko = None
-
-
-def _finding(severity, title, detail='', confidence='high', id=None):
-    f = {'severity': severity, 'title': title, 'detail': detail, 'confidence': confidence}
-    if id:
-        f['id'] = id
-    return f
-
 
 # ===========================================================================
 # Parsing lynis-report.dat
@@ -83,7 +75,6 @@ def _parse_report(raw: str) -> dict:
         'suggestions': suggestions,
     }
 
-
 def _to_findings(parsed: dict) -> list[dict]:
     findings = []
     # Lynis warnings are real problems - map to high
@@ -95,7 +86,6 @@ def _to_findings(parsed: dict) -> list[dict]:
     if not findings:
         findings.append(_finding('ok', 'Lynis found no issues'))
     return findings
-
 
 # ===========================================================================
 # Check

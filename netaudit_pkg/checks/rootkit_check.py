@@ -26,6 +26,7 @@ from __future__ import annotations
 import re
 
 from ..registry import register
+from ..findings import finding as _finding
 from ..ssh import SSHExecutor, HostKeyMismatchError
 
 try:
@@ -33,17 +34,10 @@ try:
 except ImportError:
     paramiko = None
 
-
-def _finding(severity, title, detail='', confidence='high', id=None):
-    """confidence: 'high' (default) - the finding is a direct fact (a file's mtime,
-    a config value). 'low'/'medium' - the finding comes from a heuristic or a tool
-    known for false positives (rkhunter/chkrootkit here) and needs a human to verify
-    it before treating it as confirmed."""
-    f = {'severity': severity, 'title': title, 'detail': detail, 'confidence': confidence}
-    if id:
-        f['id'] = id
-    return f
-
+# confidence: 'high' (default) - the finding is a direct fact (a file's mtime,
+# a config value). 'low'/'medium' - the finding comes from a heuristic or a tool
+# known for false positives (rkhunter/chkrootkit here) and needs a human to verify
+# it before treating it as confirmed.
 
 # ===========================================================================
 # rkhunter
@@ -60,7 +54,6 @@ def _parse_rkhunter(raw: str) -> list[dict]:
             findings.append(_finding('medium', text, confidence='low'))
     return findings
 
-
 def _run_rkhunter(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
     """Returns (findings, error). error is not None if the tool is missing/failed to run."""
     which_out, _ = ssh.run('which rkhunter || echo NOTFOUND')
@@ -74,13 +67,11 @@ def _run_rkhunter(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
 
     return _parse_rkhunter(out), None
 
-
 # ===========================================================================
 # chkrootkit
 # ===========================================================================
 
 CHKROOTKIT_LINE_RE = re.compile(r"^Checking `([^']+)'\.\.\.\s*(.+)$")
-
 
 def _parse_chkrootkit(raw: str) -> list[dict]:
     findings = []
@@ -99,7 +90,6 @@ def _parse_chkrootkit(raw: str) -> list[dict]:
                                       'the command is vulnerable but not in use (not running/not in config)'))
     return findings
 
-
 def _run_chkrootkit(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
     which_out, _ = ssh.run('which chkrootkit || echo NOTFOUND')
     if 'NOTFOUND' in which_out:
@@ -111,7 +101,6 @@ def _run_chkrootkit(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
         return [], 'chkrootkit returned no output (check sudo privileges)'
 
     return _parse_chkrootkit(out), None
-
 
 # ===========================================================================
 # Check

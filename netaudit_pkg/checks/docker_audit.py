@@ -33,20 +33,13 @@ from __future__ import annotations
 import json
 
 from ..registry import register
+from ..findings import finding as _finding
 from ..ssh import SSHExecutor, HostKeyMismatchError
 
 try:
     import paramiko
 except ImportError:
     paramiko = None
-
-
-def _finding(severity, title, detail='', confidence='high', id=None):
-    f = {'severity': severity, 'title': title, 'detail': detail, 'confidence': confidence}
-    if id:
-        f['id'] = id
-    return f
-
 
 # capabilities whose addition widens the attack surface more than typical
 # legitimate cases (NET_RAW for network utilities, NET_BIND_SERVICE for
@@ -60,14 +53,12 @@ DANGEROUS_CAPS = {
 # regular application (not a system monitoring/backup tool)
 DANGEROUS_BIND_TARGETS = ('/', '/etc', '/root', '/var/run/docker.sock', '/boot')
 
-
 def _parse_container(raw_json: str) -> dict | None:
     try:
         data = json.loads(raw_json)
     except (json.JSONDecodeError, ValueError):
         return None
     return data
-
 
 def _audit_one_container(info: dict) -> list[dict]:
     findings = []
@@ -146,7 +137,6 @@ def _audit_one_container(info: dict) -> list[dict]:
         ))
 
     return findings
-
 
 @register(
     id='docker_audit', label='Docker container audit (SSH)', category='server',

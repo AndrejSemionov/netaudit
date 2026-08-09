@@ -36,19 +36,10 @@ HIBP_ENDPOINT = 'https://haveibeenpwned.com/api/v3/breachedaccount/{email}'
 # XposedOrNot asks not to exceed 2 requests/sec from one IP
 _XON_MIN_INTERVAL = 0.55
 
-
-def _finding(severity, title, detail='', confidence='high', id=None):
-    f = {'severity': severity, 'title': title, 'detail': detail, 'confidence': confidence}
-    if id:
-        f['id'] = id
-    return f
-
-
 def _resolve_hibp_key() -> str | None:
     """HIBP key: DB setting only - it's a paid service with no free tier at
     all, so an environment variable isn't needed here, unlike anthropic_api_key."""
     return storage.setting_get('hibp_api_key') or None
-
 
 def _check_email_xposedornot(email: str) -> dict:
     """Returns {'ok': bool, 'breaches': [...], 'error': str|None}."""
@@ -80,7 +71,6 @@ def _check_email_xposedornot(email: str) -> dict:
             names.append(item)
     return {'ok': True, 'breaches': names, 'error': None}
 
-
 def _check_email_hibp(email: str, api_key: str) -> dict:
     """Returns {'ok': bool, 'breaches': [...], 'error': str|None}."""
     try:
@@ -108,7 +98,6 @@ def _check_email_hibp(email: str, api_key: str) -> dict:
 
     names = [b.get('Name', '?') for b in data] if isinstance(data, list) else []
     return {'ok': True, 'breaches': names, 'error': None}
-
 
 @register(
     id='breach_check', label='Data breach check (email)', category='security', risk_level='PASSIVE',

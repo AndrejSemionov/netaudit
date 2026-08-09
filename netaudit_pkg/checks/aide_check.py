@@ -37,20 +37,13 @@ from __future__ import annotations
 import re
 
 from ..registry import register
+from ..findings import finding as _finding
 from ..ssh import SSHExecutor, HostKeyMismatchError
 
 try:
     import paramiko
 except ImportError:
     paramiko = None
-
-
-def _finding(severity, title, detail='', confidence='high', id=None):
-    f = {'severity': severity, 'title': title, 'detail': detail, 'confidence': confidence}
-    if id:
-        f['id'] = id
-    return f
-
 
 SUMMARY_RE = re.compile(
     r'Total number of entries:\s*(\d+).*?'
@@ -65,7 +58,6 @@ SUMMARY_RE = re.compile(
 # not the whole list - on a large system it could be huge
 CHANGED_FILE_RE = re.compile(r'^(?:f|d|l)\S*\s+(\S+)\s*$', re.MULTILINE)
 
-
 def _parse_summary(raw: str) -> dict | None:
     m = SUMMARY_RE.search(raw)
     if not m:
@@ -76,7 +68,6 @@ def _parse_summary(raw: str) -> dict | None:
         'removed': int(m.group(3)),
         'changed': int(m.group(4)),
     }
-
 
 @register(
     id='aide_check', label='File Integrity Monitoring (AIDE, SSH)', category='server', risk_level='MODIFYING',

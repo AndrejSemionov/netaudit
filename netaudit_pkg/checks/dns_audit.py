@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 
 from ..registry import register
+from ..findings import finding as _finding
 from ..utils import run_cmd, tool_available
 
 # common DKIM selectors - DKIM doesn't publish a list of selectors anywhere in
@@ -40,14 +41,6 @@ TXT_SERVICE_PATTERNS = [
     (r'v=DMARC1', None),  # already handled separately as DMARC
 ]
 
-
-def _finding(severity, title, detail='', confidence='high', id=None):
-    f = {'severity': severity, 'title': title, 'detail': detail, 'confidence': confidence}
-    if id:
-        f['id'] = id
-    return f
-
-
 def _dig_txt(name: str) -> list[str]:
     """TXT records for a name, returns a list of raw strings (unquoted)."""
     code, out, _ = run_cmd(['dig', '+short', 'TXT', name], timeout=10)
@@ -62,13 +55,11 @@ def _dig_txt(name: str) -> list[str]:
         records.append(line.strip('"').replace('" "', ''))
     return records
 
-
 def _dig_cname(name: str) -> str | None:
     code, out, _ = run_cmd(['dig', '+short', 'CNAME', name], timeout=10)
     if code != 0 or not out.strip():
         return None
     return out.strip().splitlines()[0].rstrip('.')
-
 
 def _resolves(name: str) -> bool:
     """Whether there's any A/AAAA/CNAME response for the name."""
@@ -77,7 +68,6 @@ def _resolves(name: str) -> bool:
         if code == 0 and out.strip():
             return True
     return False
-
 
 # ===========================================================================
 # SPF
@@ -121,7 +111,6 @@ def _check_spf(domain: str) -> list[dict]:
         findings.append(_finding('ok', 'SPF is configured correctly', spf))
     return findings
 
-
 # ===========================================================================
 # DKIM
 # ===========================================================================
@@ -148,7 +137,6 @@ def _check_dkim(domain: str) -> list[dict]:
         else:
             findings.append(_finding('ok', f'DKIM selector {selector} found and active'))
     return findings
-
 
 # ===========================================================================
 # DMARC
@@ -182,7 +170,6 @@ def _check_dmarc(domain: str) -> list[dict]:
 
     return findings
 
-
 # ===========================================================================
 # DNSSEC
 # ===========================================================================
@@ -199,7 +186,6 @@ def _check_dnssec(domain: str) -> list[dict]:
     return [_finding('medium', 'DNSKEY exists but no DS record at the registrar',
                      'the zone is signed, but the chain of trust isn\'t closed — add a DS record at the domain registrar')]
 
-
 # ===========================================================================
 # Dangling CNAME (subdomain takeover risk)
 # ===========================================================================
@@ -212,7 +198,6 @@ DANGLING_TARGET_HINTS = [
     'cloudfront.net', 'netlify.app', 'vercel.app', 'wordpress.com',
     'shopify.com', 'fastly.net', 'pantheonsite.io',
 ]
-
 
 def _check_dangling_cnames(domain: str, subdomains: list[str]) -> list[dict]:
     findings = []
@@ -232,7 +217,6 @@ def _check_dangling_cnames(domain: str, subdomains: list[str]) -> list[dict]:
     if checked and not findings:
         findings.append(_finding('ok', f'checked {checked} CNAME target(s), no dangling ones found'))
     return findings
-
 
 # ===========================================================================
 # Discovered third-party services (via verification tokens in TXT)
@@ -256,7 +240,6 @@ def _check_discovered_services(domain: str) -> list[dict]:
         findings.append(_finding('low', f'service detected: {label}',
                                  'a verification token in a TXT record — reveals infrastructure in use'))
     return findings
-
 
 # ===========================================================================
 # Combined check
