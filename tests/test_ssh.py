@@ -8,7 +8,6 @@ file tests SSHExecutor's own internals, so it needs the layer underneath it.
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest

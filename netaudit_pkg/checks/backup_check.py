@@ -166,7 +166,6 @@ def check_backup(host='', user='root', port=22, key_path='', password='',
     try:
         import time
         now = time.time()
-        max_age_seconds = float(max_age_hours) * 3600
 
         for directory in dir_list:
             entry = {'directory': directory}

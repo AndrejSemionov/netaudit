@@ -8,9 +8,7 @@ at a fresh temp SQLite file per test - no test here touches the real
 
 from __future__ import annotations
 
-import json
 
-import pytest
 
 
 # ===========================================================================

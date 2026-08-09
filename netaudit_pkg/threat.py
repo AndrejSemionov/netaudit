@@ -22,7 +22,6 @@ a human-facing assessment.
 from __future__ import annotations
 
 import ipaddress
-import re
 
 from .utils import run_cmd, tool_available
 from . import storage
@@ -146,7 +145,6 @@ def score_destination(dest: dict, do_whois: bool = False) -> dict:
     ip = dest.get('ip', '')
     host = dest.get('host')
     ports = set(dest.get('ports', []))
-    protocols = set(p.lower() for p in dest.get('protocols', []))
     conns = dest.get('connections') or dest.get('packets') or 0
 
     reasons: list[str] = []

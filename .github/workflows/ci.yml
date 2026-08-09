@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install runtime + dev dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Check syntax (compile all Python files)
+        run: python -m compileall -q netaudit_pkg netaudit.py web tests
+
+      - name: Lint (ruff — errors and undefined names only)
+        run: |
+          pip install ruff
+          # E9/F only: syntax errors, undefined names, unused imports/variables.
+          # Deliberately not the full default ruff rule set (import sorting,
+          # blind-except, timezone-naive datetime, etc) - those are style
+          # preferences the codebase hasn't been migrated to yet, and running
+          # them here would make CI red for reasons unrelated to correctness.
+          # See the project's technical-debt roadmap for widening this later.
+          ruff check --select=E9,F netaudit_pkg netaudit.py web tests
+
+      - name: Run tests
+        run: python -m pytest tests/ -v

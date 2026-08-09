@@ -12,7 +12,6 @@ Doesn't change anything on the server - lynis itself is read-only in audit mode.
 
 from __future__ import annotations
 
-import re
 
 from ..registry import register
 from ..ssh import SSHExecutor, HostKeyMismatchError

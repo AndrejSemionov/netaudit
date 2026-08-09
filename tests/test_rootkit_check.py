@@ -3,7 +3,6 @@ parsing, confidence levels, and the full check flow with both tools."""
 
 from __future__ import annotations
 
-import pytest
 
 from netaudit_pkg.checks.rootkit_check import (
     _parse_rkhunter, _parse_chkrootkit, check_rootkit,

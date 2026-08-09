@@ -86,7 +86,7 @@ def check_tshark_capture(interface: str = 'any', duration: int = 15, bpf_filter:
         parts = line.split('|')
         if len(parts) < 4:
             continue
-        src, dst, length, proto = parts[0], parts[1], parts[2], parts[3]
+        _src, dst, length, proto = parts[0], parts[1], parts[2], parts[3]
         if not dst:
             continue
         try:

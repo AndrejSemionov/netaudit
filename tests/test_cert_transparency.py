@@ -5,7 +5,6 @@ hostnames, unexpected issuer, wildcards)."""
 from __future__ import annotations
 
 import httpx
-import pytest
 
 from netaudit_pkg.checks.cert_transparency import (
     _parse_crtsh_date, _extract_hostnames, check_cert_transparency,
