@@ -167,7 +167,11 @@ def check_aide(host='', user='root', port=22, key_path='', password='',
             return {'error': 'AIDE database not found — run this same check with mode=init first',
                     'hint': '/var/lib/aide/aide.db does not exist'}
 
-        out, err = ssh.sudo(f'aide --config {AIDE_CONFIG} --check 2>&1', timeout=300)
+        # timeout=900 (15 min): a full filesystem scan on a real target took
+        # ~7 minutes end to end (confirmed via `time aide --check`), same
+        # ballpark as --init above - a low timeout here would kill a
+        # legitimate scan on any server with a non-trivial filesystem.
+        out, err = ssh.sudo(f'aide --config {AIDE_CONFIG} --check 2>&1', timeout=900)
 
     finally:
         ssh.close()
