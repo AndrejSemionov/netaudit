@@ -164,3 +164,75 @@ def test_weighted_score_tolerates_float_rounding_noise():
     ]
     result = weighted_score(components)
     assert result['score'] == 100
+
+
+# ===========================================================================
+# applicable=False (N/A) handling
+# ===========================================================================
+
+def test_inapplicable_component_excluded_and_weight_redistributed():
+    # two equal-weight components, one N/A - the applicable one should end
+    # up carrying the full score, not diluted by the N/A one defaulting to
+    # score=0 or score=max.
+    components = [
+        {'name': 'a', 'weight': 0.5, 'score': 50, 'max': 100, 'applicable': False},
+        {'name': 'b', 'weight': 0.5, 'score': 80, 'max': 100},
+    ]
+    result = weighted_score(components)
+    assert result['score'] == 80  # b alone determines the score, not (50+80)/2=65
+
+
+def test_inapplicable_component_marked_in_output():
+    components = [
+        {'name': 'a', 'weight': 0.5, 'score': 0, 'max': 1, 'applicable': False,
+         'reason': 'module not compiled in'},
+        {'name': 'b', 'weight': 0.5, 'score': 100, 'max': 100},
+    ]
+    result = weighted_score(components)
+    a_out = next(c for c in result['components'] if c['name'] == 'a')
+    b_out = next(c for c in result['components'] if c['name'] == 'b')
+    assert a_out['applicable'] is False
+    assert a_out['reason'] == 'module not compiled in'
+    assert 'applicable' not in b_out  # applicable=True components don't carry the key
+
+
+def test_inapplicable_weight_redistributes_proportionally_not_equally():
+    # three components, one N/A - the two remaining should keep their
+    # relative 1:3 ratio to each other, not become equal weight.
+    components = [
+        {'name': 'a', 'weight': 0.1, 'score': 100, 'max': 100},
+        {'name': 'b', 'weight': 0.3, 'score': 0, 'max': 100},
+        {'name': 'c', 'weight': 0.6, 'score': 0, 'max': 100, 'applicable': False},
+    ]
+    result = weighted_score(components)
+    # redistributed: a=0.1/0.4=0.25, b=0.3/0.4=0.75
+    # score = 0.25*100 + 0.75*0 = 25
+    assert result['score'] == 25
+
+
+def test_original_weight_sum_still_validated_before_na_redistribution():
+    # weights must sum to 1.0 across ALL components (including N/A ones) -
+    # this validates the module author's original design, independent of
+    # what happens to be applicable at runtime.
+    components = [
+        {'name': 'a', 'weight': 0.3, 'score': 50, 'max': 100},
+        {'name': 'b', 'weight': 0.3, 'score': 50, 'max': 100, 'applicable': False},
+        # sum = 0.6, not 1.0 - should fail regardless of applicability
+    ]
+    with pytest.raises(ValueError, match='must sum to 1.0'):
+        weighted_score(components)
+
+
+def test_all_components_inapplicable_raises():
+    components = [
+        {'name': 'a', 'weight': 0.5, 'score': 0, 'max': 1, 'applicable': False},
+        {'name': 'b', 'weight': 0.5, 'score': 0, 'max': 1, 'applicable': False},
+    ]
+    with pytest.raises(ValueError, match='all components are applicable=False'):
+        weighted_score(components)
+
+
+def test_single_inapplicable_component_alone_raises():
+    components = [{'name': 'a', 'weight': 1.0, 'score': 0, 'max': 1, 'applicable': False}]
+    with pytest.raises(ValueError, match='all components are applicable=False'):
+        weighted_score(components)

@@ -31,12 +31,27 @@ class Component:
     each component to a 0-1 fraction of its own max before weighting, so
     components can mix scales (e.g. one component scored out of 10, another
     out of 100) without the caller doing any conversion.
+
+    `applicable=False` marks a component the check couldn't evaluate (e.g. an
+    SSH session that dropped mid-audit, or a control that doesn't apply to
+    this build - "HTTP/2 config" when nginx was compiled without the http_v2
+    module). Neither `score=0` (would look like "failed the check", falsely
+    lowering the result) nor `score=max` (would look like "passed", hiding
+    that part of the audit didn't run) is correct here - the component is
+    excluded from the weighted average entirely, and weighted_score()
+    redistributes its weight proportionally across the remaining applicable
+    components, so a module's score is never silently inflated or deflated
+    by a control it couldn't check. `score`/`max` are still required and
+    still validated even when not applicable (use 0/1 as a neutral
+    placeholder) so the dataclass shape stays uniform for serialization.
     """
 
     name: str
     weight: float
     score: float
     max: float
+    applicable: bool = True
+    reason: str = ''
 
     def __post_init__(self):
         if not self.name or not isinstance(self.name, str):
@@ -58,7 +73,12 @@ class Component:
             )
 
     def to_dict(self) -> dict:
-        return {'name': self.name, 'weight': self.weight, 'score': self.score, 'max': self.max}
+        d = {'name': self.name, 'weight': self.weight, 'score': self.score, 'max': self.max}
+        if not self.applicable:
+            d['applicable'] = False
+            if self.reason:
+                d['reason'] = self.reason
+        return d
 
 
 @dataclass
@@ -78,24 +98,38 @@ def weighted_score(components: list[dict] | list[Component]) -> dict:
     or a dict with keys name/weight/score/max (dicts are converted to
     Component, which runs the same validation either way).
 
-    Formula: each component is normalized to a 0-1 fraction of its own max,
-    multiplied by its weight, summed across all components, then scaled to
-    0-100 and rounded to the nearest integer:
+    Formula: components with applicable=False are excluded, and their weight
+    is redistributed proportionally across the remaining applicable
+    components (so their relative weighting to each other is unchanged, they
+    just now cover the full 1.0). Each remaining component is normalized to
+    a 0-1 fraction of its own max, multiplied by its (redistributed) weight,
+    summed, then scaled to 0-100 and rounded to the nearest integer:
 
-        score = round(100 * sum(weight_i * (score_i / max_i) for each component))
+        score = round(100 * sum(weight_i' * (score_i / max_i) for each applicable component))
+
+    where weight_i' = weight_i / sum(weight of applicable components).
 
     Raises ValueError (does not silently correct) when:
       - components is empty or not a list
       - any component fails its own validation (see Component.__post_init__:
         non-positive weight, non-positive max, score outside [0, max])
-      - the weights across all components don't sum to 1.0 within 1e-6 -
-        deliberately strict; see docs/scoring.md for why a module with a
+      - the weights across ALL components (applicable or not) don't sum to
+        1.0 within 1e-6 - this validates the module author's original
+        weighting is well-formed, before any N/A redistribution happens.
+        Deliberately strict; see docs/scoring.md for why a module with a
         weight-sum bug should fail immediately rather than produce a
         plausible-looking wrong score.
+      - every component is applicable=False - a score with zero applicable
+        components is undefined, not zero (zero would look like "everything
+        failed", which is a different, false claim - this must fail loudly
+        so the caller changes its report shape entirely, e.g. skipping the
+        hardening score for this run rather than showing a fake 0/100).
 
     Returns {'score': int, 'max': 100, 'components': [...]} - 'max' is always
     100 regardless of what scale individual components used internally, per
-    the contract in docs/scoring.md.
+    the contract in docs/scoring.md. 'components' includes ALL components,
+    including inapplicable ones (marked applicable: false), so the caller
+    can still show what wasn't checked and why.
     """
     if not isinstance(components, list) or not components:
         raise ValueError(
@@ -106,6 +140,9 @@ def weighted_score(components: list[dict] | list[Component]) -> dict:
         c if isinstance(c, Component) else Component(**c) for c in components
     ]
 
+    # validate the *original* weighting is well-formed before any N/A
+    # redistribution - a module author's weights must sum to 1.0 regardless
+    # of which components end up applicable at run time.
     weight_sum = sum(c.weight for c in parsed)
     if abs(weight_sum - 1.0) > _WEIGHT_SUM_TOLERANCE:
         names = ', '.join(f'{c.name}={c.weight}' for c in parsed)
@@ -114,7 +151,18 @@ def weighted_score(components: list[dict] | list[Component]) -> dict:
             f'({names})'
         )
 
-    fraction = sum(c.weight * (c.score / c.max) for c in parsed)
+    applicable = [c for c in parsed if c.applicable]
+    if not applicable:
+        raise ValueError(
+            'weighted_score: all components are applicable=False - a score with zero '
+            'applicable components is undefined, not zero. The caller should omit the '
+            'hardening score entirely for this run rather than call weighted_score().'
+        )
+
+    applicable_weight_sum = sum(c.weight for c in applicable)
+    fraction = sum(
+        (c.weight / applicable_weight_sum) * (c.score / c.max) for c in applicable
+    )
     score = round(100 * fraction)
 
     return ScoreResult(score=score, max=100, components=[c.to_dict() for c in parsed]).to_dict()

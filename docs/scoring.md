@@ -68,14 +68,55 @@ is auditable (a user can see *why* nginx scored 83, not just that it did).
   before/after comparison and for the AI analysis to reference specific weak areas).
 - `weight` — this component's share of the total score, `0 < weight <= 1`. All
   weights in one `components` list must sum to `1.0` (within floating-point
-  tolerance, see below).
+  tolerance, see below) - this is validated against the *original* weights, before
+  any `applicable=False` redistribution (see below), so it always reflects whether
+  the module's own weighting design is correct.
 - `score` / `max` — the sub-check's own result, on whatever scale makes sense for
   that sub-check (doesn't have to be 0-100 - `weighted_score()` normalizes it).
+- `applicable` (optional, default `true`) — set to `false` when the check couldn't
+  evaluate this control (an SSH session that dropped mid-audit, or a control that
+  doesn't apply to this build - e.g. an HTTP/2 config check when nginx was compiled
+  without the `http_v2` module). See "Handling N/A" below.
+- `reason` (optional) — human-readable explanation, used together with
+  `applicable: false` to say *why* (e.g. `"module not compiled in"`).
+
+**Binary controls** (pass/fail, no partial credit — e.g. Docker's "container running
+as root: yes/no") use `score: 0, max: 1` for fail and `score: 1, max: 1` for pass.
+Use this pattern consistently rather than inventing a per-module convention (some
+modules using `0/1`, others `0/100`) - it keeps components comparable and keeps
+`weighted_score()`'s normalization behaving the same way everywhere.
 
 **Every hardening module must document its own weights** (why TLS is 30% and not
 50%) in its own module docstring or a section here, before being merged - the
 weights are a design decision, not an implementation detail to be picked ad hoc
 while writing the check.
+
+## Handling N/A (`applicable: false`)
+
+A check can fail to *evaluate* a control without that control having *failed* -
+neither `score: 0` (looks like "failed", falsely lowering the result) nor
+`score: max` (looks like "passed", hiding that part of the audit didn't run) is
+correct. `applicable: false` is the explicit third option: the component is
+excluded from the weighted average, and **its weight is redistributed
+proportionally** across the remaining applicable components, so their weighting
+relative to *each other* stays the same while together they cover the full 1.0.
+
+```json
+{ "name": "http2_config", "weight": 0.10, "score": 0, "max": 1,
+  "applicable": false, "reason": "http_v2 module not compiled in" }
+```
+
+`score`/`max` are still required and still validated even when `applicable: false`
+(use `0`/`1` as a neutral placeholder) so every component keeps the same shape for
+serialization - the `applicable: false` flag is what tells the reader (and
+`weighted_score()`) to disregard the value, not the value itself.
+
+If **every** component in a module's result is `applicable: false`,
+`weighted_score()` raises `ValueError` rather than returning a fabricated `0/100` -
+a score with zero evaluated controls is undefined, not zero. The calling module
+should omit the hardening score for that run entirely (e.g. report only the raw
+findings, with a note that the environment prevented scoring) rather than paper
+over it with a fake number.
 
 ## `weighted_score()`
 
@@ -94,17 +135,19 @@ and **raises `ValueError` rather than silently correcting bad data**:
 
 - `components` must be a non-empty list.
 - each component needs `name` (non-empty str), `weight` (number), `score` (number),
-  `max` (number).
+  `max` (number); `applicable` and `reason` are optional.
 - `weight` must be `> 0` for every component (a `weight: 0` component should just be
   omitted, not included as dead weight).
 - `max` must be `> 0` for every component.
 - `score` must satisfy `0 <= score <= max` for every component (a sub-check that
   scored below zero or above its own max is a bug in that sub-check, not a value to
-  clamp and hide).
-- the sum of all `weight` values must equal `1.0` within `1e-6` tolerance - this is
-  deliberately strict. A module whose weights sum to `0.9` or `1.1` has a bug, and
-  `weighted_score()` failing loudly is far cheaper than a hardening score that's
-  quietly wrong for every run of that module until someone notices by hand.
+  clamp and hide) — this is checked even for `applicable: false` components.
+- the sum of all `weight` values (across every component, applicable or not) must
+  equal `1.0` within `1e-6` tolerance - this is deliberately strict. A module whose
+  weights sum to `0.9` or `1.1` has a bug, and `weighted_score()` failing loudly is
+  far cheaper than a hardening score that's quietly wrong for every run of that
+  module until someone notices by hand.
+- at least one component must have `applicable: true` — see "Handling N/A" above.
 
 Given valid input, the result is:
 
