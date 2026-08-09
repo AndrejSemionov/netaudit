@@ -228,8 +228,11 @@ dangling CNAME detection (subdomain takeover risk) across a configurable subdoma
 
 ## Support the project
 
-If you find the tool useful, you can buy the author a coffee:
-[paypal.me/AndrejSemionov](https://paypal.me/AndrejSemionov)
+If you find the tool useful, you can support the author:
+
+- PayPal: [paypal.me/AndrejSemionov](https://paypal.me/AndrejSemionov)
+- Bitcoin (BTC): `bc1qhla2r3nucfr3j8mz49xsmztk50wzrmc35tmjwm`
+- Zcash (ZEC): `t1Wd9Xh6EMWQvBGJzsYQPmbUG1SW7XwGz5S`
 
 ## License
 

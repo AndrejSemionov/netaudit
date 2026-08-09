@@ -501,8 +501,11 @@ web/
 
 ## Поддержать проект
 
-Если инструмент оказался полезен — можно угостить автора кофе:
-[paypal.me/AndrejSemionov](https://paypal.me/AndrejSemionov)
+Если инструмент оказался полезен — можно поддержать автора:
+
+- PayPal: [paypal.me/AndrejSemionov](https://paypal.me/AndrejSemionov)
+- Bitcoin (BTC): `bc1qhla2r3nucfr3j8mz49xsmztk50wzrmc35tmjwm`
+- Zcash (ZEC): `t1Wd9Xh6EMWQvBGJzsYQPmbUG1SW7XwGz5S`
 
 ## Лицензия
 
