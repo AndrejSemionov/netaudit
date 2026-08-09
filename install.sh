@@ -1,13 +1,13 @@
 #!/bin/bash
-# NetAudit — установка инструментов и зависимостей
+# NetAudit - tool and dependency installation
 set -e
-echo "== Системные инструменты =="
+echo "== System tools =="
 sudo apt update
 sudo apt install -y mtr-tiny tcptraceroute dnsutils iputils-arping iperf3 curl openssl
 
-echo "== Python-зависимости =="
+echo "== Python dependencies =="
 pip install -r requirements.txt --break-system-packages
 
-echo "Готово. Запуск:"
-echo "  Консоль:  python3 netaudit.py list"
-echo "  Веб:      python3 netaudit.py web   (затем открой http://127.0.0.1:8000)"
+echo "Done. Run:"
+echo "  CLI:  python3 netaudit.py list"
+echo "  Web:  python3 netaudit.py web   (then open http://127.0.0.1:8000)"
