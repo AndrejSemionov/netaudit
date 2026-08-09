@@ -1,6 +1,11 @@
 # NetAudit — модульный универсальный сетевой аудит
 
 [![Donate](https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/AndrejSemionov)
+[![Bitcoin](https://img.shields.io/badge/Bitcoin-BTC-f7931a?logo=bitcoin&logoColor=white)](#поддержать-проект)
+[![Zcash](https://img.shields.io/badge/Zcash-ZEC-ecb244?logo=zcash&logoColor=white)](#поддержать-проект)
+
+**BTC:** `bc1qhla2r3nucfr3j8mz49xsmztk50wzrmc35tmjwm`
+**ZEC:** `t1Wd9Xh6EMWQvBGJzsYQPmbUG1SW7XwGz5S`
 
 🇷🇺 Русский · [🇬🇧 English](README.md)
 
