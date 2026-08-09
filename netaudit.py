@@ -8,6 +8,8 @@ Console:
     netaudit.py run mtr ping                 - run checks (default params)
     netaudit.py run mtr --target 5.20.136.3   - with params
     netaudit.py run ssl http --url https://example.com
+    netaudit.py run --quick --url https://example.com   - default site bundle
+    netaudit.py run --quick --host 1.2.3.4 --user root  - default server bundle
     netaudit.py history                       - list reports
     netaudit.py analyze <path>                 - AI analysis of a report (what to do)
 
@@ -35,6 +37,24 @@ from netaudit_pkg.engine import list_available, run_checks
 from netaudit_pkg.history import save_report, list_reports, load_report, ai_analyze
 from netaudit_pkg.utils import log
 
+__version__ = '0.1.0'
+
+QUICK_BUNDLE_SITE = ['ssl', 'security_headers', 'web_security_external', 'dns_audit']
+QUICK_BUNDLE_SERVER = ['server_audit', 'ports', 'firewall', 'lynis_audit', 'cve_audit']
+
+BANNER = f"""\
+NetAudit v{__version__} — modular network & security audit
+https://github.com/AndrejSemionov/netaudit
+
+  netaudit run ssl web_security_external --url https://example.com
+  netaudit run --quick --url https://example.com
+  netaudit run --quick --host 1.2.3.4 --user root
+  netaudit list
+  netaudit web
+
+Full flag list: netaudit --detailed / netaudit <command> -h
+"""
+
 
 def cmd_list(args):
     for c in list_available():
@@ -46,7 +66,6 @@ def cmd_list(args):
 
 
 def cmd_run(args):
-    # collect shared params from --key value for all selected checks
     extra = {}
     i = 0
     unknown = args.rest
@@ -59,8 +78,24 @@ def cmd_run(args):
         else:
             i += 1
 
+    check_ids = args.checks or []
+    if args.quick:
+        if not check_ids:
+            if 'url' in extra:
+                check_ids = QUICK_BUNDLE_SITE
+            elif 'host' in extra:
+                check_ids = QUICK_BUNDLE_SERVER
+            else:
+                log.error('--quick needs --url <site> or --host <server> to pick a check bundle.')
+                sys.exit(1)
+        log.info(f"--quick: running {', '.join(check_ids)}")
+
+    if not check_ids:
+        log.error("No checks given. Use 'netaudit run <check_id> ...' or 'netaudit run --quick --url/--host ...'.")
+        sys.exit(1)
+
     selected = []
-    for check_id in args.checks:
+    for check_id in check_ids:
         spec_params = {}
         avail = {c['id']: c for c in list_available()}
         if check_id in avail:
@@ -127,15 +162,12 @@ def cmd_web(args):
         log.error('uvicorn not installed: pip install "uvicorn[standard]" fastapi --break-system-packages')
         sys.exit(1)
     log.info(f'Web UI: http://{args.host}:{args.port}')
-    # app.py reads host from this env var at import time, to decide whether to
-    # enable mandatory Basic Auth (see netaudit_pkg/web_auth.py)
     os.environ['NETAUDIT_WEB_HOST'] = args.host
     uvicorn.run('web.app:app', host=args.host, port=args.port, reload=args.reload,
                 app_dir=str(Path(__file__).resolve().parent))
 
 
 def cmd_setup_nginx(args):
-    """Generates an nginx config with basic auth and prints the install commands."""
     project_dir = Path(__file__).resolve().parent
     conf = f"""# NetAudit — nginx config with basic auth
 # 1. Create a user:         sudo htpasswd -c /etc/nginx/.netaudit_htpasswd {args.user}
@@ -162,10 +194,8 @@ server {{
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        # long-running checks (mtr/iperf) - extended timeouts
         proxy_read_timeout 3600s;
         proxy_connect_timeout 75s;
-        # for streaming responses (SSE, the live chart) - disable buffering
         proxy_buffering off;
         proxy_cache off;
         proxy_set_header Connection '';
@@ -186,16 +216,22 @@ server {{
     print(f'\nThen open http://{args.domain} (will prompt for login/password).')
 
 
-def build_parser():
+def build_parser(detailed: bool = True):
     p = argparse.ArgumentParser(prog='netaudit', description='Modular universal network audit.')
-    sub = p.add_subparsers(dest='command', required=True)
+    p.add_argument('--version', action='version', version=f'netaudit {__version__}')
+    sub = p.add_subparsers(dest='command')
 
     p_list = sub.add_parser('list', help='Show all available checks')
     p_list.set_defaults(func=cmd_list)
 
     p_run = sub.add_parser('run', help='Run checks')
-    p_run.add_argument('checks', nargs='+', help='Check IDs (see list)')
+    p_run.add_argument('checks', nargs='*', help='Check IDs (see list). Omit with --quick.')
     p_run.add_argument('--ai', action='store_true', help='AI analysis after the run')
+    p_run.add_argument(
+        '--quick', '--simple', dest='quick', action='store_true',
+        help='Run a sensible default bundle for --url (site) or --host (server) '
+             'without picking individual check IDs.',
+    )
     p_run.set_defaults(func=cmd_run)
 
     p_hist = sub.add_parser('history', help='List reports')
@@ -228,9 +264,46 @@ def build_parser():
 
 
 def main():
+    if len(sys.argv) == 1:
+        print(BANNER)
+        return
+
+    if '--detailed' in sys.argv:
+        sys.argv.remove('--detailed')
+        parser = build_parser()
+        parser.parse_args(['--help'])
+        return
+
     parser = build_parser()
-    args, rest = parser.parse_known_args()
-    args.rest = rest  # for cmd_run: free-form --key value
+
+    if len(sys.argv) > 1 and sys.argv[1] == 'run':
+        known_run_flags = {'--ai', '--quick', '--simple', '-h', '--help'}
+        run_argv = []
+        rest = []
+        i = 2
+        while i < len(sys.argv):
+            tok = sys.argv[i]
+            if tok in known_run_flags:
+                run_argv.append(tok)
+                i += 1
+            elif tok.startswith('--'):
+                rest.append(tok)
+                if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith('--'):
+                    rest.append(sys.argv[i + 1])
+                    i += 2
+                else:
+                    i += 1
+            else:
+                run_argv.append(tok)
+                i += 1
+        args = parser.parse_args(['run'] + run_argv)
+    else:
+        args, rest = parser.parse_known_args()
+
+    if args.command is None:
+        print(BANNER)
+        sys.exit(1)
+    args.rest = rest
     args.func(args)
 
 
