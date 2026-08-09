@@ -277,13 +277,13 @@ python3 netaudit.py run aide_check --host 1.2.3.4 --user root --mode check
 
 ## Checks
 
-27 checks across 6 categories: network (mtr, tcptraceroute, ping, dig, arping),
+28 checks across 6 categories: network (mtr, tcptraceroute, ping, dig, arping),
 site (ssl, http, security headers, external web audit, SQL injection, DNS audit,
 Certificate Transparency monitoring), security (open ports, firewall, CVE audit,
 data breach check), performance (CPU/RAM/disk, iperf3), server via SSH (SSH audit,
-full security audit, Lynis hardening audit, rootkit check, file integrity monitoring,
-backup verification, Docker container audit), traffic capture (tshark, MikroTik)
-with threat scoring of destinations.
+full security audit, Lynis hardening audit, systemd sandboxing audit, rootkit check,
+file integrity monitoring, backup verification, Docker container audit), traffic
+capture (tshark, MikroTik) with threat scoring of destinations.
 
 **Lynis audit** (`lynis_audit`, SSH) — runs `lynis audit system` on the remote host and parses
 `/var/log/lynis-report.dat`: hardening index (0–100), warnings mapped to `high` severity,
@@ -294,6 +294,15 @@ sudo (or root) on the target.
 **DNS audit** (`dns_audit`, DNS-only) — SPF (lookup-count limit, `+all` risk), DKIM (common
 selector probing), DMARC (policy, missing reports), DNSSEC (signed zone + DS chain), and
 dangling CNAME detection (subdomain takeover risk) across a configurable subdomain list.
+
+**systemd sandboxing audit** (`systemd_hardening`, SSH) — runs `systemd-analyze security
+<unit>` on the target and maps every unrestricted sandboxing directive (`ProtectSystem=`,
+`NoNewPrivileges=`, `PrivateNetwork=`, capability bounding set entries, syscall filters,
+etc.) to a finding, severity-scaled by the directive's exposure weight. Also fetches the
+official overall exposure score (0.0–10.0) and predicate (OK/MEDIUM/EXPOSED/UNSAFE) via a
+second plain-text invocation, since `--json=short` doesn't expose the values needed to
+recompute that score exactly. Defaults to `nginx.service` but works with any systemd unit.
+Read-only; requires systemd >= 246 (Ubuntu 20.04+, Debian 11+) on the target.
 
 ## Security
 

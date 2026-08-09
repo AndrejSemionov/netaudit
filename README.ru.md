@@ -296,7 +296,7 @@ python3 netaudit.py run aide_check --host 1.2.3.4 --user root --mode check
 | Сайт | ssl (openssl s_client), http (curl-тайминги по фазам), security_headers |
 | Безопасность | ports (ss), firewall (ufw/nft) |
 | Производительность | performance (CPU/RAM/диск), iperf (пропускная способность) |
-| Сервер | ssh_audit (readonly-аудит удалённого сервера) |
+| Сервер | ssh_audit, server_audit (полный SSH-аудит), lynis_audit, systemd_hardening (sandboxing systemd-юнита), rootkit_check, aide_check, backup_check, docker_audit |
 
 **tcptraceroute** — ключевой для споров с ISP: идёт TCP SYN-пакетами (как веб-трафик),
 опровергает отговорку «у нас просто ICMP так настроен».
@@ -395,6 +395,24 @@ Lynis пропускает, о чём плагин честно предупре
 Список поддоменов для проверки CNAME задаётся вручную (через запятую) — DNS не даёт способа
 перечислить все существующие поддомены зоны без zone transfer, так что проверяются только
 явно указанные.
+
+### Аудит sandboxing systemd
+
+Плагин `systemd_hardening` — по SSH запускает `systemd-analyze security <unit>` на целевом
+сервере и маппит каждую незакрытую директиву песочницы (`ProtectSystem=`, `NoNewPrivileges=`,
+`PrivateNetwork=`, элементы capability bounding set, syscall-фильтры и т.д.) в отдельную
+находку, severity которой зависит от веса директивы (exposure weight).
+
+Отдельно запрашивается точная официальная оценка защищённости — число от 0.0 до 10.0 и
+предикат (OK/MEDIUM/EXPOSED/UNSAFE), тем же способом, каким его выводит сама команда
+`systemd-analyze` в текстовом режиме. Это отдельный второй вызов по SSH, потому что
+`--json=short` не отдаёт значений (badness/weight/range), нужных, чтобы пересчитать эту
+оценку самостоятельно — простое суммирование весов директив даёт завышенный и не совпадающий
+с оригиналом результат.
+
+По умолчанию проверяет `nginx.service`, но работает с любым systemd-юнитом (mysql, fail2ban,
+свой сервис и т.д.) — имя юнита задаётся параметром. Read-only, требует systemd >= 246
+(Ubuntu 20.04+, Debian 11+) на целевом сервере.
 
 ### Проверка SQL-инъекций
 
