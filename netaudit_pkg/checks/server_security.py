@@ -18,6 +18,7 @@ from ..registry import register
 from ..findings import finding as _finding
 from ..utils import run_cmd, tool_available
 from ..ssh import SSHExecutor, HostKeyMismatchError
+from ..nginx_config import collect_nginx_config
 
 try:
     import paramiko
@@ -33,47 +34,49 @@ except ImportError:
 # ===========================================================================
 
 def audit_nginx(ssh: SSHExecutor) -> dict:
-    out, _ = ssh.run('which nginx || echo NONE')
-    if 'NONE' in out:
+    """Findings-producing nginx audit. Thin wrapper: all data collection and
+    parsing now lives in nginx_config.collect_nginx_config() (see that
+    module's docstring for why) - this function's job is only to decide
+    severity from the already-parsed NginxConfig fields. Behavior and return
+    shape are unchanged from before this refactor, so every existing caller
+    (check_server_audit, tests, the web UI) keeps working without changes.
+    """
+    cfg = collect_nginx_config(ssh)
+    if not cfg.installed:
         return {'installed': False}
-
-    ver, _ = ssh.run('nginx -v 2>&1')
-    conf, _ = ssh.run('nginx -T 2>/dev/null')
-    findings = []
-
-    if not conf:
-        return {'installed': True, 'version': ver.strip(),
+    if not cfg.readable:
+        return {'installed': True, 'version': cfg.version,
                 'findings': [_finding('low', 'no access to the config', 'nginx -T requires root')]}
 
+    findings = []
+
     # server_tokens
-    if 'server_tokens off' not in conf:
+    if cfg.server_tokens != 'off':
         findings.append(_finding('medium', 'server_tokens is not disabled',
                                  'nginx reveals its version in headers and error pages — add server_tokens off;'))
 
     # outdated TLS
-    ssl_proto_m = re.search(r'ssl_protocols\s+([^;]+);', conf)
-    if ssl_proto_m:
-        protos = ssl_proto_m.group(1)
-        if 'TLSv1 ' in protos or 'TLSv1;' in protos or 'TLSv1.1' in protos or protos.strip().endswith('TLSv1'):
-            findings.append(_finding('high', 'outdated TLS 1.0/1.1 is enabled', f'ssl_protocols: {protos.strip()}'))
-    else:
-        if 'ssl_certificate' in conf:
-            findings.append(_finding('low', 'ssl_protocols is not set explicitly', 'relying on the default'))
+    if cfg.ssl_protocols:
+        protos_str = ' '.join(cfg.ssl_protocols)
+        if 'TLSv1' in cfg.ssl_protocols or 'TLSv1.1' in cfg.ssl_protocols:
+            findings.append(_finding('high', 'outdated TLS 1.0/1.1 is enabled', f'ssl_protocols: {protos_str}'))
+    elif cfg.has_ssl_certificate:
+        findings.append(_finding('low', 'ssl_protocols is not set explicitly', 'relying on the default'))
 
     # security headers in the config
     for hdr, sev in [('Strict-Transport-Security', 'medium'), ('X-Frame-Options', 'low'),
                      ('X-Content-Type-Options', 'low')]:
-        if hdr.lower() not in conf.lower():
+        if hdr.lower() not in cfg.headers_present:
             findings.append(_finding(sev, f'missing header {hdr}', 'no add_header set in the config'))
 
     # dangerous directives
-    if re.search(r'autoindex\s+on', conf):
+    if cfg.autoindex_on:
         findings.append(_finding('medium', 'autoindex on', 'directory listing is enabled — exposes the file structure'))
 
     if not findings:
         findings.append(_finding('ok', 'no obvious issues found in the nginx config'))
 
-    return {'installed': True, 'version': ver.strip(), 'findings': findings}
+    return {'installed': True, 'version': cfg.version, 'findings': findings}
 
 # ===========================================================================
 # fail2ban
