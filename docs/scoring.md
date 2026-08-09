@@ -79,6 +79,14 @@ is auditable (a user can see *why* nginx scored 83, not just that it did).
   without the `http_v2` module). See "Handling N/A" below.
 - `reason` (optional) — human-readable explanation, used together with
   `applicable: false` to say *why* (e.g. `"module not compiled in"`).
+- `finding_id` (optional) — links this component to the specific `Finding` (see
+  `findings.py`) the same check produced for the same control, so a reader can look
+  up *why* a component scored what it did. This is deliberately an explicit link
+  (the calling module sets a string id on both), not an implicit one inferred by
+  matching `Component.name` against `Finding.title`/`id` - implicit matching is a
+  naming convention that silently breaks the moment either side is renamed.
+  Findings and Components stay two separate lists in a check's result either way -
+  `finding_id` doesn't merge them, it lets the web UI or AI analysis join them.
 
 **Binary controls** (pass/fail, no partial credit — e.g. Docker's "container running
 as root: yes/no") use `score: 0, max: 1` for fail and `score: 1, max: 1` for pass.
@@ -103,7 +111,8 @@ relative to *each other* stays the same while together they cover the full 1.0.
 
 ```json
 { "name": "http2_config", "weight": 0.10, "score": 0, "max": 1,
-  "applicable": false, "reason": "http_v2 module not compiled in" }
+  "applicable": false, "reason": "http_v2 module not compiled in",
+  "finding_id": "NGX-CONF-005" }
 ```
 
 `score`/`max` are still required and still validated even when `applicable: false`

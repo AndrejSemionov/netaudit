@@ -236,3 +236,39 @@ def test_single_inapplicable_component_alone_raises():
     components = [{'name': 'a', 'weight': 1.0, 'score': 0, 'max': 1, 'applicable': False}]
     with pytest.raises(ValueError, match='all components are applicable=False'):
         weighted_score(components)
+
+
+# ===========================================================================
+# finding_id linkage
+# ===========================================================================
+
+def test_component_finding_id_roundtrips():
+    c = Component(name='server_tokens', weight=1.0, score=0, max=1, finding_id='NGX-CONF-001')
+    assert c.to_dict()['finding_id'] == 'NGX-CONF-001'
+
+
+def test_component_without_finding_id_omits_key():
+    c = Component(name='server_tokens', weight=1.0, score=1, max=1)
+    assert 'finding_id' not in c.to_dict()
+
+
+def test_weighted_score_preserves_finding_id_in_output():
+    components = [
+        {'name': 'server_tokens', 'weight': 1.0, 'score': 0, 'max': 1, 'finding_id': 'NGX-CONF-001'},
+    ]
+    result = weighted_score(components)
+    assert result['components'][0]['finding_id'] == 'NGX-CONF-001'
+
+
+def test_inapplicable_component_can_still_have_finding_id():
+    # an N/A component can still link to a finding explaining *why* it's N/A
+    # (e.g. "SSH session dropped before this check ran")
+    components = [
+        {'name': 'filesystem', 'weight': 0.5, 'score': 0, 'max': 1, 'applicable': False,
+         'reason': 'no sudo', 'finding_id': 'NGX-FS-001'},
+        {'name': 'tls', 'weight': 0.5, 'score': 1, 'max': 1},
+    ]
+    result = weighted_score(components)
+    fs = next(c for c in result['components'] if c['name'] == 'filesystem')
+    assert fs['finding_id'] == 'NGX-FS-001'
+    assert fs['applicable'] is False

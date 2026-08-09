@@ -44,6 +44,20 @@ class Component:
     by a control it couldn't check. `score`/`max` are still required and
     still validated even when not applicable (use 0/1 as a neutral
     placeholder) so the dataclass shape stays uniform for serialization.
+
+    `finding_id` optionally links this component to a specific Finding (see
+    findings.py) the same check produced for the same control - e.g. a
+    'server_tokens' component links to the Finding titled "Server version
+    disclosure enabled" that explains *why* it scored 0/1. This is an
+    explicit link (a string id set by the calling module) rather than an
+    implicit one (matching Component.name against Finding.title/id by
+    string) - implicit matching is a naming convention that silently breaks
+    the moment either side gets renamed, whereas a module that sets
+    finding_id is making a deliberate, checkable connection. Findings and
+    Components remain two separate lists in a check's result either way -
+    finding_id doesn't merge them, it lets a reader (the web UI, the AI
+    analysis) look up "which finding explains this component's score"
+    without guessing.
     """
 
     name: str
@@ -52,6 +66,7 @@ class Component:
     max: float
     applicable: bool = True
     reason: str = ''
+    finding_id: str | None = None
 
     def __post_init__(self):
         if not self.name or not isinstance(self.name, str):
@@ -78,6 +93,8 @@ class Component:
             d['applicable'] = False
             if self.reason:
                 d['reason'] = self.reason
+        if self.finding_id:
+            d['finding_id'] = self.finding_id
         return d
 
 
