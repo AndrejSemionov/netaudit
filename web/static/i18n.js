@@ -531,103 +531,103 @@ const I18N = {
 // Переводы проверок по id: label, desc, params (по имени), опции select (по оригинальному значению)
 const I18N_CHECKS = {
   mtr: {
-    label: { en: 'MTR (ICMP traceroute)' },
-    desc: { en: 'Loss and latency per hop. Set the run time in seconds directly: 45 = 45 sec, 300 = 5 min, 3600 = 1 hour, 7200 = 2 hours.' },
-    params: { target: { en: 'Target (IP/host)' }, duration_sec: { en: 'Duration, sec' } },
+    label: { ru: 'MTR (ICMP traceroute)' },
+    desc: { ru: 'Потери и задержка по каждому хопу. Время работы в секундах: 45 = 45 сек, 300 = 5 мин, 3600 = 1 час, 7200 = 2 часа.' },
+    params: { target: { ru: 'Цель (IP/хост)' }, duration_sec: { ru: 'Длительность, сек' } },
   },
   tcptraceroute: {
-    label: { en: 'TCP traceroute' },
-    desc: { en: 'TCP SYN instead of ICMP — refutes the ISP excuse "ICMP is just deprioritized". Default 8 hops: usually enough to catch the provider, and beyond that internet nodes often stay silent to TCP traceroute and only waste time.' },
-    params: { target: { en: 'Target (IP/host)' }, port: { en: 'Port' }, max_hops: { en: 'Max hops' } },
+    label: { ru: 'TCP traceroute' },
+    desc: { ru: 'TCP SYN вместо ICMP — опровергает отговорку провайдера «ICMP просто депримирован». По умолчанию 8 хопов: обычно этого хватает, чтобы поймать провайдера, дальше узлы интернета часто молчат и на TCP traceroute, только тратят время.' },
+    params: { target: { ru: 'Цель (IP/хост)' }, port: { ru: 'Порт' }, max_hops: { ru: 'Макс. хопов' } },
   },
   ping: {
-    label: { en: 'Ping' },
-    desc: { en: 'Basic loss and RTT check.' },
-    params: { target: { en: 'Target' }, count: { en: 'Packets' } },
+    label: { ru: 'Ping' },
+    desc: { ru: 'Базовая проверка потерь и RTT.' },
+    params: { target: { ru: 'Цель' }, count: { ru: 'Пакетов' } },
   },
   dig: {
-    label: { en: 'DNS (dig)' },
-    desc: { en: 'Detailed DNS: server, TTL, query time.' },
-    params: { hostname: { en: 'Domain' }, record_type: { en: 'Record type' } },
+    label: { ru: 'DNS (dig)' },
+    desc: { ru: 'Подробный DNS: сервер, TTL, время запроса.' },
+    params: { hostname: { ru: 'Домен' }, record_type: { ru: 'Тип записи' } },
   },
   arping: {
-    label: { en: 'ARPing (L2, local network)' },
-    desc: { en: 'L2 check within the local subnet (not over the internet).' },
-    params: { target: { en: 'IP in local subnet' }, count: { en: 'Packets' } },
+    label: { ru: 'ARPing (L2, локальная сеть)' },
+    desc: { ru: 'Проверка на уровне L2 внутри локальной подсети (не через интернет).' },
+    params: { target: { ru: 'IP в локальной подсети' }, count: { ru: 'Пакетов' } },
   },
   ssl: {
-    label: { en: 'SSL/TLS certificate' },
-    desc: { en: 'Protocol, cipher, certificate chain, expiry. auto = openssl if available, else python.' },
-    params: { url: { en: 'URL' }, method: { en: 'Tool' } },
+    label: { ru: 'SSL/TLS сертификат' },
+    desc: { ru: 'Протокол, шифр, цепочка сертификатов, срок действия. auto = openssl, если доступен, иначе python.' },
+    params: { url: { ru: 'URL' }, method: { ru: 'Инструмент' } },
   },
   http: {
-    label: { en: 'HTTP timings' },
-    desc: { en: 'Timings by phase: DNS / TCP connect / TLS / TTFB. auto = curl if available, else python.' },
-    params: { url: { en: 'URL' }, method: { en: 'Tool' } },
+    label: { ru: 'HTTP-тайминги' },
+    desc: { ru: 'Тайминги по фазам: DNS / TCP-подключение / TLS / TTFB. auto = curl, если доступен, иначе python.' },
+    params: { url: { ru: 'URL' }, method: { ru: 'Инструмент' } },
   },
   security_headers: {
-    label: { en: 'Security headers' },
-    desc: { en: 'HSTS, X-Frame-Options, X-Content-Type-Options, CSP.' },
-    params: { url: { en: 'URL' } },
+    label: { ru: 'Security-заголовки' },
+    desc: { ru: 'HSTS, X-Frame-Options, X-Content-Type-Options, CSP.' },
+    params: { url: { ru: 'URL' } },
   },
   ports: {
-    label: { en: 'Open ports' },
-    desc: { en: 'Listening TCP/UDP ports (ss).' },
+    label: { ru: 'Открытые порты' },
+    desc: { ru: 'Прослушиваемые TCP/UDP-порты (ss).' },
     params: {},
   },
   firewall: {
-    label: { en: 'Firewall' },
-    desc: { en: 'ufw status / nftables rule count.' },
+    label: { ru: 'Файрвол' },
+    desc: { ru: 'Статус ufw / количество правил nftables.' },
     params: {},
   },
   performance: {
-    label: { en: 'CPU / RAM / disk' },
-    desc: { en: 'System resource usage (psutil).' },
+    label: { ru: 'CPU / RAM / диск' },
+    desc: { ru: 'Использование системных ресурсов (psutil).' },
     params: {},
   },
   ssh_audit: {
-    label: { en: 'SSH server audit' },
-    desc: { en: 'Read-only audit of a remote server: ports, firewall, fail2ban, login logs.' },
-    params: { host: { en: 'Host' }, user: { en: 'User' }, port: { en: 'Port' }, key_path: { en: 'Key path' }, password: { en: 'Password (if no key)' } },
+    label: { ru: 'Аудит SSH-сервера' },
+    desc: { ru: 'Read-only аудит удалённого сервера: порты, файрвол, fail2ban, логи входа.' },
+    params: { host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'Порт' }, key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль (если без ключа)' } },
   },
   iperf: {
-    label: { en: 'iperf3 throughput' },
-    desc: { en: 'Real upload/download speed (needs `iperf3 -s` on the other end).' },
-    params: { server: { en: 'iperf3 server' }, port: { en: 'Port' }, duration: { en: 'Seconds' } },
+    label: { ru: 'Пропускная способность (iperf3)' },
+    desc: { ru: 'Реальная скорость upload/download (нужен `iperf3 -s` на другом конце).' },
+    params: { server: { ru: 'iperf3-сервер' }, port: { ru: 'Порт' }, duration: { ru: 'Секунд' } },
   },
   tshark_capture: {
-    label: { en: 'Traffic capture (tshark)' },
-    desc: { en: 'Passive capture with the Wireshark engine + suspicion scoring of destinations. Needs root.' },
-    params: { interface: { en: 'Interface' }, duration: { en: 'Duration, sec' }, bpf_filter: { en: 'BPF filter (e.g. host 192.168.88.55)' }, analyze_threats: { en: 'Threat analysis' } },
+    label: { ru: 'Захват трафика (tshark)' },
+    desc: { ru: 'Пассивный захват движком Wireshark + оценка подозрительности назначений. Требует root.' },
+    params: { interface: { ru: 'Интерфейс' }, duration: { ru: 'Длительность, сек' }, bpf_filter: { ru: 'BPF-фильтр (напр. host 192.168.88.55)' }, analyze_threats: { ru: 'Анализ угроз' } },
     options: { 'да': { en: 'yes' }, 'да+whois': { en: 'yes+whois' }, 'нет': { en: 'no' } },
   },
   mikrotik_sniffer: {
-    label: { en: 'Device traffic via MikroTik' },
-    desc: { en: 'Where a device\'s traffic goes via the router + suspicion scoring of destinations. Sees ALL of the device\'s traffic.' },
-    params: { router: { en: 'Router IP' }, user: { en: 'User' }, password: { en: 'Password' }, target_ip: { en: 'Device IP (phone)' }, port: { en: 'SSH port' }, analyze_threats: { en: 'Threat analysis' } },
+    label: { ru: 'Трафик устройства через MikroTik' },
+    desc: { ru: 'Куда уходит трафик устройства через роутер + оценка подозрительности назначений. Видит ВЕСЬ трафик устройства.' },
+    params: { router: { ru: 'IP роутера' }, user: { ru: 'Пользователь' }, password: { ru: 'Пароль' }, target_ip: { ru: 'IP устройства (телефон)' }, port: { ru: 'SSH-порт' }, analyze_threats: { ru: 'Анализ угроз' } },
     options: { 'да': { en: 'yes' }, 'да+whois': { en: 'yes+whois' }, 'нет': { en: 'no' } },
   },
   server_audit: {
-    label: { en: 'Server security audit (SSH)' },
-    desc: { en: 'Full server security audit over SSH: nginx, fail2ban, firewall, MySQL, SSH hardening. Read-only.' },
-    params: { host: { en: 'Host' }, user: { en: 'User' }, port: { en: 'SSH port' }, key_path: { en: 'Key path' }, password: { en: 'Password (if no key)' } },
+    label: { ru: 'Аудит безопасности сервера (SSH)' },
+    desc: { ru: 'Полный аудит безопасности сервера по SSH: nginx, fail2ban, файрвол, MySQL, хардненинг SSH. Read-only.' },
+    params: { host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' }, key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль (если без ключа)' } },
   },
   cve_audit: {
-    label: { en: 'CVE audit of installed software (SSH)' },
-    desc: { en: 'Collects installed software versions (nginx, ssh, mysql/mariadb, php, kernel, wordpress) over SSH '
-      + 'and cross-checks them against the OSV.dev vulnerability database. AI analysis cross-references found CVEs '
-      + 'with the actual service config and tells you what really needs updating.' },
-    params: { host: { en: 'Host' }, user: { en: 'User' }, port: { en: 'SSH port' }, key_path: { en: 'Key path' }, password: { en: 'Password (if no key)' } },
+    label: { ru: 'Аудит CVE установленного ПО (SSH)' },
+    desc: { ru: 'Собирает версии установленного ПО (nginx, ssh, mysql/mariadb, php, kernel, wordpress) по SSH '
+      + 'и сверяет их с базой уязвимостей OSV.dev. AI-анализ сопоставляет найденные CVE '
+      + 'с реальным конфигом сервиса и говорит, что действительно нужно обновить.' },
+    params: { host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' }, key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль (если без ключа)' } },
   },
   web_security_external: {
-    label: { en: 'External web audit (no access)' },
-    desc: { en: 'Site audit from the outside: security headers, outdated TLS, version leaks, exposure of .git/.env/backups.' },
-    params: { url: { en: 'Site URL' } },
+    label: { ru: 'Внешний аудит сайта (без доступа)' },
+    desc: { ru: 'Аудит сайта снаружи: security-заголовки, устаревший TLS, утечки версий, доступность .git/.env/бэкапов.' },
+    params: { url: { ru: 'URL сайта' } },
   },
   sql_injection: {
-    label: { en: 'SQL injection check' },
-    desc: { en: 'Passive input-point discovery always; active testing via sqlmap only with authorization confirmation.' },
-    params: { url: { en: 'URL (with params, e.g. ?id=1)' }, authorization: { en: 'Test authorization' }, mode: { en: 'Mode' }, crawl: { en: 'Follow links (sqlmap crawl)' } },
+    label: { ru: 'Проверка на SQL-инъекции' },
+    desc: { ru: 'Пассивный поиск точек ввода — всегда; активное тестирование через sqlmap только при подтверждённой авторизации.' },
+    params: { url: { ru: 'URL (с параметрами, напр. ?id=1)' }, authorization: { ru: 'Авторизация на тест' }, mode: { ru: 'Режим' }, crawl: { ru: 'Обход ссылок (sqlmap crawl)' } },
     options: {
       'нет': { en: 'no' },
       'да — я владелец / есть письменное разрешение': { en: 'yes — I am the owner / have written permission' },
@@ -637,20 +637,29 @@ const I18N_CHECKS = {
     },
   },
   lynis_audit: {
-    label: { en: 'Lynis security audit (SSH)' },
-    desc: { en: 'Server security audit via Lynis (hardening index + findings) over SSH. Read-only.' },
+    label: { ru: 'Аудит безопасности Lynis (SSH)' },
+    desc: { ru: 'Аудит безопасности сервера через Lynis (hardening index + находки) по SSH. Read-only.' },
     params: {
-      host: { en: 'Host' }, user: { en: 'User' }, port: { en: 'SSH port' },
-      key_path: { en: 'Key path' }, password: { en: 'Password (if no key)' },
-      auto_install: { en: 'Install lynis if missing' },
+      host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' },
+      key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль (если без ключа)' },
+      auto_install: { ru: 'Установить lynis, если отсутствует' },
     },
   },
   dns_audit: {
-    label: { en: 'DNS domain audit' },
-    desc: { en: 'SPF/DKIM/DMARC/DNSSEC + dangling CNAME detection (subdomain takeover). DNS queries only, no server access.' },
+    label: { ru: 'Аудит DNS домена' },
+    desc: { ru: 'SPF/DKIM/DMARC/DNSSEC + обнаружение висячих CNAME (subdomain takeover). Только DNS-запросы, без доступа к серверу.' },
     params: {
-      domain: { en: 'Domain' },
-      subdomains_to_check: { en: 'Subdomains to check for CNAME (comma-separated)' },
+      domain: { ru: 'Домен' },
+      subdomains_to_check: { ru: 'Поддомены для проверки CNAME (через запятую)' },
+    },
+  },
+  systemd_hardening: {
+    label: { ru: 'Аудит sandboxing systemd (SSH)' },
+    desc: { ru: 'Аудит директив песочницы systemd-юнита (ProtectSystem, NoNewPrivileges, PrivateNetwork и др.) через `systemd-analyze security`. Read-only. Требует systemd >= 246.' },
+    params: {
+      host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' },
+      key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль (если без ключа)' },
+      unit: { ru: 'systemd-юнит' },
     },
   },
 };
@@ -681,9 +690,21 @@ function t(key) {
 }
 
 // перевод строк проверки: возвращает {label, description, params:{name->label}, optLabel(orig)}
+// Two different translation directions live side by side here, because of
+// how the underlying data originates:
+//  - label/desc/params: Python already returns these in English (backend
+//    was translated to English in an earlier session), so I18N_CHECKS holds
+//    the 'ru' translation on top - en locale uses the Python original as-is,
+//    ru locale looks up the ru translation (falling back to the original).
+//  - options (select param values, e.g. sql_injection's 'да'/'нет'): the
+//    option VALUE sent to the backend must stay Russian (it's a lookup key
+//    matched against storage.py's preset seed data - see PRESET_NAME_TR
+//    comment), only the DISPLAYED label changes. So options are keyed by
+//    Russian value with an 'en' translation on top - ru locale shows the
+//    key as-is, en locale looks up the en translation.
 function tCheck(check) {
   const tr = I18N_CHECKS[check.id];
-  if (!tr || CURRENT_LANG === 'ru') {
+  if (!tr) {
     return {
       label: check.label,
       description: check.description,
@@ -691,10 +712,12 @@ function tCheck(check) {
       optLabel: (o) => o,
     };
   }
+  const label = CURRENT_LANG === 'en' ? check.label : ((tr.label && tr.label.ru) || check.label);
+  const description = CURRENT_LANG === 'en' ? check.description : ((tr.desc && tr.desc.ru) || check.description);
   return {
-    label: (tr.label && tr.label[CURRENT_LANG]) || check.label,
-    description: (tr.desc && tr.desc[CURRENT_LANG]) || check.description,
-    paramLabel: (p) => (tr.params && tr.params[p.name] && tr.params[p.name][CURRENT_LANG]) || p.label,
+    label,
+    description,
+    paramLabel: (p) => (CURRENT_LANG === 'en' ? p.label : ((tr.params && tr.params[p.name] && tr.params[p.name].ru) || p.label)),
     optLabel: (o) => (tr.options && tr.options[o] && tr.options[o][CURRENT_LANG]) || o,
   };
 }
