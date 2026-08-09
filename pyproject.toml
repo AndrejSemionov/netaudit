@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "netaudit"
-version = "0.1.0"
+version = "0.1.1"
 description = "Modular, universal network and security audit tool — network, site, and server checks over a CLI and a web UI."
 readme = "README.md"
 license = { text = "AGPL-3.0-or-later" }

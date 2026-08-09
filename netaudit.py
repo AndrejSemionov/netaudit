@@ -37,7 +37,7 @@ from netaudit_pkg.engine import list_available, run_checks
 from netaudit_pkg.history import save_report, list_reports, load_report, ai_analyze
 from netaudit_pkg.utils import log
 
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 QUICK_BUNDLE_SITE = ['ssl', 'security_headers', 'web_security_external', 'dns_audit']
 QUICK_BUNDLE_SERVER = ['server_audit', 'ports', 'firewall', 'lynis_audit', 'cve_audit']
