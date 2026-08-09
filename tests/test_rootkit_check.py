@@ -26,6 +26,7 @@ def test_parse_rkhunter_extracts_warnings():
     assert len(findings) == 2
     assert all(f['confidence'] == 'low' for f in findings)
     assert all(f['severity'] == 'medium' for f in findings)
+    assert all(f['requires_manual_verification'] is True for f in findings)
 
 
 def test_parse_rkhunter_no_warnings():
@@ -43,6 +44,7 @@ def test_parse_chkrootkit_infected_flagged_high_low_confidence():
     assert len(findings) == 1
     assert findings[0]['severity'] == 'high'
     assert findings[0]['confidence'] == 'low'
+    assert findings[0]['requires_manual_verification'] is True
 
 
 def test_parse_chkrootkit_not_infected_produces_no_finding():
@@ -59,6 +61,7 @@ def test_parse_chkrootkit_vulnerable_but_disabled_keeps_default_confidence():
     assert len(findings) == 1
     assert findings[0]['severity'] == 'low'
     assert findings[0]['confidence'] == 'high'
+    assert 'requires_manual_verification' not in findings[0]
 
 
 def test_parse_chkrootkit_mixed_output():

@@ -51,7 +51,8 @@ def _parse_rkhunter(raw: str) -> list[dict]:
         line = line.strip()
         if line.startswith('Warning:'):
             text = line[len('Warning:'):].strip()
-            findings.append(_finding('medium', text, confidence='low'))
+            findings.append(_finding('medium', text, confidence='low',
+                                      requires_manual_verification=True))
     return findings
 
 def _run_rkhunter(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
@@ -84,7 +85,7 @@ def _parse_chkrootkit(raw: str) -> list[dict]:
             findings.append(_finding('high', f'{name}: {status}',
                                       'verify manually before drawing conclusions — false positives are known '
                                       '(e.g. a legitimate bindshell on non-standard ports)',
-                                      confidence='low'))
+                                      confidence='low', requires_manual_verification=True))
         elif status.startswith('Vulnerable but disabled'):
             findings.append(_finding('low', f'{name}: {status}',
                                       'the command is vulnerable but not in use (not running/not in config)'))
