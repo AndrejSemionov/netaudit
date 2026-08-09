@@ -154,9 +154,15 @@ def check_aide(host='', user='root', port=22, key_path='', password='',
                     'findings': [_finding('ok', 'AIDE database initialized — you can now run mode=check')],
                     'summary': {'high': 0, 'medium': 0, 'low': 0, 'ok': 1}}
 
-        # mode == 'check'
-        db_check, _ = ssh.run('test -f /var/lib/aide/aide.db || test -f /var/lib/aide/aide.db.gz '
-                               '&& echo EXISTS || echo MISSING')
+        # mode == 'check'. Uses sudo, same as the actual --check below - the
+        # database directory is root:root (0700-ish) on a standard aide
+        # install, so an unprivileged `test -f` here would report MISSING
+        # even when the database genuinely exists, from permission denied
+        # rather than absence (confirmed against the real target: `ls
+        # /var/lib/aide/` as the unprivileged user returns "Permission
+        # denied", not "No such file or directory").
+        db_check, _ = ssh.sudo('test -f /var/lib/aide/aide.db || test -f /var/lib/aide/aide.db.gz '
+                                '&& echo EXISTS || echo MISSING')
         if 'MISSING' in db_check:
             return {'error': 'AIDE database not found — run this same check with mode=init first',
                     'hint': '/var/lib/aide/aide.db does not exist'}
