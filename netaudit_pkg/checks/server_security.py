@@ -40,6 +40,19 @@ def audit_nginx(ssh: SSHExecutor) -> dict:
     severity from the already-parsed NginxConfig fields. Behavior and return
     shape are unchanged from before this refactor, so every existing caller
     (check_server_audit, tests, the web UI) keeps working without changes.
+
+    Findings that correspond to a control in docs/checks/nginx_hardening.md's
+    catalogue carry a stable id= matching that control's ID (e.g.
+    'NGX-CONF-001' for server_tokens) - this is what lets the future
+    nginx_hardening check set Component.finding_id to reference the exact
+    same finding a user already sees here, instead of nginx_hardening
+    re-deriving its own separate finding for the same fact (see
+    docs/checks/nginx_hardening.md section 5 "Finding <-> Component
+    relationship"). Two findings deliberately have no id: the "no access to
+    the config" case (not a control - it's the signal that nothing below was
+    evaluated at all, handled at the component-group level per section 4.1 of
+    the spec) and the "no obvious issues" ok-fallback (an aggregate summary,
+    not a specific control's result).
     """
     cfg = collect_nginx_config(ssh)
     if not cfg.installed:
@@ -50,28 +63,39 @@ def audit_nginx(ssh: SSHExecutor) -> dict:
 
     findings = []
 
-    # server_tokens
+    # server_tokens -> NGX-CONF-001
     if cfg.server_tokens != 'off':
         findings.append(_finding('medium', 'server_tokens is not disabled',
-                                 'nginx reveals its version in headers and error pages — add server_tokens off;'))
+                                 'nginx reveals its version in headers and error pages — add server_tokens off;',
+                                 id='NGX-CONF-001'))
 
-    # outdated TLS
+    # outdated TLS -> NGX-TLS-001 (legacy protocols present)
+    # ssl_protocols not set explicitly -> NGX-TLS-003 (protocols explicitly configured)
     if cfg.ssl_protocols:
         protos_str = ' '.join(cfg.ssl_protocols)
         if 'TLSv1' in cfg.ssl_protocols or 'TLSv1.1' in cfg.ssl_protocols:
-            findings.append(_finding('high', 'outdated TLS 1.0/1.1 is enabled', f'ssl_protocols: {protos_str}'))
+            findings.append(_finding('high', 'outdated TLS 1.0/1.1 is enabled', f'ssl_protocols: {protos_str}',
+                                     id='NGX-TLS-001'))
     elif cfg.has_ssl_certificate:
-        findings.append(_finding('low', 'ssl_protocols is not set explicitly', 'relying on the default'))
+        findings.append(_finding('low', 'ssl_protocols is not set explicitly', 'relying on the default',
+                                 id='NGX-TLS-003'))
 
-    # security headers in the config
+    # security headers in the config -> NGX-HDR-001/002/003
+    header_control_ids = {
+        'Strict-Transport-Security': 'NGX-HDR-001',
+        'X-Frame-Options': 'NGX-HDR-002',
+        'X-Content-Type-Options': 'NGX-HDR-003',
+    }
     for hdr, sev in [('Strict-Transport-Security', 'medium'), ('X-Frame-Options', 'low'),
                      ('X-Content-Type-Options', 'low')]:
         if hdr.lower() not in cfg.headers_present:
-            findings.append(_finding(sev, f'missing header {hdr}', 'no add_header set in the config'))
+            findings.append(_finding(sev, f'missing header {hdr}', 'no add_header set in the config',
+                                     id=header_control_ids[hdr]))
 
-    # dangerous directives
+    # dangerous directives -> NGX-CONF-002
     if cfg.autoindex_on:
-        findings.append(_finding('medium', 'autoindex on', 'directory listing is enabled — exposes the file structure'))
+        findings.append(_finding('medium', 'autoindex on', 'directory listing is enabled — exposes the file structure',
+                                 id='NGX-CONF-002'))
 
     if not findings:
         findings.append(_finding('ok', 'no obvious issues found in the nginx config'))
