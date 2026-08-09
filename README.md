@@ -209,16 +209,19 @@ python3 netaudit.py install <tool>       # install a missing tool (nmap, tshark,
 
 ## Checks
 
-20 checks across 6 categories: network (mtr, tcptraceroute, ping, dig, arping),
-site (ssl, http, security headers, external web audit, SQL injection, DNS audit),
-security (open ports, firewall), performance (CPU/RAM/disk, iperf3), server via SSH
-(audit, full security audit, Lynis hardening audit), traffic capture (tshark, MikroTik)
+27 checks across 6 categories: network (mtr, tcptraceroute, ping, dig, arping),
+site (ssl, http, security headers, external web audit, SQL injection, DNS audit,
+Certificate Transparency monitoring), security (open ports, firewall, CVE audit,
+data breach check), performance (CPU/RAM/disk, iperf3), server via SSH (SSH audit,
+full security audit, Lynis hardening audit, rootkit check, file integrity monitoring,
+backup verification, Docker container audit), traffic capture (tshark, MikroTik)
 with threat scoring of destinations.
 
 **Lynis audit** (`lynis_audit`, SSH) — runs `lynis audit system` on the remote host and parses
 `/var/log/lynis-report.dat`: hardening index (0–100), warnings mapped to `high` severity,
-suggestions mapped to `low`. Can auto-install lynis via a checkbox. Read-only, same as all
-other SSH-based checks; full coverage requires passwordless sudo (or root) on the target.
+suggestions mapped to `low`. Can auto-install lynis, with confirmation (see Security below).
+Otherwise read-only, same as all other SSH-based checks; full coverage requires passwordless
+sudo (or root) on the target.
 
 **DNS audit** (`dns_audit`, DNS-only) — SPF (lookup-count limit, `+all` risk), DKIM (common
 selector probing), DMARC (policy, missing reports), DNSSEC (signed zone + DS chain), and
@@ -228,7 +231,11 @@ dangling CNAME detection (subdomain takeover risk) across a configurable subdoma
 
 - The web listens on localhost by default; external access only via nginx + basic auth (+ HTTPS via certbot).
 - All external commands run through `subprocess` without `shell=True`, argument lists only.
-- SSH checks are read-only, they change nothing on the remote server.
+- SSH checks are read-only by default. Optional operations that modify the target system —
+  automatically installing a missing tool (`lynis_audit`, `rootkit_check`, `aide_check`) or
+  reinitializing the AIDE reference database (`aide_check` with `mode=init`) — require an
+  explicit confirmation ("yes — modify the target system") before they run, in both the CLI
+  and the web UI. Without it, the check reports what it would have done and stops.
 - The Anthropic API key is read from an environment variable / local DB, never stored in code or reports.
 
 ## Support the project
