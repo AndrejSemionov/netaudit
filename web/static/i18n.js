@@ -11,6 +11,9 @@ const I18N = {
     'tab.settings': 'Настройки',
     'tab.help': 'Помощь',
     'donate': '☕ Поддержать',
+    'donate.title': 'Поддержать проект',
+    'donate.hint': 'Нажми на BTC/ZEC адрес, чтобы скопировать',
+    'donate.copied': 'Скопировано!',
     // пресеты
     'presets.title': 'ПРЕСЕТЫ',
     // категории
@@ -270,6 +273,9 @@ const I18N = {
     'tab.settings': 'Settings',
     'tab.help': 'Help',
     'donate': '☕ Donate',
+    'donate.title': 'Support the project',
+    'donate.hint': 'Click a BTC/ZEC address to copy it',
+    'donate.copied': 'Copied!',
     'presets.title': 'PRESETS',
     'cat.network': 'Network',
     'cat.site': 'Site',

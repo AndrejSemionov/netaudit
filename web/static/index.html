@@ -96,6 +96,22 @@
   .donate-link { margin-left: 14px; font-size: 13px; color: var(--muted); text-decoration: none;
     padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); white-space: nowrap; }
   .donate-link:hover { color: #ffb454; border-color: #ffb454; }
+  .donate-popup { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 1000;
+    background: rgba(0,0,0,0.5); display: flex; align-items: flex-start; justify-content: center; }
+  .donate-popup-inner { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px; margin-top: 80px; width: 340px; max-width: 90vw; }
+  .donate-popup-header { display: flex; justify-content: space-between; align-items: center;
+    font-weight: 600; font-size: 15px; margin-bottom: 12px; }
+  .donate-popup-close { background: none; border: none; color: var(--muted); font-size: 22px;
+    cursor: pointer; line-height: 1; padding: 0 4px; }
+  .donate-popup-close:hover { color: var(--text); }
+  .donate-row { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px;
+    border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; cursor: pointer;
+    text-decoration: none; color: var(--text); }
+  .donate-row:hover { border-color: #ffb454; }
+  .donate-row-label { font-size: 12px; color: var(--muted); }
+  .donate-row-value { font-size: 12px; font-family: var(--mono); word-break: break-all; }
+  .donate-popup-hint { font-size: 11px; color: var(--muted); margin: 8px 0 0; text-align: center; }
   .lang-sel { margin-left: 8px; background: var(--card); color: var(--text); border: 1px solid var(--border);
     border-radius: 6px; padding: 5px 6px; font-size: 12px; cursor: pointer; }
   .tab-btn { width: auto; background: transparent; color: var(--muted); border: 1px solid transparent; padding: 6px 14px; font-weight: 500; }
@@ -142,12 +158,34 @@
     <button class="tab-btn" data-tab="settings" onclick="switchTab('settings')" data-i18n="tab.settings">Настройки</button>
     <button class="tab-btn" data-tab="help" onclick="switchTab('help')" data-i18n="tab.help">Помощь</button>
   </nav>
-  <a href="https://paypal.me/AndrejSemionov" target="_blank" rel="noopener" class="donate-link" data-i18n="donate">☕ Поддержать</a>
+  <a href="#" onclick="toggleDonatePopup(event)" class="donate-link" data-i18n="donate">☕ Поддержать</a>
   <select id="langSel" class="lang-sel" onchange="setLang(this.value)">
     <option value="ru">RU</option>
     <option value="en">EN</option>
   </select>
 </header>
+
+<div id="donatePopup" class="donate-popup" style="display:none">
+  <div class="donate-popup-inner">
+    <div class="donate-popup-header">
+      <span data-i18n="donate.title">Поддержать проект</span>
+      <button class="donate-popup-close" onclick="toggleDonatePopup(event)">&times;</button>
+    </div>
+    <a href="https://paypal.me/AndrejSemionov" target="_blank" rel="noopener" class="donate-row donate-row-link">
+      <span class="donate-row-label">PayPal</span>
+      <span class="donate-row-value">paypal.me/AndrejSemionov</span>
+    </a>
+    <div class="donate-row donate-row-copy" onclick="copyDonateAddress(this, 'bc1qhla2r3nucfr3j8mz49xsmztk50wzrmc35tmjwm')">
+      <span class="donate-row-label">Bitcoin (BTC)</span>
+      <span class="donate-row-value">bc1qhla2r3nucfr3j8mz49xsmztk50wzrmc35tmjwm</span>
+    </div>
+    <div class="donate-row donate-row-copy" onclick="copyDonateAddress(this, 't1Wd9Xh6EMWQvBGJzsYQPmbUG1SW7XwGz5S')">
+      <span class="donate-row-label">Zcash (ZEC)</span>
+      <span class="donate-row-value">t1Wd9Xh6EMWQvBGJzsYQPmbUG1SW7XwGz5S</span>
+    </div>
+    <p class="donate-popup-hint" data-i18n="donate.hint">Нажми на BTC/ZEC адрес, чтобы скопировать</p>
+  </div>
+</div>
 
 <div class="tab-page active" id="tab-audit">
 <datalist id="savedTargets"></datalist>
@@ -1328,6 +1366,32 @@ function renderAnalysis(a) {
     ${recs ? `<h4 style="margin:14px 0 6px">${t('ai.recommendations')}</h4>`+recs : ''}
   </div>`);
 }
+
+// ---- Donate popup ----
+function toggleDonatePopup(e) {
+  e.preventDefault();
+  const popup = document.getElementById('donatePopup');
+  const showing = popup.style.display === 'none';
+  popup.style.display = showing ? 'flex' : 'none';
+}
+
+function copyDonateAddress(el, address) {
+  navigator.clipboard.writeText(address).then(() => {
+    const valueEl = el.querySelector('.donate-row-value');
+    const original = valueEl.textContent;
+    valueEl.textContent = t('donate.copied') || 'Скопировано!';
+    setTimeout(() => { valueEl.textContent = original; }, 1200);
+  }).catch(() => {
+    // clipboard API unavailable (e.g. non-HTTPS context) - the address is
+    // already visible in the row, so the user can select and copy it manually
+  });
+}
+
+// close the popup on a click outside its inner box, not just the × button
+document.addEventListener('click', (e) => {
+  const popup = document.getElementById('donatePopup');
+  if (popup && e.target === popup) popup.style.display = 'none';
+});
 
 // ---- Вкладки ----
 function switchTab(name) {
