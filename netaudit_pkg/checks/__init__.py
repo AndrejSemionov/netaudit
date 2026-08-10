@@ -16,3 +16,4 @@ from . import backup_check     # noqa: F401
 from . import docker_audit     # noqa: F401
 from . import systemd_hardening  # noqa: F401
 from . import nginx_hardening  # noqa: F401
+from . import ssh_hardening    # noqa: F401

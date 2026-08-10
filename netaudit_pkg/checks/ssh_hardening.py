@@ -2,14 +2,22 @@
 sshd hardening score: authentication, authentication limits, forwarding, and
 cryptography, scored 0-100 per docs/checks/ssh_hardening.md.
 
-This module currently contains ONLY the pure scoring layer (_build_components
-and its 14 per-control helpers) - no SSH I/O, no registry entry, no findings
-integration yet. That's deliberate sequencing, not an oversight: the spec's
-own methodology (docs/checks/ssh_hardening.md section 9) calls for proving the
-scoring logic correct against SSHConfig fixtures before wiring it to a live
-SSH session or touching the existing audit_ssh_hardening() findings function
-in server_security.py. See that module's docstring for why the two are kept
-separate rather than one calling the other, once both exist.
+Two-layer API, mirroring nginx_hardening.py's established pattern:
+
+    audit_ssh_hardening_score(ssh)   <- internal, reusable: takes an already-
+                                         connected SSHExecutor, does no I/O
+                                         setup/teardown itself.
+    check_ssh_hardening(...)         <- registry entrypoint: opens its own SSH
+                                         session when run standalone, then
+                                         delegates to audit_ssh_hardening_score().
+
+Named audit_ssh_hardening_score (not audit_ssh_hardening) specifically to
+avoid colliding with the pre-existing audit_ssh_hardening() findings function
+in server_security.py - both exist side by side, both independently consume
+collect_ssh_config()/SSHConfig, neither calls the other (same reasoning as
+nginx_hardening.py's relationship to audit_nginx() - see this module's
+_build_findings() docstring for the specific division of finding coverage
+between the two).
 
 Every control's PASS/FAIL/N/A condition and weight below is a direct
 transcription of docs/checks/ssh_hardening.md sections 6 and 8 - this module
@@ -37,8 +45,16 @@ is the implementation of that spec, not a fresh design. In particular:
 
 from __future__ import annotations
 
-from ..scoring import Component
-from ..ssh_config import SSHConfig
+from ..registry import register
+from ..findings import finding as _finding
+from ..scoring import Component, weighted_score
+from ..ssh import SSHExecutor, HostKeyMismatchError
+from ..ssh_config import SSHConfig, collect_ssh_config
+
+try:
+    import paramiko
+except ImportError:
+    paramiko = None
 
 # ===========================================================================
 # Weak-algorithm policy (docs/checks/ssh_hardening.md section 6.4.1)
@@ -281,3 +297,229 @@ def _build_components(cfg: SSHConfig) -> list[Component]:
         _c_macs(cfg),
         _c_kex_algorithms(cfg),
     ]
+
+
+# ===========================================================================
+# Finding builders — self-generated findings for the 11 of 14 controls that
+# have no counterpart in the pre-existing audit_ssh_hardening() (findings-
+# only check, server_security.py). Only SSH-AUTH-001/002/003 are covered
+# there; every other control's finding is generated here, same division of
+# labor as nginx_hardening.py's _build_findings() (see that module's
+# docstring for the general pattern this follows). None of these duplicate
+# an existing finding - a caller wanting the full finding set for this
+# server's SSH posture combines this module's findings with
+# audit_ssh_hardening()'s, linked via Component.finding_id, not by one
+# function calling the other.
+# ===========================================================================
+
+def _f_pubkey_authentication(cfg: SSHConfig) -> dict | None:
+    if cfg.pubkey_authentication is True:
+        return None
+    return _finding('high', 'PubkeyAuthentication disabled',
+                    'public-key authentication is not enabled — this removes the strongest '
+                    'available authentication method, leaving only weaker alternatives',
+                    id='SSH-AUTH-004')
+
+
+def _f_kbd_interactive_authentication(cfg: SSHConfig) -> dict | None:
+    if cfg.kbd_interactive_authentication is False:
+        return None
+    return _finding('medium', 'KbdInteractiveAuthentication enabled',
+                    'PAM-backed keyboard-interactive authentication can prompt for a password '
+                    'exactly like PasswordAuthentication — disabling only the latter does not '
+                    'remove this password-equivalent path',
+                    id='SSH-AUTH-005')
+
+
+def _f_hostbased_authentication(cfg: SSHConfig) -> dict | None:
+    if cfg.hostbased_authentication is False:
+        return None
+    return _finding('low', 'HostbasedAuthentication enabled',
+                    'host-based trust authentication is enabled — this trusts client-presented '
+                    'host identity rather than per-user credentials',
+                    id='SSH-AUTH-006')
+
+
+def _f_max_auth_tries(cfg: SSHConfig) -> dict | None:
+    if cfg.max_auth_tries is not None and cfg.max_auth_tries <= 4:
+        return None
+    value = cfg.max_auth_tries if cfg.max_auth_tries is not None else 'unresolved'
+    return _finding('low', 'MaxAuthTries above recommended threshold',
+                    f'MaxAuthTries is {value} — 4 or fewer limits brute-force attempts per connection',
+                    id='SSH-AUTH-007')
+
+
+def _f_login_grace_time(cfg: SSHConfig) -> dict | None:
+    if cfg.login_grace_time is not None and cfg.login_grace_time <= 60:
+        return None
+    value = cfg.login_grace_time if cfg.login_grace_time is not None else 'unresolved'
+    return _finding('low', 'LoginGraceTime above recommended threshold',
+                    f'LoginGraceTime is {value}s — 60s or less reduces the window an '
+                    'unauthenticated connection can hold a slot open',
+                    id='SSH-AUTH-008')
+
+
+def _f_x11_forwarding(cfg: SSHConfig) -> dict | None:
+    if cfg.x11_forwarding is False:
+        return None
+    return _finding('low', 'X11Forwarding enabled',
+                    'X11 forwarding is enabled — an unused attack surface on most servers',
+                    id='SSH-FWD-001')
+
+
+def _f_allow_tcp_forwarding(cfg: SSHConfig) -> dict | None:
+    if cfg.allow_tcp_forwarding == 'no':
+        return None
+    value = cfg.allow_tcp_forwarding if cfg.allow_tcp_forwarding is not None else 'unresolved'
+    return _finding('medium', 'AllowTcpForwarding not disabled',
+                    f'AllowTcpForwarding is {value!r} — TCP forwarding/tunneling is available '
+                    '(including partial modes like local/remote, which still enable a real '
+                    'tunneling capability)',
+                    id='SSH-FWD-002')
+
+
+def _f_allow_agent_forwarding(cfg: SSHConfig) -> dict | None:
+    if cfg.allow_agent_forwarding is False:
+        return None
+    return _finding('medium', 'AllowAgentForwarding enabled',
+                    'SSH agent forwarding is enabled — a compromised server can potentially '
+                    'use the client-side agent to authenticate elsewhere',
+                    id='SSH-FWD-003')
+
+
+def _f_ciphers(cfg: SSHConfig) -> dict | None:
+    if not cfg.ciphers:
+        return None  # N/A — no finding for "nothing to evaluate"
+    if not _has_weak_algorithm(cfg.ciphers, _WEAK_CIPHER_SUBSTRINGS):
+        return None
+    return _finding('high', 'weak cipher enabled',
+                    'ciphers includes a deny-listed algorithm (CBC-mode or RC4/arcfour family) — '
+                    'see docs/checks/ssh_hardening.md section 6.4.1 for the full policy',
+                    id='SSH-CRYPTO-001')
+
+
+def _f_macs(cfg: SSHConfig) -> dict | None:
+    if not cfg.macs:
+        return None
+    if not _has_weak_algorithm(cfg.macs, _WEAK_MAC_SUBSTRINGS):
+        return None
+    return _finding('medium', 'weak MAC enabled',
+                    'macs includes a deny-listed algorithm (MD5, SHA-1, RIPEMD, or a truncated '
+                    '96-bit variant) — see docs/checks/ssh_hardening.md section 6.4.1',
+                    id='SSH-CRYPTO-002')
+
+
+def _f_kex_algorithms(cfg: SSHConfig) -> dict | None:
+    if not cfg.kex_algorithms:
+        return None
+    if not _has_weak_algorithm(cfg.kex_algorithms, _WEAK_KEX_SUBSTRINGS):
+        return None
+    return _finding('high', 'weak key exchange algorithm enabled',
+                    'kex_algorithms includes a deny-listed SHA-1-based group — '
+                    'see docs/checks/ssh_hardening.md section 6.4.1',
+                    id='SSH-CRYPTO-003')
+
+
+def _build_findings(cfg: SSHConfig) -> list[dict]:
+    """The 11 self-generated findings this module produces on its own
+    (everything except SSH-AUTH-001/002/003, which audit_ssh_hardening()
+    already covers and this module references via Component.finding_id
+    instead of re-deriving). Returns only the findings for controls that
+    are currently FAILing (or, for the three crypto controls, N/A produces
+    no finding either — nothing to flag when there's nothing to evaluate)."""
+    findings = [
+        _f_pubkey_authentication(cfg),
+        _f_kbd_interactive_authentication(cfg),
+        _f_hostbased_authentication(cfg),
+        _f_max_auth_tries(cfg),
+        _f_login_grace_time(cfg),
+        _f_x11_forwarding(cfg),
+        _f_allow_tcp_forwarding(cfg),
+        _f_allow_agent_forwarding(cfg),
+        _f_ciphers(cfg),
+        _f_macs(cfg),
+        _f_kex_algorithms(cfg),
+    ]
+    return [f for f in findings if f is not None]
+
+
+# ===========================================================================
+# Internal reusable API
+# ===========================================================================
+
+def audit_ssh_hardening_score(ssh: SSHExecutor) -> dict:
+    """Scores sshd's own hardening (authentication, auth limits, forwarding,
+    cryptography) from an already-connected SSHExecutor. Does NOT open or
+    close the SSH session itself - see this module's docstring for the
+    two-layer API rationale (mirrors nginx_hardening's
+    audit_nginx_hardening()).
+
+    Deliberately does not call audit_ssh_hardening() (server_security.py) -
+    both are independent consumers of collect_ssh_config(); the link
+    between them is Component.finding_id referencing audit_ssh_hardening()'s
+    finding ids for SSH-AUTH-001/002/003, not a function call.
+    """
+    cfg = collect_ssh_config(ssh)
+    if not cfg.readable:
+        if not cfg.version:
+            # sshd isn't installed at all - which sshd found nothing, so
+            # collect_ssh_config() never even attempted sshd -T.
+            return {'installed': False}
+        # sshd is installed but sshd -T came back empty - the group-level
+        # N/A case (spec section 4.1): sudo lacked access to a restricted
+        # Include file, so nothing was resolved and no control has a
+        # legitimate opinion. No hardening score at all, matching
+        # nginx_hardening's identical handling of the same shape of failure.
+        return {'installed': True, 'version': cfg.version,
+                'error': 'sshd -T requires root — no read access to the effective configuration'}
+
+    hardening = weighted_score(_build_components(cfg))
+    findings = _build_findings(cfg)
+
+    return {
+        'installed': True,
+        'version': cfg.version,
+        'hardening': hardening,
+        'findings': findings,
+    }
+
+
+# ===========================================================================
+# Registry entrypoint
+# ===========================================================================
+
+@register(
+    id='ssh_hardening', label='SSH server hardening (SSH)', category='hardening',
+    params=[
+        {'name': 'host', 'type': 'text', 'label': 'Host', 'default': ''},
+        {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
+        {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
+        {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
+        {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
+    ],
+    required_tools=[],
+    description='Scores sshd authentication, authentication limits, forwarding and '
+                'cryptography against docs/checks/ssh_hardening.md (14 controls, 0-100 '
+                'hardening score). Read-only.',
+)
+def check_ssh_hardening(host='', user='root', port=22, key_path='', password='') -> dict:
+    """Public registry entrypoint - opens its own SSH session when run
+    standalone, then delegates to audit_ssh_hardening_score(). Callers that
+    already hold an open SSHExecutor should call audit_ssh_hardening_score(ssh)
+    directly instead, to avoid a second SSH connection to the same host."""
+    if paramiko is None:
+        return {'error': 'paramiko not installed'}
+    if not host:
+        return {'error': 'host not specified'}
+
+    try:
+        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+    except HostKeyMismatchError as e:
+        return {'error': str(e)}
+    except Exception as e:
+        return {'error': f'could not connect: {e}'}
+
+    try:
+        return audit_ssh_hardening_score(ssh)
+    finally:
+        ssh.close()
