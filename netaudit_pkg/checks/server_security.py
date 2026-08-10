@@ -18,6 +18,7 @@ from ..registry import register
 from ..findings import finding as _finding
 from ..utils import run_cmd, tool_available
 from ..ssh import SSHExecutor, HostKeyMismatchError
+from ..ssh_config import collect_ssh_config
 from ..nginx_config import collect_nginx_config
 
 try:
@@ -237,30 +238,100 @@ def audit_sql(ssh: SSHExecutor) -> dict:
 # ===========================================================================
 
 def audit_ssh_hardening(ssh: SSHExecutor) -> dict:
-    conf, _ = ssh.run("cat /etc/ssh/sshd_config 2>/dev/null; cat /etc/ssh/sshd_config.d/*.conf 2>/dev/null")
-    if not conf.strip():
+    """Findings-producing SSH hardening check - the pre-existing function
+    this project has had since before ssh_hardening (the scoring module,
+    netaudit_pkg/checks/ssh_hardening.py) existed. Refactored to consume
+    collect_ssh_config()/SSHConfig instead of its own raw-text `directive()`
+    regex against `cat sshd_config; cat sshd_config.d/*.conf` - two bugs
+    that raw-text approach had, both fixed by this refactor:
+
+    1. No sudo: `cat sshd_config.d/*.conf` silently lost any Include file
+       without world-read permissions (confirmed on a live VM - see
+       docs/checks/ssh_hardening.md section 2 - a 600-mode
+       50-cloud-init.conf was invisible to this check before this refactor).
+       collect_ssh_config() uses ssh.sudo() for `sshd -T`, fixing this.
+    2. Wrong precedence: concatenating main-file + Include text and taking
+       the first regex match doesn't reliably reflect which file OpenSSH
+       actually gives precedence to (also documented in that same section).
+       `sshd -T` resolves this correctly server-side; this function no
+       longer does its own precedence reasoning at all.
+
+    External return shape is unchanged from before this refactor (same
+    keys: 'port', 'root_login', 'password_auth', 'max_auth_tries',
+    'findings'; same finding text/severity for the three checks this
+    function has always covered) except for the two fixes above, which
+    change VALUES this function returns for the same input in cases where
+    the old parsing was wrong - not the shape. Findings now carry stable
+    id= values (SSH-AUTH-001/002/003) matching docs/checks/ssh_hardening.md's
+    control catalogue, added fresh in this refactor (the pre-refactor
+    findings had no id= at all - see test_audit_ssh_hardening_legacy.py,
+    written before this refactor to pin exactly what changed).
+
+    Port and MaxAuthTries are still read and returned (unchanged, for any
+    caller relying on them) but max_auth_tries no longer produces a
+    finding here - see docs/checks/ssh_hardening.md section 6.2: bounding
+    MaxAuthTries is SSH-AUTH-007's job (the scoring module), not this
+    findings function's; the pre-refactor code never generated a finding
+    for it either, only exposed the raw value, so this preserves that.
+
+    Fail-safe defaults for a None SSHConfig field are pinned to match the
+    PRE-REFACTOR directive() defaults exactly (root_login->
+    'prohibit-password', password_authentication->'yes'), not derived from
+    Python truthiness - a naive `'yes' if cfg.password_authentication else
+    'no'` was caught and rejected during this refactor because it silently
+    flips an unresolved/None value to the SAFE-looking 'no' instead of the
+    original code's pessimistic 'yes', which is the wrong failure direction
+    for a security report (a None should read as "couldn't confirm this is
+    safe," not "assume it's fine"). See
+    test_current_behavior_none_field_defaults_fail_safe.
+    """
+    cfg = collect_ssh_config(ssh)
+    if not cfg.readable:
         return {'findings': [_finding('low', 'no access to sshd_config')]}
 
     findings = []
 
-    def directive(name, default=None):
-        m = re.search(rf'^\s*{name}\s+(\S+)', conf, re.IGNORECASE | re.MULTILINE)
-        return m.group(1).lower() if m else default
+    # Fail-safe defaults for a None field (readable=True but this specific
+    # value somehow didn't resolve - an anomaly on a real sshd -T, which
+    # always prints every directive's effective value, but defended against
+    # here anyway rather than silently changing this function's risk
+    # posture). Each default below matches the PRE-REFACTOR directive()
+    # default exactly - not "whatever seems reasonable now" - because
+    # audit_ssh_hardening() is a security-facing report and a None here
+    # must fail toward "flag it", never toward "assume it's fine",
+    # regardless of which collector produced the data. See
+    # test_audit_ssh_hardening_legacy.py's
+    # test_current_behavior_none_field_defaults_fail_safe for the
+    # regression test pinning this.
+    root_login = cfg.permit_root_login if cfg.permit_root_login is not None else 'prohibit-password'
+    if root_login == 'yes':
+        findings.append(_finding('high', 'PermitRootLogin yes',
+                                 'root login is allowed — disable it or set prohibit-password',
+                                 id='SSH-AUTH-001'))
 
-    root_login = directive('PermitRootLogin', 'prohibit-password')
-    if root_login in ('yes',):
-        findings.append(_finding('high', 'PermitRootLogin yes', 'root login is allowed — disable it or set prohibit-password'))
-
-    pw_auth = directive('PasswordAuthentication', 'yes')
+    # cfg.password_authentication is None -> fail-safe 'yes' (pessimistic:
+    # unknown state is treated as the insecure one), NOT the `X if Y else
+    # 'no'` shortcut - that shortcut silently flips None to the SAFE-looking
+    # 'no', which is backwards for a security report. This was caught before
+    # being shipped - see this session's working notes.
+    if cfg.password_authentication is None:
+        pw_auth = 'yes'
+    else:
+        pw_auth = 'yes' if cfg.password_authentication else 'no'
     if pw_auth == 'yes':
         findings.append(_finding('medium', 'PasswordAuthentication yes',
-                                 'password login is allowed — vulnerable to brute-force, keys-only is better'))
+                                 'password login is allowed — vulnerable to brute-force, keys-only is better',
+                                 id='SSH-AUTH-002'))
 
-    if directive('PermitEmptyPasswords', 'no') == 'yes':
-        findings.append(_finding('high', 'PermitEmptyPasswords yes', 'empty passwords are allowed!'))
+    # permit_empty_passwords: pre-refactor default was 'no' (not a finding)
+    # - None here already matches that direction via ordinary falsiness, no
+    # special-casing needed, unlike password_authentication above.
+    if cfg.permit_empty_passwords:
+        findings.append(_finding('high', 'PermitEmptyPasswords yes', 'empty passwords are allowed!',
+                                 id='SSH-AUTH-003'))
 
-    port = directive('Port', '22')
-    max_auth = directive('MaxAuthTries', '6')
+    port = cfg.port if cfg.port is not None else '22'  # legacy default, matches pre-refactor behavior
+    max_auth = str(cfg.max_auth_tries) if cfg.max_auth_tries is not None else '6'
 
     if not findings:
         findings.append(_finding('ok', 'SSH is configured sensibly'))

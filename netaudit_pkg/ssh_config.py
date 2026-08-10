@@ -76,6 +76,14 @@ class SSHConfig:
     readable: bool = False
     version: str = ''
 
+    # Legacy informational field — not a scoring input for any Tier-1
+    # control (docs/checks/ssh_hardening.md section 6.6: changing the SSH
+    # port is a weak, non-scored hardening measure), collected purely so
+    # audit_ssh_hardening() (server_security.py) can keep returning it in
+    # its output after being refactored onto this collector. Do not wire
+    # this into _build_components() in checks/ssh_hardening.py.
+    port: str | None = None
+
     # Authentication
     permit_root_login: str | None = None
     password_authentication: bool | None = None
@@ -187,6 +195,7 @@ def _parse_sshd_t(output: str, version: str = '') -> SSHConfig:
     return SSHConfig(
         readable=True,
         version=version,
+        port=effective.get('port'),
         permit_root_login=effective.get('permitrootlogin'),
         password_authentication=_yes_no('passwordauthentication'),
         permit_empty_passwords=_yes_no('permitemptypasswords'),
