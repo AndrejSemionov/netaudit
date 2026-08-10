@@ -83,13 +83,34 @@ REMOTE_CHECKS = {
     'disk_usage': 'df -h --output=target,size,pcent -x tmpfs -x devtmpfs',
     'memory': 'free -h',
     'open_ports': 'ss -tulnp 2>/dev/null || ss -tuln',
-    'firewall_ufw': 'ufw status 2>/dev/null || echo "no access"',
-    'firewall_nft': 'nft list ruleset 2>/dev/null | head -50 || echo "no access (root)"',
     'failed_ssh_logins': 'journalctl -u ssh -u sshd --since "-24 hours" 2>/dev/null | grep -i "failed\\|invalid" | tail -20 || echo "journalctl unavailable"',
-    'fail2ban_status': 'fail2ban-client status 2>/dev/null || echo "fail2ban not installed"',
     'unattended_upgrades': 'systemctl is-enabled unattended-upgrades 2>/dev/null || echo "not found"',
     'sshd_config': "grep -E '^(PermitRootLogin|PasswordAuthentication|Port)' /etc/ssh/sshd_config 2>/dev/null || echo 'no access'",
     'load_average': 'cat /proc/loadavg',
+}
+
+# Commands confirmed (empirically, on a live server during this project's
+# session notes) to require root: `ufw status`, `nft list ruleset`, and
+# `fail2ban-client status` all fail with a permission error for a non-root
+# user on a typical Ubuntu install. These go through ssh.sudo(), not
+# ssh.run() - the same fix nginx_config.py/ssh_config.py needed for
+# `nginx -T`/`sshd -T` earlier in this project's history, applied here to
+# the three remote-audit commands that have the identical problem.
+#
+# Each command uses `2>&1` (not `2>/dev/null | ... || echo "..."`) so a
+# real permission error is visible in the result rather than silently
+# becoming an empty string or a misleading fallback message - a pipe like
+# `cmd 2>/dev/null | head -N` takes its exit code from `head`, not `cmd`,
+# so `cmd`'s own failure never reaches the `||` fallback even when it's
+# present. This was found on a live server: `nft list ruleset 2>/dev/null
+# | head -50 || echo "no access (root)"` produced neither the ruleset nor
+# the fallback message - just an empty string - because `head` succeeded
+# (on empty input) even though `nft` itself failed with "Operation not
+# permitted".
+REMOTE_SUDO_CHECKS = {
+    'firewall_ufw': 'ufw status 2>&1',
+    'firewall_nft': 'nft list ruleset 2>&1 | head -50',
+    'fail2ban_status': 'fail2ban-client status 2>&1',
 }
 
 
@@ -122,6 +143,12 @@ def check_ssh_audit(host: str = '', user: str = 'root', port: int = 22,
         for name, cmd in REMOTE_CHECKS.items():
             try:
                 out, err = ssh.run(cmd, timeout=15)
+                results[name] = out.strip() or err.strip() or '(empty)'
+            except (paramiko.SSHException, socket.timeout) as e:
+                results[name] = f'error: {e}'
+        for name, cmd in REMOTE_SUDO_CHECKS.items():
+            try:
+                out, err = ssh.sudo(cmd, timeout=15)
                 results[name] = out.strip() or err.strip() or '(empty)'
             except (paramiko.SSHException, socket.timeout) as e:
                 results[name] = f'error: {e}'
