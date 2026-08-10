@@ -1227,6 +1227,36 @@ function renderResult(id, r, canvasId) {
     return { html };
   }
 
+  // --- любой hardening-scoring результат (nginx_hardening, ssh_hardening, ...):
+  // generic по структуре {hardening:{score,max,components:[{name,weight,score,
+  // max,applicable,reason,finding_id}]}, findings:[...]}, per docs/scoring.md's
+  // Component contract - not keyed on check id, so any future hardening module
+  // using the same weighted_score() shape renders here automatically.
+  if (r.hardening) {
+    const h = r.hardening;
+    const scoreClass = h.score >= 80 ? 'ok' : (h.score >= 50 ? 'warn' : 'bad');
+    let html = `<div style="margin-bottom:12px"><span class="pill ${scoreClass}" style="font-size:14px">${t('res.hardening_score') || 'Score'}: ${h.score}/${h.max}</span></div>`;
+    if (Array.isArray(h.components) && h.components.length) {
+      html += '<div style="margin-bottom:14px">';
+      for (const c of h.components) {
+        const isNA = c.applicable === false;
+        const pass = !isNA && c.score >= c.max;
+        const pillClass = isNA ? '' : (pass ? 'ok' : 'bad');
+        const pillStyle = isNA ? 'style="background:#2a3140;color:#9aa4b4"' : '';
+        const label = isNA ? (t('res.na') || 'N/A') : (pass ? (t('res.pass') || 'PASS') : (t('res.fail') || 'FAIL'));
+        const reason = isNA && c.reason ? `<span class="timing"> — ${c.reason}</span>` : '';
+        html += `<div style="padding:3px 0"><span class="pill ${pillClass}" ${pillStyle}>${label}</span> ${c.name}${reason}</div>`;
+      }
+      html += '</div>';
+    }
+    if (Array.isArray(r.findings) && r.findings.length) {
+      const sevPillH = s => ({critical:'<span class="pill bad">critical</span>', high:'<span class="pill bad">high</span>', medium:'<span class="pill warn">medium</span>', low:`<span class="pill" style="background:#2a3140;color:#9aa4b4">low</span>`, ok:'<span class="pill ok">ok</span>'}[s] || s);
+      html += r.findings.map(f =>
+        `<div style="padding:5px 0">${sevPillH(f.severity)} ${f.title}${f.detail?`<div style="font-size:12px;color:var(--muted);margin:2px 0 0 4px">${f.detail}</div>`:''}</div>`).join('');
+    }
+    return { html };
+  }
+
   // --- web_security_external / любой findings-результат ---
   if (r.findings && !r.sections) {
     const sevPill = s => ({critical:'<span class="pill bad">critical</span>', high:'<span class="pill bad">high</span>', medium:'<span class="pill warn">medium</span>', low:`<span class="pill" style="background:#2a3140;color:#9aa4b4">low</span>`, ok:'<span class="pill ok">ok</span>'}[s] || s);
