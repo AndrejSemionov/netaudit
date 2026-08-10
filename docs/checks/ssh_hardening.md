@@ -589,9 +589,9 @@ Cryptography (group 25%, severities: high, medium, high — sum = 4.0):
 
 | Control | Severity | Weight |
 |---|---|---:|
-| `ciphers` (SSH-CRYPTO-001) | high | 0.0938 |
+| `ciphers` (SSH-CRYPTO-001) | high | 0.09375 |
 | `macs` (SSH-CRYPTO-002) | medium | 0.0625 |
-| `kex_algorithms` (SSH-CRYPTO-003) | high | 0.0938 |
+| `kex_algorithms` (SSH-CRYPTO-003) | high | 0.09375 |
 
 **Sum of all 14 control weights: 1.000000** (verified programmatically, not by
 hand).
@@ -620,7 +620,7 @@ being recorded here.
 | 3c. `PermitRootLogin forced-commands-only` only | 100 | PASS, same reasoning |
 | 3d. `PermitRootLogin no` only | 100 | PASS, strictest case |
 | 4. All three forwarding controls enabled | 80 | 100 − 20.0 (4+8+8, full Forwarding group) |
-| 5a. Weak cipher only (`3des-cbc` present) | 91 | 100 − 9.38 → round → 91 (high, weight 0.0938) |
+| 5a. Weak cipher only (`3des-cbc` present) | 91 | 100 − 9.375 = 90.625 → round-even → 91 (high, weight 0.09375) |
 | 5b. Weak MAC only (`hmac-sha1-etm@openssh.com` present) | 94 | 100 − 6.25 → round → 94 (medium, weight 0.0625) — **confirms the deny-list's `-etm` variant matching works, not just the plain name** |
 | 5c. Weak KEX only (`diffie-hellman-group14-sha1` present) | 91 | 100 − 9.38 → round → 91 |
 | 5d. All three crypto controls weak | 75 | 100 − 25.0 (full Cryptography group) |
@@ -691,11 +691,18 @@ which is the kind of sanity check this whole validation process exists to run.
 4. Write findings (either extending `audit_ssh_hardening()` or as
    `ssh_hardening`-self-generated, per the `nginx_hardening` pattern) for the
    remaining 11 controls.
-5. `netaudit_pkg/checks/ssh_hardening.py`: new module, `category='hardening'`,
-   two-layer API (`audit_ssh_hardening_score(ssh)` / `check_ssh_hardening(...)`
-   — naming TBD to avoid colliding with the existing `audit_ssh_hardening()`
-   findings function once both exist side by side), consumes
-   `collect_ssh_config(ssh)`.
+5. `netaudit_pkg/checks/ssh_hardening.py`: **`_build_components(cfg)` done**
+   (2026-08-10) — pure scoring layer only, all 14 controls, weights
+   transcribed as exact fractions (not the rounded `0.0938` an earlier draft
+   of this document used — `0.09375`, matching what the code actually
+   computes). Verified against all 13 section 8.3 synthetic scenarios via
+   `weighted_score()`, exact score match on every one. **Not yet done:** SSH
+   I/O (`audit_ssh_hardening_score(ssh)` — naming still TBD to avoid
+   colliding with the existing `audit_ssh_hardening()` findings function),
+   registry entry, `_build_findings()`. `netaudit_pkg/checks/ssh_hardening.py`
+   is deliberately not yet imported by `netaudit_pkg/checks/__init__.py` —
+   it has no registry entry to trigger, and importing it prematurely would
+   suggest it's wired up when it isn't.
 6. Tests: pure-function tests for each control's PASS/FAIL/N/A logic (no SSH
    mock needed, same pattern as `test_nginx_hardening_components.py`), plus
    `FakeSSHExecutor` tests for the full check.
