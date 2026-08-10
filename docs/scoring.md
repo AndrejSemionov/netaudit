@@ -254,8 +254,65 @@ Once a hardening module returns this shape, it's a drop-in participant in:
 
 ## Status
 
-As of this document, no hardening module exists yet. `systemd_hardening` reports a
-**native metric** (`metrics["systemd.exposure"]`), not a hardening score - it wraps
-an external tool's own number and does not compute anything itself, so it stays in
-`category='server'` and does not use `weighted_score()`. The first hardening module
-(planned: `nginx_hardening`) will be the first real consumer of this contract.
+`nginx_hardening` is the first hardening module and is shipped
+(`netaudit_pkg/checks/nginx_hardening.py`, `docs/checks/nginx_hardening.md`) - 9
+Tier-1 controls, weights validated against 8 synthetic scenarios *and* against a
+real `nginx -T` on a live VM. `systemd_hardening` still reports a **native metric**
+(`metrics["systemd.exposure"]`), not a hardening score - it wraps an external
+tool's own number and does not compute anything itself, so it stays in
+`category='server'` and does not use `weighted_score()`.
+
+**Two-layer API pattern, established by `nginx_hardening` and expected of every
+future hardening module:**
+
+```python
+def audit_<name>_hardening(ssh: SSHExecutor) -> dict:
+    """Internal, reusable - takes an already-connected session, does no
+    connect/close itself. This is what a future combined multi-check run
+    calls to share one SSH session across several checks."""
+    ...
+
+@register(id='<name>_hardening', category='hardening', ...)
+def check_<name>_hardening(host='', user='root', ...) -> dict:
+    """Registry entrypoint - owns its own connect/close, delegates to
+    audit_<name>_hardening()."""
+    ssh = SSHExecutor(...).connect()
+    try:
+        return audit_<name>_hardening(ssh)
+    finally:
+        ssh.close()
+```
+
+A hardening module must not call an existing Findings-producing check (e.g.
+`nginx_hardening` does **not** call `audit_nginx()`) - both are independent
+consumers of the same data-only collector (`nginx_config.py`'s
+`collect_nginx_config()`), linked only via `Component.finding_id` referencing the
+other check's `Finding.id`, never by one calling the other. This keeps a hardening
+module's own `findings` list to just the controls that have no pre-existing
+Finding to reuse (`nginx_hardening`: 2 of 9 controls) - see
+`docs/checks/nginx_hardening.md` section 5.
+
+**What VM verification against a real `nginx -T` caught that 362 passing unit
+tests, synthetic fixtures, and `FakeSSHExecutor` mocks did not** (2026-08-10) -
+both are collector-level bugs, not scoring-contract bugs, and both are now fixed
+in `nginx_config.py` with regression tests:
+
+- `collect_nginx_config()` ran `nginx -T` via `ssh.run()`, not `ssh.sudo()`. Most
+  distros don't make the full config tree world-readable, so a non-root SSH user
+  got silent empty output - `readable=False` for every caller, `FakeSSHExecutor`
+  never exposed this because its `run()`/`sudo()` are both just dict lookups with
+  no privilege model at all.
+- Directive detection (`server_tokens`, `ssl_protocols`, `ssl_certificate`,
+  `add_header`, `autoindex`) used plain regex/substring against the raw `nginx -T`
+  output with no comment-awareness. A `# ssl_certificate ...;` line (config left
+  in place but disabled) read as an *active* certificate. Every hand-written test
+  fixture up to that point happened to write clean, comment-free config text, so
+  the gap was invisible until a real server's actual config - which had inline
+  explanatory comments - went through the parser.
+
+Neither bug was in `nginx_hardening.py` itself or in `weighted_score()` - both
+were in the shared `nginx_config.py` collector, and both fixes therefore apply
+retroactively to `audit_nginx()` too. This is the concrete case for why a future
+hardening module should budget for a real-server verification pass, not just
+fixture-based tests: fixtures only catch what their author thought to write, and a
+mocked SSH session has no privilege boundary or comment syntax to get wrong.
