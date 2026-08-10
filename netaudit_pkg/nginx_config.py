@@ -86,24 +86,67 @@ def collect_nginx_config(ssh: SSHExecutor) -> NginxConfig:
     return _parse_nginx_config(conf, version=ver.strip())
 
 
+def _strip_comments(conf: str) -> str:
+    """Remove nginx `#` comments from config text, line-by-line and
+    quote-aware, before any directive regex/substring check runs.
+
+    Without this, a disabled directive like `# ssl_certificate ...;` reads
+    as an *active* one to a naive `'ssl_certificate' in conf` check - this
+    was found on a live VM during nginx_hardening verification: a
+    commented-out ssl_certificate line made has_ssl_certificate=True when
+    the site actually has no certificate configured at all, silently
+    flipping NGX-EXP-001/NGX-TLS-001/002/003 to the wrong applicability and
+    score. Every directive check in _parse_nginx_config() runs against this
+    stripped text now, not the raw `conf` - one normalization step instead
+    of teaching each regex individually to skip comments.
+
+    Quote-aware (tracks '/" state per line) rather than a blind `line.split
+    ('#', 1)[0]`, because a `#` can legitimately appear inside a quoted
+    directive value (e.g. `add_header X-Custom "a#b";`) - nginx's own
+    tokenizer doesn't treat that as a comment start, so this shouldn't
+    either. This is not a full nginx config parser (no multi-line string
+    handling, no escape sequences) - just enough to stop misreading
+    comments as active directives for the fields NginxConfig extracts.
+    `conf` itself (the raw text, comments included) is preserved unchanged
+    in NginxConfig.conf for anything that wants the original.
+    """
+    out_lines = []
+    for line in conf.splitlines():
+        result = []
+        in_squote = False
+        in_dquote = False
+        for ch in line:
+            if ch == "'" and not in_dquote:
+                in_squote = not in_squote
+            elif ch == '"' and not in_squote:
+                in_dquote = not in_dquote
+            elif ch == '#' and not in_squote and not in_dquote:
+                break
+            result.append(ch)
+        out_lines.append(''.join(result))
+    return '\n'.join(out_lines)
+
+
 def _parse_nginx_config(conf: str, version: str = '') -> NginxConfig:
     """Pure parsing, no I/O - split out from collect_nginx_config() so it
     can be unit-tested against fixture text without an SSH mock."""
+    active = _strip_comments(conf)
+
     server_tokens: str | None = None
-    if re.search(r'server_tokens\s+off\s*;', conf):
+    if re.search(r'server_tokens\s+off\s*;', active):
         server_tokens = 'off'
-    elif re.search(r'server_tokens\s+on\s*;', conf):
+    elif re.search(r'server_tokens\s+on\s*;', active):
         server_tokens = 'on'
 
     ssl_protocols: list[str] = []
-    ssl_proto_m = re.search(r'ssl_protocols\s+([^;]+);', conf)
+    ssl_proto_m = re.search(r'ssl_protocols\s+([^;]+);', active)
     if ssl_proto_m:
         ssl_protocols = ssl_proto_m.group(1).split()
 
     headers_present = set()
     for hdr in ('strict-transport-security', 'x-frame-options', 'x-content-type-options',
                 'content-security-policy', 'x-xss-protection', 'referrer-policy'):
-        if hdr in conf.lower():
+        if hdr in active.lower():
             headers_present.add(hdr)
 
     return NginxConfig(
@@ -113,7 +156,7 @@ def _parse_nginx_config(conf: str, version: str = '') -> NginxConfig:
         readable=True,
         server_tokens=server_tokens,
         ssl_protocols=ssl_protocols,
-        has_ssl_certificate='ssl_certificate' in conf,
+        has_ssl_certificate='ssl_certificate' in active,
         headers_present=headers_present,
-        autoindex_on=bool(re.search(r'autoindex\s+on', conf)),
+        autoindex_on=bool(re.search(r'autoindex\s+on', active)),
     )
