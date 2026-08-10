@@ -61,13 +61,24 @@ def collect_nginx_config(ssh: SSHExecutor) -> NginxConfig:
     same two commands audit_nginx() always has, just factored out so a
     second consumer (nginx_hardening) doesn't have to duplicate them or the
     parsing that follows.
+
+    `nginx -T` runs via ssh.sudo(), not ssh.run(): on most distros the
+    combined config it prints includes server{}/location{} blocks whose
+    source files aren't world-readable (e.g. TLS vhost configs, sometimes
+    the whole /etc/nginx tree depending on umask), so a non-root SSH user
+    gets empty output from a plain `nginx -T` even though the binary itself
+    ran fine - readable stays False and every downstream control silently
+    has nothing to evaluate. ssh.sudo() already handles both passwordless
+    and password-based sudo (see ssh.py), so this is a one-line fix at the
+    single collection point rather than something either consumer
+    (audit_nginx, nginx_hardening) should work around individually.
     """
     out, _ = ssh.run('which nginx || echo NONE')
     if 'NONE' in out:
         return NginxConfig(installed=False)
 
     ver, _ = ssh.run('nginx -v 2>&1')
-    conf, _ = ssh.run('nginx -T 2>/dev/null')
+    conf, _ = ssh.sudo('nginx -T 2>/dev/null')
 
     if not conf:
         return NginxConfig(installed=True, version=ver.strip(), readable=False)
