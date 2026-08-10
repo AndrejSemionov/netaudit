@@ -364,18 +364,35 @@ consequential to the module's own hardening assessment.
 #### Synthetic validation results
 
 Ran through the actual `weighted_score()` implementation (not hand-computed), nine
-scenarios, everything held constant except the property under test:
+scenarios, everything held constant except the property under test. **Exact input
+`NginxConfig` fields for each scenario** (fixed 2026-08-10, after an implementation
+session found the original prose labels alone were ambiguous enough to reconstruct
+incorrectly — see note below):
 
-| Scenario | Score | Notes |
-|---|---|---|
-| A. Fully hardened | 100 | baseline |
-| B. TLS 1.2 only, everything else PASS | 98 | small delta from A — see "known limitation" below |
-| C. Legacy TLS present, everything else PASS | 78 | correctly well below B |
-| C2. Legacy present, no modern protocol at all | 70 | correctly the worst TLS-only case |
-| D. No security headers, TLS good | 80 | |
-| E. Bad configuration + bad TLS | 40 | |
-| F. No TLS configured at all | 50 | see below — this was the actual finding |
-| G. Realistic mixed server (TLS 1.2 only, no HSTS, `server_tokens on`) | 80 | plausible |
+| Scenario | `server_tokens` | `ssl_protocols` | `has_ssl_certificate` | `headers_present` | `autoindex_on` | Score |
+|---|---|---|---|---|---|---|
+| A. Fully hardened | `off` | `[TLSv1.3]` | `True` | all 3 | `False` | 100 |
+| B. TLS 1.2 only, everything else PASS | `off` | `[TLSv1.2]` | `True` | all 3 | `False` | 98 |
+| C. Legacy TLS present, everything else PASS | `off` | `[TLSv1, TLSv1.2]` | `True` | all 3 | `False` | 78 |
+| C2. Legacy present, no modern protocol at all | `off` | `[TLSv1, TLSv1.1]` | `True` | all 3 | `False` | 70 |
+| D. No security headers, TLS good | `off` | `[TLSv1.3]` | `True` | none | `False` | 80 |
+| E. Bad configuration + bad TLS | `on` | `[TLSv1, TLSv1.1]` | `True` | `{x-frame-options, x-content-type-options}` (no HSTS) | `True` | 40 |
+| F. No TLS configured at all | `off` | `[]` | `False` | `{x-frame-options, x-content-type-options}` (no HSTS) | `False` | 50 |
+| G. Realistic mixed server (TLS 1.2 only, no HSTS, `server_tokens on`) | `on` | `[TLSv1.2]` | `True` | `{x-frame-options, x-content-type-options}` | `False` | 80 |
+
+**Note on E and F's `headers_present`:** both scenarios deliberately omit HSTS (not
+"all 3 headers present" as an earlier draft of this table implied) — HSTS is what
+makes the arithmetic land exactly on 40/50 given the fixed component weights, and it
+is also the realistic case: a server with no TLS, or with legacy-only TLS and poor
+config hygiene, would not plausibly be sending `Strict-Transport-Security` either.
+**Note on E specifically:** `NGX-TLS-003` (protocols explicitly configured) scores
+PASS here, not FAIL — `ssl_protocols` is non-empty (`[TLSv1, TLSv1.1]`), which is
+NGX-TLS-003's PASS condition regardless of *which* protocols are listed (section
+6.1: NGX-TLS-003 checks explicitness, not protocol quality — that's NGX-TLS-001/002's
+job). A config where NGX-TLS-001, 002, *and* 003 are simultaneously FAIL is not
+reachable: 003's FAIL condition (`ssl_protocols` empty) is mutually exclusive with
+001/002's FAIL conditions (which require `ssl_protocols` non-empty to evaluate at
+all) — see the 6.0 status matrix.
 
 **The "No TLS" finding.** The first weight iteration (Exposure at 10%, matching the
 group weights originally proposed) scored scenario F at **67/100** — implausibly
