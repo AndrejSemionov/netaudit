@@ -5,12 +5,14 @@ the google/osv.dev#4230 background), and CVSS-to-severity mapping."""
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
 from netaudit_pkg.checks.cve_audit import (
-    _parse_version, _resolve_ecosystem, collect_packages, collect_os_release,
-    query_osv, fetch_vuln_details, check_cve_audit,
+    _parse_version, _resolve_ecosystem, collect_packages, collect_composer_packages,
+    collect_os_release, query_osv, fetch_vuln_details, check_cve_audit,
 )
 from tests.conftest import FakeSSHExecutor
 
@@ -211,6 +213,130 @@ def test_collect_packages_skips_services_not_found():
     fake = FakeSSHExecutor(responses={})  # nothing installed, all commands return ''
     packages = collect_packages(fake)
     assert packages == []
+
+
+# ===========================================================================
+# collect_composer_packages — Laravel / any PHP Composer project
+# ===========================================================================
+
+_COMPOSER_LOCK_SAMPLE = json.dumps({
+    'packages': [
+        {'name': 'laravel/framework', 'version': 'v13.15.0'},
+        {'name': 'guzzlehttp/guzzle', 'version': '7.9.0'},
+    ],
+    'packages-dev': [
+        {'name': 'spatie/laravel-ignition', 'version': 'v2.4.0'},
+    ],
+})
+
+
+def test_collect_composer_packages_finds_lock_file():
+    fake = FakeSSHExecutor(responses={
+        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        'cat /var/www/html/composer.lock': (_COMPOSER_LOCK_SAMPLE, ''),
+    })
+    packages = collect_composer_packages(fake)
+    names = {p['name'] for p in packages}
+    assert names == {'laravel/framework', 'guzzlehttp/guzzle', 'spatie/laravel-ignition'}
+
+
+def test_collect_composer_packages_strips_v_prefix():
+    """Regression-shaped test: composer.lock commonly prefixes versions
+    with 'v' (e.g. laravel/framework's real lock entries use 'v13.15.0'),
+    but OSV's Packagist data is keyed on the bare semver."""
+    fake = FakeSSHExecutor(responses={
+        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        'cat /var/www/html/composer.lock': (_COMPOSER_LOCK_SAMPLE, ''),
+    })
+    packages = collect_composer_packages(fake)
+    laravel = next(p for p in packages if p['name'] == 'laravel/framework')
+    assert laravel['version'] == '13.15.0'
+    assert laravel['upstream_version'] == 'v13.15.0'  # original preserved for display
+
+
+def test_collect_composer_packages_does_not_strip_non_v_versions():
+    fake = FakeSSHExecutor(responses={
+        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        'cat /var/www/html/composer.lock': (_COMPOSER_LOCK_SAMPLE, ''),
+    })
+    packages = collect_composer_packages(fake)
+    guzzle = next(p for p in packages if p['name'] == 'guzzlehttp/guzzle')
+    assert guzzle['version'] == '7.9.0'
+
+
+def test_collect_composer_packages_strip_is_a_single_char_slice_not_lstrip():
+    """Regression test for a bug caught during development: str.lstrip('v')
+    removes every leading character in its argument SET one at a time
+    (a character-class strip), not a fixed-length prefix - on a
+    hypothetical version starting with more than one 'v' it would over-strip.
+    This locks in that only a single leading 'v' is ever removed."""
+    lock = json.dumps({'packages': [{'name': 'some/pkg', 'version': 'vv1.0.0'}], 'packages-dev': []})
+    fake = FakeSSHExecutor(responses={
+        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        'cat /var/www/html/composer.lock': (lock, ''),
+    })
+    packages = collect_composer_packages(fake)
+    pkg = next(p for p in packages if p['name'] == 'some/pkg')
+    assert pkg['version'] == 'v1.0.0'  # only the first 'v' stripped, not both
+
+
+def test_collect_composer_packages_ecosystem_is_packagist():
+    fake = FakeSSHExecutor(responses={
+        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        'cat /var/www/html/composer.lock': (_COMPOSER_LOCK_SAMPLE, ''),
+    })
+    packages = collect_composer_packages(fake)
+    assert all(p['ecosystem'] == 'Packagist' for p in packages)
+    assert all(p['third_party_repo'] is False for p in packages)
+
+
+def test_collect_composer_packages_includes_dev_dependencies():
+    """A dev-only dependency (e.g. spatie/laravel-ignition, a debug tool
+    with real historical RCEs when accidentally left enabled in
+    production) is still a real risk if it's present on the deployed
+    server - this module doesn't assume dev dependencies were stripped
+    out before deployment."""
+    fake = FakeSSHExecutor(responses={
+        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        'cat /var/www/html/composer.lock': (_COMPOSER_LOCK_SAMPLE, ''),
+    })
+    packages = collect_composer_packages(fake)
+    assert any(p['name'] == 'spatie/laravel-ignition' for p in packages)
+
+
+def test_collect_composer_packages_returns_empty_when_no_lock_file():
+    fake = FakeSSHExecutor(responses={})
+    packages = collect_composer_packages(fake)
+    assert packages == []
+
+
+def test_collect_composer_packages_returns_empty_on_malformed_json():
+    """A malformed or partially-transferred composer.lock must not crash
+    the whole check - same defensive posture every other parser in this
+    module takes."""
+    fake = FakeSSHExecutor(responses={
+        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        'cat /var/www/html/composer.lock': ('{not valid json!!!', ''),
+    })
+    packages = collect_composer_packages(fake)
+    assert packages == []
+
+
+def test_collect_composer_packages_skips_entries_missing_name_or_version():
+    lock = json.dumps({
+        'packages': [
+            {'name': 'good/package', 'version': '1.0.0'},
+            {'name': 'no-version/package'},  # missing version
+            {'version': '2.0.0'},  # missing name
+        ],
+    })
+    fake = FakeSSHExecutor(responses={
+        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        'cat /var/www/html/composer.lock': (lock, ''),
+    })
+    packages = collect_composer_packages(fake)
+    assert len(packages) == 1
+    assert packages[0]['name'] == 'good/package'
 
 
 # ===========================================================================
@@ -1102,6 +1228,58 @@ def test_full_flow_regression_ubuntu_2012_4542_shaped_finding(monkeypatch, isola
     assert result['summary'].get('medium', 0) == 0
     linux_finding = next(f for f in result['findings'] if f['cve'] == 'UBUNTU-CVE-2012-4542')
     assert linux_finding['severity'] == 'low'
+
+
+def test_full_flow_composer_lock_packages_included_and_checked(monkeypatch, isolated_db):
+    """End-to-end: a real Laravel-shaped composer.lock (laravel/framework
+    at a real historical CVE-affected version) must actually flow through
+    collection, OSV querying, and findings - not just be collected and
+    then silently dropped somewhere in check_cve_audit()'s package loop."""
+    lock = json.dumps({
+        'packages': [{'name': 'laravel/framework', 'version': 'v11.0.0'}],
+        'packages-dev': [],
+    })
+    fake = FakeSSHExecutor(responses={
+        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        'cat /var/www/html/composer.lock': (lock, ''),
+        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', ''),
+    })
+    monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
+
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured['payload'] = json
+        # only laravel/framework is queried in this fixture (no other
+        # services detected), so vulns line up with the single query
+        return type('R', (), {
+            'raise_for_status': lambda self: None,
+            'json': lambda self: {'results': [{'vulns': [{'id': 'CVE-2024-52301'}]}]},
+        })()
+
+    def fake_get(url, timeout):
+        return type('R', (), {
+            'raise_for_status': lambda self: None,
+            'json': lambda self: {
+                'summary': 'Laravel environment manipulation via query string',
+                'severity': [{'type': 'CVSS_V3', 'score': '7.5/AV:N/AC:L'}],
+                'affected': [], 'references': [],
+            },
+        })()
+
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    monkeypatch.setattr(httpx, 'get', fake_get)
+    result = check_cve_audit(host='1.2.3.4')
+
+    packagist_queries = [q for q in captured['payload']['queries']
+                          if q['package']['ecosystem'] == 'Packagist']
+    assert len(packagist_queries) == 1
+    assert packagist_queries[0]['package']['name'] == 'laravel/framework'
+    assert packagist_queries[0]['version'] == '11.0.0'  # 'v' prefix stripped
+
+    laravel_finding = next(f for f in result['findings'] if f['cve'] == 'CVE-2024-52301')
+    assert laravel_finding['package'] == 'laravel/framework'
+    assert laravel_finding['severity'] == 'high'
 
 
 def test_empty_host_rejected():

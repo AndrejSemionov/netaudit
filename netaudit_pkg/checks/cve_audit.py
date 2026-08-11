@@ -49,6 +49,7 @@ result but isn't.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timedelta
 
@@ -340,6 +341,79 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
     return packages
 
 
+def collect_composer_packages(ssh: SSHExecutor) -> list[dict]:
+    """Returns a list of {name, version, ecosystem, raw} for every package
+    listed in a discovered composer.lock file (Laravel and any other PHP
+    Composer project) - both the 'packages' (production) and
+    'packages-dev' sections, since a dev-only dependency (e.g. a testing
+    tool with a known RCE) is still a real risk on a server where the
+    project directory - and its dev dependencies - are actually deployed,
+    not stripped out.
+
+    Unlike collect_packages()'s single-service entries (one nginx, one
+    kernel, ...), a Laravel project can easily have 100+ locked
+    dependencies (laravel/framework itself, plus every Symfony component
+    it depends on, Guzzle, Doctrine, Monolog, and so on) - this returns
+    all of them, each as its own package dict, to be checked against OSV
+    the same way every other package in this module is.
+
+    ecosystem is 'Packagist' - confirmed against OSV.dev's own API
+    documentation and a real querybatch example in the OSV.dev issue
+    tracker (google/osv.dev#466): {"package": {"ecosystem": "Packagist",
+    "name": "noumo/easyii"}, "version": "0.8"}. This is NOT part of the
+    Debian/Ubuntu ecosystem-resolution logic this module uses for
+    dpkg-based packages (_resolve_ecosystem() passes it through
+    unchanged, the same way it already does for 'WordPress') - Packagist
+    is entirely independent of which Linux distro the server runs.
+
+    Only the first composer.lock found under /var/www is read (same
+    single-site assumption collect_packages()'s WordPress detection
+    already makes) - a server hosting multiple independent PHP projects
+    would need a different collection strategy, out of scope here.
+    """
+    out, _ = ssh.run("find /var/www -maxdepth 4 -iname 'composer.lock' -type f 2>/dev/null | head -1")
+    lock_path = out.strip()
+    if not lock_path:
+        return []
+
+    content, _ = ssh.run(f'cat {lock_path} 2>/dev/null')
+    if not content.strip():
+        return []
+
+    try:
+        data = json.loads(content)
+    except (ValueError, TypeError):
+        # A malformed or partially-read lock file must not crash the
+        # whole check - same defensive stance every other parser in this
+        # module takes toward unexpected input.
+        return []
+
+    packages = []
+    for section in ('packages', 'packages-dev'):
+        for entry in data.get(section, []):
+            name = entry.get('name')
+            version = entry.get('version')
+            if not name or not version:
+                continue
+            # composer.lock versions are commonly prefixed with 'v'
+            # (e.g. 'v13.15.0' for laravel/framework) - OSV's Packagist
+            # ecosystem data is keyed on the bare semver without the
+            # prefix, so it's stripped here rather than sent as-is and
+            # silently failing to match. A plain slice, not str.lstrip('v')
+            # - lstrip() removes every leading character present in its
+            # argument set one at a time, not a fixed prefix, so it would
+            # silently mangle any version string with more than one
+            # leading 'v' (or, worse, treat 'v' as a character class and
+            # strip further characters that happen to also be 'v').
+            clean_version = version[1:] if version.startswith('v') else version
+            packages.append({
+                'name': name, 'version': clean_version,
+                'upstream_version': version, 'ecosystem': 'Packagist',
+                'third_party_repo': False, 'raw': f'{name} {version}',
+            })
+    return packages
+
+
 # ===========================================================================
 # OSV.dev - matching + details
 # ===========================================================================
@@ -551,7 +625,8 @@ def fetch_vuln_details(vuln_id: str) -> dict:
         {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
     ],
     required_tools=[],
-    description='Collects installed software versions (nginx, ssh, mysql/mariadb, php, kernel, wordpress) '
+    description='Collects installed software versions (nginx, ssh, mysql/mariadb, php, kernel, wordpress, '
+                'composer.lock dependencies e.g. Laravel) '
                 'over SSH and checks them against the OSV.dev vulnerability database. AI analysis (shared '
                 'ai_analyze) will match found CVEs against the actual service config and say what actually needs updating.',
 )
@@ -569,6 +644,7 @@ def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> 
 
     try:
         packages = collect_packages(ssh)
+        packages += collect_composer_packages(ssh)
         os_id, version_id = collect_os_release(ssh)
     finally:
         ssh.close()
