@@ -44,6 +44,7 @@ def test_collect_packages_finds_nginx():
     assert nginx['version'] == '1.24.0-2'
     assert nginx['upstream_version'] == '1.24.0'
     assert nginx['ecosystem'] == 'Linux'
+    assert nginx['third_party_repo'] is False
 
 
 def test_collect_packages_nginx_falls_back_to_upstream_without_dpkg():
@@ -56,6 +57,21 @@ def test_collect_packages_nginx_falls_back_to_upstream_without_dpkg():
     nginx = next(p for p in packages if p['name'] == 'nginx')
     assert nginx['version'] == '1.24.0'
     assert nginx['upstream_version'] == '1.24.0'
+
+
+def test_collect_packages_flags_nginx_org_ppa_as_third_party():
+    """Regression test for the exact case found running this check
+    against a real server: nginx installed from nginx.org's own apt repo
+    produces a dpkg version like '1.30.2-1~noble' - no 'ubuntu' marker,
+    just a tilde + release codename, the documented shape of a
+    non-distro-native package."""
+    fake = FakeSSHExecutor(responses={
+        'nginx -v': ('nginx version: nginx/1.30.2', ''),
+        "dpkg-query -W -f='${Version}' nginx": ('1.30.2-1~noble\n', ''),
+    })
+    packages = collect_packages(fake)
+    nginx = next(p for p in packages if p['name'] == 'nginx')
+    assert nginx['third_party_repo'] is True
 
 
 def test_collect_packages_distinguishes_mariadb_from_mysql():
@@ -76,6 +92,7 @@ def test_collect_packages_uses_dpkg_version_for_mariadb_when_available():
     packages = collect_packages(fake)
     db_pkg = next(p for p in packages if p['name'] == 'mariadb')
     assert db_pkg['version'] == '1:10.11.6-0+deb12u1'
+    assert db_pkg['third_party_repo'] is False
     # NOTE: upstream_version here reflects a pre-existing, separate bug in
     # _parse_version() - `mysql --version` prints the CLIENT utility
     # version (15.1) before the server version (10.11.6-MariaDB), and the
@@ -120,6 +137,49 @@ def test_dpkg_version_returns_none_when_not_dpkg_installed():
     fake = FakeSSHExecutor(responses={})
     from netaudit_pkg.checks.cve_audit import _dpkg_version
     assert _dpkg_version(fake, 'nginx') is None
+
+
+# ===========================================================================
+# _looks_like_third_party_repo_version — vendor-repo detection
+# ===========================================================================
+
+def test_third_party_detection_nginx_org_ppa_version():
+    """The exact real-world case: nginx.org's own apt repo, no 'ubuntu'
+    marker, tilde + release codename."""
+    from netaudit_pkg.checks.cve_audit import _looks_like_third_party_repo_version
+    assert _looks_like_third_party_repo_version('1.30.2-1~noble') is True
+
+
+def test_third_party_detection_native_ubuntu_version():
+    """A genuine native Ubuntu package revision contains 'ubuntu' - per
+    Ubuntu's own packaging documentation, this is the official marker for
+    "native package, not auto-synced from Debian"."""
+    from netaudit_pkg.checks.cve_audit import _looks_like_third_party_repo_version
+    assert _looks_like_third_party_repo_version('1.28.3-2ubuntu1.8') is False
+
+
+def test_third_party_detection_native_debian_version():
+    """A plain Debian package revision has neither 'ubuntu' nor a
+    tilde - the ordinary '+debXXuY' backport-adjacent security-update
+    shape."""
+    from netaudit_pkg.checks.cve_audit import _looks_like_third_party_repo_version
+    assert _looks_like_third_party_repo_version('1:10.11.6-0+deb12u1') is False
+
+
+def test_third_party_detection_debian_backport_version():
+    """Debian backports use a tilde too ('~bpoN') - treated as
+    third-party-shaped here since the base-release security tracker
+    doesn't cover backports either, per this function's own docstring."""
+    from netaudit_pkg.checks.cve_audit import _looks_like_third_party_repo_version
+    assert _looks_like_third_party_repo_version('2.4.58-1~bpo12+1') is True
+
+
+def test_third_party_detection_ubuntu_ppa_still_flagged_if_no_ubuntu_marker():
+    """A third-party PPA version targeting Ubuntu might still contain a
+    tilde + codename without the 'ubuntu' marker (e.g. a PPA maintainer's
+    own custom revision '2.1-1~jammy1') - still correctly flagged."""
+    from netaudit_pkg.checks.cve_audit import _looks_like_third_party_repo_version
+    assert _looks_like_third_party_repo_version('2.1-1~jammy1') is True
 
 
 # ===========================================================================
@@ -616,6 +676,65 @@ def test_full_flow_unrecognized_distro_reports_not_supported_not_ok(monkeypatch,
     assert result['summary']['ok'] == 0
     nginx_finding = next(f for f in result['findings'] if f['package'] == 'nginx')
     assert nginx_finding['severity'] == 'not_supported'
+
+
+def test_full_flow_third_party_repo_not_reported_as_ok(monkeypatch, isolated_db):
+    """Regression test for the exact case found running this check
+    against a real server: nginx installed from nginx.org's official apt
+    repo (version '1.30.2-1~noble') on an Ubuntu 24.04 host. Ecosystem
+    resolution correctly produces 'Ubuntu:24.04:LTS', and OSV correctly
+    returns zero matches for that exact version string (Ubuntu's security
+    team doesn't track nginx.org's packages at all) - but this must show
+    up as 'third_party_repo', not 'ok', since an empty OSV result here
+    means 'no data' rather than 'verified clean'."""
+    fake = FakeSSHExecutor(responses={
+        'nginx -v': ('nginx version: nginx/1.30.2', ''),
+        "dpkg-query -W -f='${Version}' nginx": ('1.30.2-1~noble\n', ''),
+        "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="24.04"\n', ''),
+    })
+    monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
+
+    def fake_post(url, json, timeout):
+        class R:
+            def raise_for_status(self): pass
+            def json(self): return {'results': [{'vulns': []}]}
+        return R()
+
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    result = check_cve_audit(host='1.2.3.4')
+
+    assert result['summary']['third_party_repo'] == 1
+    assert result['summary']['ok'] == 0
+    nginx_finding = next(f for f in result['findings'] if f['package'] == 'nginx')
+    assert nginx_finding['severity'] == 'third_party_repo'
+    assert nginx_finding['title'] != 'no known CVEs found'
+
+
+def test_full_flow_third_party_repo_with_actual_cve_still_reported(monkeypatch, isolated_db):
+    """A third-party-repo package where OSV DOES find a match (unusual,
+    but possible if the vendor's version happens to overlap a tracked
+    range) must still surface the real finding - the third_party_repo
+    flag only changes behavior for the EMPTY-result case, it never
+    suppresses an actual match."""
+    fake = FakeSSHExecutor(responses={
+        'nginx -v': ('nginx version: nginx/1.30.2', ''),
+        "dpkg-query -W -f='${Version}' nginx": ('1.30.2-1~noble\n', ''),
+        "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="24.04"\n', ''),
+    })
+    monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
+
+    def fake_post(url, json, timeout):
+        class R:
+            def raise_for_status(self): pass
+            def json(self): return {'results': [{'vulns': [{'id': 'UBUNTU-CVE-2026-42533'}]}]}
+        return R()
+
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    result = check_cve_audit(host='1.2.3.4')
+
+    assert result['summary']['third_party_repo'] == 0
+    nginx_findings = [f for f in result['findings'] if f['package'] == 'nginx']
+    assert any(f['cve'] == 'UBUNTU-CVE-2026-42533' for f in nginx_findings)
 
 
 @pytest.mark.parametrize('score,expected_severity', [
