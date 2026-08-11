@@ -152,10 +152,26 @@ def _dpkg_version(ssh: SSHExecutor, dpkg_name: str) -> str | None:
     return out if out else None
 
 
-def _get_package_origin(ssh: SSHExecutor, dpkg_name: str) -> str | None:
-    """Returns a package's 'Origin' field (e.g. 'Ubuntu', 'Debian') via
-    `apt-cache show`, or None if it can't be determined - package not
-    installed via dpkg, no matching cache entry, etc.
+def _get_package_origin(ssh: SSHExecutor, dpkg_name: str, version: str) -> str | None:
+    """Returns the 'Origin' field (e.g. 'Ubuntu', 'Debian', 'nginx') of
+    the specific installed version of a package, or None if it can't be
+    determined - package not installed via dpkg, no matching cache
+    entry, etc.
+
+    Must be queried by exact version (`apt-cache show pkg=version`), not
+    by bare package name - `apt-cache show <pkg>` with no version prints
+    every record the local apt cache has for that package name across
+    ALL configured repositories, and returns records in an
+    apt-internal order that is not "the installed one first." Confirmed
+    empirically on a real server: a bare `apt-cache show nginx` returned
+    an 'Origin: Ubuntu' record ahead of the 'Origin: nginx' record for
+    the actually-installed nginx.org package, because the local cache
+    also had an entry for the Ubuntu-archive nginx build (never
+    installed, just present in the index) - checking only the first
+    match silently answered the wrong question. Pinning the query to the
+    exact installed version (`nginx=1.30.2-1~noble`) selects the correct
+    record regardless of how many other versions of the same package
+    name exist in the cache.
 
     This is the direct, distro-independent factual answer to "is this
     package tracked by the distro's own security team" - the Origin
@@ -169,21 +185,9 @@ def _get_package_origin(ssh: SSHExecutor, dpkg_name: str) -> str | None:
     configured - unlike an earlier version of this function that checked
     the repository URL's domain against a hardcoded list of official
     domains (archive.ubuntu.com, deb.debian.org, ...), which incorrectly
-    flagged mirror-sourced native packages as third-party the first time
-    it was tested against a real server using a mirror.
-
-    Confirmed empirically (not assumed from documentation) that `apt-cache
-    show <pkg>` prints an `Origin:` line for a genuinely-Ubuntu package
-    even when the configured repository is a third-party mirror - the
-    mirror only changes where the bytes are fetched from, not what the
-    package's own metadata says about who produced it.
-
-    A package can have multiple Origin lines if multiple repository
-    entries provide it (e.g. both -updates and -security pools) - this
-    returns the first, since they're expected to agree on the same
-    distro/vendor for any given package.
+    flagged mirror-sourced native packages as third-party.
     """
-    out, _ = ssh.run(f'apt-cache show {dpkg_name} 2>/dev/null')
+    out, _ = ssh.run(f'apt-cache show {dpkg_name}={version} 2>/dev/null')
     for line in out.splitlines():
         line = line.strip()
         if line.startswith('Origin:'):
@@ -249,7 +253,7 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
     upstream_ver = _parse_version(out)
     if upstream_ver:
         dpkg_ver = _dpkg_version(ssh, 'nginx')
-        origin = _get_package_origin(ssh, 'nginx') if dpkg_ver else None
+        origin = _get_package_origin(ssh, 'nginx', dpkg_ver) if dpkg_ver else None
         packages.append({'name': 'nginx', 'version': dpkg_ver or upstream_ver,
                           'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
                           'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(origin),
@@ -264,7 +268,7 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
         if not dpkg_ver:
             openssh_dpkg_pkg = 'openssh-server'
             dpkg_ver = _dpkg_version(ssh, openssh_dpkg_pkg)
-        origin = _get_package_origin(ssh, openssh_dpkg_pkg) if dpkg_ver else None
+        origin = _get_package_origin(ssh, openssh_dpkg_pkg, dpkg_ver) if dpkg_ver else None
         packages.append({'name': 'openssh', 'version': dpkg_ver or upstream_ver,
                           'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
                           'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(origin),
@@ -277,7 +281,7 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
         name = 'mariadb' if 'mariadb' in out.lower() else 'mysql'
         dpkg_pkg = 'mariadb-server' if name == 'mariadb' else 'mysql-server'
         dpkg_ver = _dpkg_version(ssh, dpkg_pkg)
-        origin = _get_package_origin(ssh, dpkg_pkg) if dpkg_ver else None
+        origin = _get_package_origin(ssh, dpkg_pkg, dpkg_ver) if dpkg_ver else None
         packages.append({'name': name, 'version': dpkg_ver or upstream_ver,
                           'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
                           'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(origin),

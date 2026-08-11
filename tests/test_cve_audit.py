@@ -210,25 +210,25 @@ def test_get_package_origin_nginx_org_ppa():
     """The exact real-world case: nginx.org's own apt repo."""
     from netaudit_pkg.checks.cve_audit import _get_package_origin
     fake = FakeSSHExecutor(responses={
-        'apt-cache show nginx': (_APT_SHOW_NGINX_PPA, ''),
+        'apt-cache show nginx=1.30.2-1~noble': (_APT_SHOW_NGINX_PPA, ''),
     })
-    assert _get_package_origin(fake, 'nginx') == 'nginx'
+    assert _get_package_origin(fake, 'nginx', '1.30.2-1~noble') == 'nginx'
 
 
 def test_get_package_origin_native_ubuntu_archive():
     from netaudit_pkg.checks.cve_audit import _get_package_origin
     fake = FakeSSHExecutor(responses={
-        'apt-cache show nginx': (_APT_SHOW_NGINX_NATIVE_UBUNTU, ''),
+        'apt-cache show nginx=1.24.0-2ubuntu7.15': (_APT_SHOW_NGINX_NATIVE_UBUNTU, ''),
     })
-    assert _get_package_origin(fake, 'nginx') == 'Ubuntu'
+    assert _get_package_origin(fake, 'nginx', '1.24.0-2ubuntu7.15') == 'Ubuntu'
 
 
 def test_get_package_origin_native_debian_archive():
     from netaudit_pkg.checks.cve_audit import _get_package_origin
     fake = FakeSSHExecutor(responses={
-        'apt-cache show nginx': (_APT_SHOW_NGINX_NATIVE_DEBIAN, ''),
+        'apt-cache show nginx=1.26.3-3+deb13u6': (_APT_SHOW_NGINX_NATIVE_DEBIAN, ''),
     })
-    assert _get_package_origin(fake, 'nginx') == 'Debian'
+    assert _get_package_origin(fake, 'nginx', '1.26.3-3+deb13u6') == 'Debian'
 
 
 def test_get_package_origin_mirror_sourced_native_package_still_says_ubuntu():
@@ -241,26 +241,56 @@ def test_get_package_origin_mirror_sourced_native_package_still_says_ubuntu():
     server using this exact mirror."""
     from netaudit_pkg.checks.cve_audit import _get_package_origin
     fake = FakeSSHExecutor(responses={
-        'apt-cache show openssh-client': (
+        'apt-cache show openssh-client=1:9.6p1-3ubuntu13.18': (
             'Package: openssh-client\nOrigin: Ubuntu\n'
             'Original-Maintainer: Debian OpenSSH Maintainers <debian-ssh@lists.debian.org>\n',
             ''),
     })
-    assert _get_package_origin(fake, 'openssh-client') == 'Ubuntu'
+    assert _get_package_origin(fake, 'openssh-client', '1:9.6p1-3ubuntu13.18') == 'Ubuntu'
+
+
+def test_get_package_origin_queries_by_exact_version_not_bare_name():
+    """Regression test for the exact bug found running this check
+    against a real server: `apt-cache show nginx` (no version) returned
+    an 'Origin: Ubuntu' record ahead of the actually-installed nginx.org
+    package's 'Origin: nginx' record, because the local apt cache held
+    entries for BOTH the Ubuntu-archive build (never installed, just
+    indexed) and the nginx.org build for the same package name -
+    checking the first match answered the wrong question. This test
+    locks in that the query is version-pinned (`pkg=version`), so a fake
+    SSH executor that only has a response for the un-pinned bare-name
+    command must NOT be matched - proving the real code sends the
+    version-qualified command, not the bare one."""
+    from netaudit_pkg.checks.cve_audit import _get_package_origin
+
+    class _StrictFakeSSH:
+        """Does not use substring matching - only responds to the exact
+        command string, to catch a version-less regression precisely."""
+
+        def __init__(self, exact_responses):
+            self.exact_responses = exact_responses
+
+        def run(self, cmd):
+            return self.exact_responses.get(cmd, ('', ''))
+
+    fake = _StrictFakeSSH({
+        'apt-cache show nginx=1.30.2-1~noble 2>/dev/null': (_APT_SHOW_NGINX_PPA, ''),
+    })
+    assert _get_package_origin(fake, 'nginx', '1.30.2-1~noble') == 'nginx'
 
 
 def test_get_package_origin_returns_none_when_no_origin_field():
     from netaudit_pkg.checks.cve_audit import _get_package_origin
     fake = FakeSSHExecutor(responses={
-        'apt-cache show nginx': ('Package: nginx\nVersion: 1.24.0-2ubuntu7\n', ''),
+        'apt-cache show nginx=1.24.0-2ubuntu7': ('Package: nginx\nVersion: 1.24.0-2ubuntu7\n', ''),
     })
-    assert _get_package_origin(fake, 'nginx') is None
+    assert _get_package_origin(fake, 'nginx', '1.24.0-2ubuntu7') is None
 
 
 def test_get_package_origin_returns_none_on_empty_output():
     from netaudit_pkg.checks.cve_audit import _get_package_origin
     fake = FakeSSHExecutor(responses={})
-    assert _get_package_origin(fake, 'nginx') is None
+    assert _get_package_origin(fake, 'nginx', '1.24.0-2ubuntu7') is None
 
 
 def test_is_official_distro_source_ubuntu():
