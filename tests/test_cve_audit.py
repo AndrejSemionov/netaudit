@@ -35,11 +35,27 @@ def test_parse_version(text, expected):
 # ===========================================================================
 
 def test_collect_packages_finds_nginx():
-    fake = FakeSSHExecutor(responses={'nginx -v': ('nginx version: nginx/1.24.0', '')})
+    fake = FakeSSHExecutor(responses={
+        'nginx -v': ('nginx version: nginx/1.24.0', ''),
+        "dpkg-query -W -f='${Version}' nginx": ('1.24.0-2', ''),
+    })
+    packages = collect_packages(fake)
+    nginx = next(p for p in packages if p['name'] == 'nginx')
+    assert nginx['version'] == '1.24.0-2'
+    assert nginx['upstream_version'] == '1.24.0'
+    assert nginx['ecosystem'] == 'Debian'
+
+
+def test_collect_packages_nginx_falls_back_to_upstream_without_dpkg():
+    """dpkg-query finds nothing (not installed via dpkg) - version falls
+    back to the upstream number rather than being left empty."""
+    fake = FakeSSHExecutor(responses={
+        'nginx -v': ('nginx version: nginx/1.24.0', ''),
+    })
     packages = collect_packages(fake)
     nginx = next(p for p in packages if p['name'] == 'nginx')
     assert nginx['version'] == '1.24.0'
-    assert nginx['ecosystem'] == 'Debian'
+    assert nginx['upstream_version'] == '1.24.0'
 
 
 def test_collect_packages_distinguishes_mariadb_from_mysql():
@@ -50,6 +66,24 @@ def test_collect_packages_distinguishes_mariadb_from_mysql():
     db_pkg = next((p for p in packages if p['name'] in ('mysql', 'mariadb')), None)
     assert db_pkg is not None
     assert db_pkg['name'] == 'mariadb'
+
+
+def test_collect_packages_uses_dpkg_version_for_mariadb_when_available():
+    fake = FakeSSHExecutor(responses={
+        'mysql --version': ('mysql  Ver 15.1 Distrib 10.11.6-MariaDB', ''),
+        "dpkg-query -W -f='${Version}' mariadb-server": ('1:10.11.6-0+deb12u1', ''),
+    })
+    packages = collect_packages(fake)
+    db_pkg = next(p for p in packages if p['name'] == 'mariadb')
+    assert db_pkg['version'] == '1:10.11.6-0+deb12u1'
+    # NOTE: upstream_version here reflects a pre-existing, separate bug in
+    # _parse_version() - `mysql --version` prints the CLIENT utility
+    # version (15.1) before the server version (10.11.6-MariaDB), and the
+    # regex takes the first match. Not this fix's scope to correct (see
+    # collect_packages' `linux` comment for the same "one fix at a time"
+    # reasoning) - documented here so this isn't mistaken for a new
+    # regression introduced by the dpkg-version change.
+    assert db_pkg['upstream_version'] == '15.1'
 
 
 def test_collect_packages_finds_wordpress():
@@ -68,6 +102,24 @@ def test_collect_packages_skips_services_not_found():
     fake = FakeSSHExecutor(responses={})  # nothing installed, all commands return ''
     packages = collect_packages(fake)
     assert packages == []
+
+
+# ===========================================================================
+# _dpkg_version — the debian-revision-vs-upstream-version fix
+# ===========================================================================
+
+def test_dpkg_version_returns_full_revision():
+    from netaudit_pkg.checks.cve_audit import _dpkg_version
+    fake = FakeSSHExecutor(responses={
+        "dpkg-query -W -f='${Version}' nginx": ('1.28.3-1~deb13u2\n', ''),
+    })
+    assert _dpkg_version(fake, 'nginx') == '1.28.3-1~deb13u2'
+
+
+def test_dpkg_version_returns_none_when_not_dpkg_installed():
+    fake = FakeSSHExecutor(responses={})
+    from netaudit_pkg.checks.cve_audit import _dpkg_version
+    assert _dpkg_version(fake, 'nginx') is None
 
 
 # ===========================================================================
@@ -364,6 +416,46 @@ def test_full_flow_reads_os_release_and_narrows_debian_ecosystem(monkeypatch, is
     monkeypatch.setattr(httpx, 'post', fake_post)
     check_cve_audit(host='1.2.3.4')
     assert captured['payload']['queries'][0]['package']['ecosystem'] == 'Debian:13'
+
+
+def test_full_flow_uses_dpkg_revision_not_bare_upstream_version(monkeypatch, isolated_db):
+    """Regression test for the exact bug found running this check against
+    a real server: nginx 1.28.3 (vulnerable to CVE-2026-42533 per multiple
+    independent security advisories) was reported as 'no known CVEs
+    found' because the query used the bare upstream version '1.28.3'
+    instead of the Debian package revision (e.g. '1.28.3-1~deb13u2') that
+    OSV's Debian:13 ecosystem records actually compare against (Debian
+    backports security fixes into revision-suffixed versions like
+    DSA-6326-1's '1.26.3-3+deb13u6', not upstream version numbers). This
+    test locks in that the dpkg revision - not the upstream number - is
+    what actually goes out on the wire to OSV."""
+    fake = FakeSSHExecutor(responses={
+        'nginx -v': ('nginx version: nginx/1.28.3', ''),
+        "dpkg-query -W -f='${Version}' nginx": ('1.28.3-1~deb13u2\n', ''),
+        "grep '^VERSION_ID='": ('VERSION_ID="13"\n', ''),
+    })
+    monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
+
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured['payload'] = json
+
+        class R:
+            def raise_for_status(self): pass
+            def json(self): return {'results': [{'vulns': [{'id': 'DEBIAN-CVE-2026-42533'}]}]}
+        return R()
+
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    result = check_cve_audit(host='1.2.3.4')
+
+    nginx_query = captured['payload']['queries'][0]
+    assert nginx_query['version'] == '1.28.3-1~deb13u2'
+    assert nginx_query['version'] != '1.28.3'  # the bare upstream version - the bug this fixes
+
+    # and the finding must actually surface in the result, not get lost
+    nginx_findings = [f for f in result['findings'] if f['package'] == 'nginx']
+    assert any(f['cve'] == 'DEBIAN-CVE-2026-42533' for f in nginx_findings)
 
 
 @pytest.mark.parametrize('score,expected_severity', [

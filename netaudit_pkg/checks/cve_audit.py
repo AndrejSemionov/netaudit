@@ -95,42 +95,104 @@ def collect_os_release(ssh: SSHExecutor) -> str | None:
     return m.group(1) if m else None
 
 
+def _dpkg_version(ssh: SSHExecutor, dpkg_name: str) -> str | None:
+    """Returns the installed Debian package version (with revision, e.g.
+    '1.28.3-1~deb13u2') via dpkg-query, or None if the package isn't
+    installed via dpkg (e.g. compiled from source, installed via a
+    third-party repo with a non-dpkg-tracked version, or simply absent).
+
+    This exists because OSV's Debian ecosystem records compare against
+    Debian's own package revision, not the upstream version number - e.g.
+    DSA-6326-1 fixed CVE-2026-42533-adjacent nginx issues in Debian
+    version '1.26.3-3+deb13u6', not any upstream nginx version string.
+    Querying OSV with a bare upstream version like '1.28.3' (what `nginx
+    -v` reports) compares against the wrong version space entirely -
+    confirmed by running this check against a real server where nginx
+    1.28.3 (vulnerable to CVE-2026-42533 per multiple independent security
+    advisories) was reported as having 'no known CVEs found' once the
+    ecosystem was correctly narrowed to 'Debian:13', because the upstream
+    version number doesn't line up with how Debian's own fixed-version
+    ranges are expressed.
+    """
+    out, _ = ssh.run(f"dpkg-query -W -f='${{Version}}' {dpkg_name} 2>/dev/null")
+    out = out.strip()
+    return out if out else None
+
+
 def collect_packages(ssh: SSHExecutor) -> list[dict]:
     """
     Returns a list of {name, version, ecosystem, raw} for known services,
     plus a general snapshot of installed deb packages (for ecosystem='Debian' in OSV).
+
+    `version` is the Debian package version (with revision, e.g.
+    '1.28.3-1~deb13u2') when available via dpkg-query, NOT the upstream
+    version number - see _dpkg_version()'s docstring for why this
+    distinction matters for correct OSV matching. `upstream_version` keeps
+    the human-readable upstream number (e.g. '1.28.3' from `nginx -v`) for
+    display purposes only - it is never sent to OSV.
+
+    If dpkg-query finds nothing for a given package (not installed via
+    dpkg - compiled from source, third-party repo, etc), this falls back
+    to the upstream version for OSV matching too, same reasoning as
+    _resolve_ecosystem()'s Debian-release fallback: a less precise match
+    beats no match at all, and this is visible to a caller via
+    upstream_version == version in that case.
     """
     packages = []
 
     # --- nginx ---
     out, _ = ssh.run('nginx -v 2>&1')
-    ver = _parse_version(out)
-    if ver:
-        packages.append({'name': 'nginx', 'version': ver, 'ecosystem': 'Debian', 'raw': out.strip()})
+    upstream_ver = _parse_version(out)
+    if upstream_ver:
+        dpkg_ver = _dpkg_version(ssh, 'nginx')
+        packages.append({'name': 'nginx', 'version': dpkg_ver or upstream_ver,
+                          'upstream_version': upstream_ver, 'ecosystem': 'Debian', 'raw': out.strip()})
 
     # --- OpenSSH ---
     out, _ = ssh.run('ssh -V 2>&1')
-    ver = _parse_version(out)
-    if ver:
-        packages.append({'name': 'openssh', 'version': ver, 'ecosystem': 'Debian', 'raw': out.strip()})
+    upstream_ver = _parse_version(out)
+    if upstream_ver:
+        dpkg_ver = _dpkg_version(ssh, 'openssh-client') or _dpkg_version(ssh, 'openssh-server')
+        packages.append({'name': 'openssh', 'version': dpkg_ver or upstream_ver,
+                          'upstream_version': upstream_ver, 'ecosystem': 'Debian', 'raw': out.strip()})
 
     # --- MySQL / MariaDB ---
     out, _ = ssh.run('mysql --version 2>/dev/null || mariadb --version 2>/dev/null')
-    ver = _parse_version(out)
-    if ver:
+    upstream_ver = _parse_version(out)
+    if upstream_ver:
         name = 'mariadb' if 'mariadb' in out.lower() else 'mysql'
-        packages.append({'name': name, 'version': ver, 'ecosystem': 'Debian', 'raw': out.strip()})
+        dpkg_pkg = 'mariadb-server' if name == 'mariadb' else 'mysql-server'
+        dpkg_ver = _dpkg_version(ssh, dpkg_pkg)
+        packages.append({'name': name, 'version': dpkg_ver or upstream_ver,
+                          'upstream_version': upstream_ver, 'ecosystem': 'Debian', 'raw': out.strip()})
 
     # --- PHP ---
     out, _ = ssh.run('php -v 2>/dev/null')
-    ver = _parse_version(out)
-    if ver:
-        packages.append({'name': 'php', 'version': ver, 'ecosystem': 'Debian', 'raw': out.strip().splitlines()[0] if out.strip() else ''})
+    upstream_ver = _parse_version(out)
+    if upstream_ver:
+        # PHP's Debian package name is versioned (e.g. php8.3-cli) rather
+        # than a stable 'php' - resolving that dynamically is more moving
+        # parts than this fix's scope covers, so PHP keeps using the
+        # upstream version for OSV matching for now (same shape of
+        # limitation as `linux` below, not a silent omission).
+        packages.append({'name': 'php', 'version': upstream_ver,
+                          'upstream_version': upstream_ver, 'ecosystem': 'Debian',
+                          'raw': out.strip().splitlines()[0] if out.strip() else ''})
 
     # --- kernel ---
+    # Deliberately still uses `uname -r` (upstream/ABI version), not
+    # dpkg-query - the installed package name for the running kernel is
+    # `linux-image-$(uname -r)` (or a meta-package like `linux-image-amd64`
+    # that doesn't carry the real version itself), resolving which one
+    # applies is a second, separate problem from this fix's scope
+    # (Debian-family package version precision for nginx/openssh/mariadb/
+    # mysql). Not addressed here to avoid conflating two different fixes
+    # in one change - a future revision can add kernel-specific dpkg
+    # resolution as its own deliberate step.
     out, _ = ssh.run('uname -r')
     if out.strip():
-        packages.append({'name': 'linux', 'version': out.strip(), 'ecosystem': 'Debian', 'raw': out.strip()})
+        packages.append({'name': 'linux', 'version': out.strip(),
+                          'upstream_version': out.strip(), 'ecosystem': 'Debian', 'raw': out.strip()})
 
     # --- WordPress (if wp-config.php is found in standard locations) ---
     out, _ = ssh.run("find /var/www -maxdepth 3 -iname 'wp-includes' -type d 2>/dev/null | head -1")
@@ -140,7 +202,8 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
         ver_out, _ = ssh.run(f"grep -m1 \"\\$wp_version = \" {base}/wp-includes/version.php 2>/dev/null")
         ver = _parse_version(ver_out)
         if ver:
-            packages.append({'name': 'wordpress', 'version': ver, 'ecosystem': 'WordPress', 'raw': ver_out.strip()})
+            packages.append({'name': 'wordpress', 'version': ver,
+                              'upstream_version': ver, 'ecosystem': 'WordPress', 'raw': ver_out.strip()})
 
     return packages
 
