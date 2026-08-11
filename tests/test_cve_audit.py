@@ -1,5 +1,7 @@
 """Tests for netaudit_pkg.checks.cve_audit: package version collection over
-SSH, OSV.dev query/cache logic, and CVSS-to-severity mapping."""
+SSH, OS release detection, OSV.dev query/cache logic (including the
+Debian:{release} ecosystem fix — see cve_audit.py's module docstring for
+the google/osv.dev#4230 background), and CVSS-to-severity mapping."""
 
 from __future__ import annotations
 
@@ -7,8 +9,8 @@ import httpx
 import pytest
 
 from netaudit_pkg.checks.cve_audit import (
-    _parse_version, collect_packages, query_osv, fetch_vuln_details,
-    check_cve_audit,
+    _parse_version, _resolve_ecosystem, collect_packages, collect_os_release,
+    query_osv, fetch_vuln_details, check_cve_audit,
 )
 from tests.conftest import FakeSSHExecutor
 
@@ -69,18 +71,99 @@ def test_collect_packages_skips_services_not_found():
 
 
 # ===========================================================================
-# query_osv — caching behavior
+# collect_os_release — Debian VERSION_ID detection
+# ===========================================================================
+
+def test_collect_os_release_parses_version_id():
+    fake = FakeSSHExecutor(responses={
+        "grep '^VERSION_ID='": ('VERSION_ID="13"\n', ''),
+    })
+    assert collect_os_release(fake) == '13'
+
+
+def test_collect_os_release_handles_unquoted_version_id():
+    """Some minimal/custom images may not quote the value - the regex
+    must not assume quotes are always present."""
+    fake = FakeSSHExecutor(responses={
+        "grep '^VERSION_ID='": ('VERSION_ID=12\n', ''),
+    })
+    assert collect_os_release(fake) == '12'
+
+
+def test_collect_os_release_returns_none_when_file_missing():
+    fake = FakeSSHExecutor(responses={})
+    assert collect_os_release(fake) is None
+
+
+def test_collect_os_release_returns_none_on_garbage_output():
+    fake = FakeSSHExecutor(responses={
+        "grep '^VERSION_ID='": ('not a version line at all', ''),
+    })
+    assert collect_os_release(fake) is None
+
+
+# ===========================================================================
+# _resolve_ecosystem — the core of the Debian:{release} fix
+# ===========================================================================
+
+def test_resolve_ecosystem_debian_with_known_release():
+    assert _resolve_ecosystem('Debian', '13') == 'Debian:13'
+
+
+def test_resolve_ecosystem_debian_without_release_falls_back_to_bare():
+    """VERSION_ID couldn't be determined - fall back to the bare 'Debian'
+    string rather than skipping the query. Noisy beats nothing, per the
+    module docstring."""
+    assert _resolve_ecosystem('Debian', None) == 'Debian'
+
+
+def test_resolve_ecosystem_wordpress_is_never_touched():
+    """WordPress is a completely separate OSV ecosystem, unaffected by
+    Debian release versioning - must pass through unchanged regardless of
+    what debian_version_id is."""
+    assert _resolve_ecosystem('WordPress', '13') == 'WordPress'
+    assert _resolve_ecosystem('WordPress', None) == 'WordPress'
+
+
+# ===========================================================================
+# query_osv — caching behavior (cache key now includes ecosystem)
 # ===========================================================================
 
 def test_query_osv_uses_cache_when_fresh(isolated_db, monkeypatch):
-    isolated_db.cve_set('nginx::1.24.0', ['CVE-2024-0001'])
+    isolated_db.cve_set('nginx::1.24.0::Debian:13', ['CVE-2024-0001'])
 
     def fail_if_called(*args, **kwargs):
         raise AssertionError('should not hit the network when cache is fresh')
 
     monkeypatch.setattr(httpx, 'post', fail_if_called)
-    result = query_osv([{'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Debian'}])
+    result = query_osv(
+        [{'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Debian'}],
+        debian_version_id='13',
+    )
     assert result['nginx'] == ['CVE-2024-0001']
+
+
+def test_query_osv_cache_miss_when_ecosystem_differs(isolated_db, monkeypatch):
+    """A cached result under the bare 'Debian' ecosystem (e.g. from before
+    this fix, or a host where VERSION_ID couldn't be read) must NOT be
+    served for a query now made with 'Debian:13' - this is the specific
+    regression this module's fix is designed to prevent (stale noisy
+    results silently surviving the ecosystem-string change)."""
+    isolated_db.cve_set('nginx::1.24.0::Debian', ['CVE-OLD-NOISY-RESULT'])
+
+    def fake_post(url, json, timeout):
+        class R:
+            def raise_for_status(self): pass
+            def json(self): return {'results': [{'vulns': [{'id': 'CVE-2026-42533'}]}]}
+        return R()
+
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    result = query_osv(
+        [{'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Debian'}],
+        debian_version_id='13',
+    )
+    assert result['nginx'] == ['CVE-2026-42533']
+    assert 'CVE-OLD-NOISY-RESULT' not in result['nginx']
 
 
 def test_query_osv_queries_network_when_not_cached(isolated_db, monkeypatch):
@@ -91,11 +174,71 @@ def test_query_osv_queries_network_when_not_cached(isolated_db, monkeypatch):
         return R()
 
     monkeypatch.setattr(httpx, 'post', fake_post)
-    result = query_osv([{'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Debian'}])
+    result = query_osv(
+        [{'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Debian'}],
+        debian_version_id='13',
+    )
     assert result['nginx'] == ['CVE-2024-9999']
-    # and it should now be cached
-    cached = isolated_db.cve_get('nginx::1.24.0')
+    # and it should now be cached under the release-specific key
+    cached = isolated_db.cve_get('nginx::1.24.0::Debian:13')
     assert cached['data'] == ['CVE-2024-9999']
+
+
+def test_query_osv_sends_release_specific_ecosystem_in_request(isolated_db, monkeypatch):
+    """The actual HTTP payload sent to OSV must contain 'Debian:13', not
+    the bare 'Debian' - this is the literal fix for google/osv.dev#4230,
+    checked at the wire level, not just via the cache key."""
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured['payload'] = json
+
+        class R:
+            def raise_for_status(self): pass
+            def json(self): return {'results': [{'vulns': []}]}
+        return R()
+
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    query_osv([{'name': 'nginx', 'version': '1.28.3', 'ecosystem': 'Debian'}],
+               debian_version_id='13')
+    assert captured['payload']['queries'][0]['package']['ecosystem'] == 'Debian:13'
+
+
+def test_query_osv_falls_back_to_bare_debian_without_version_id(isolated_db, monkeypatch):
+    """When debian_version_id is None (couldn't be determined), the
+    request must still go out with the bare 'Debian' ecosystem rather
+    than failing or sending an empty/malformed string."""
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured['payload'] = json
+
+        class R:
+            def raise_for_status(self): pass
+            def json(self): return {'results': [{'vulns': []}]}
+        return R()
+
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    query_osv([{'name': 'nginx', 'version': '1.28.3', 'ecosystem': 'Debian'}],
+               debian_version_id=None)
+    assert captured['payload']['queries'][0]['package']['ecosystem'] == 'Debian'
+
+
+def test_query_osv_wordpress_package_unaffected_by_debian_version(isolated_db, monkeypatch):
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured['payload'] = json
+
+        class R:
+            def raise_for_status(self): pass
+            def json(self): return {'results': [{'vulns': []}]}
+        return R()
+
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    query_osv([{'name': 'wordpress', 'version': '6.5.2', 'ecosystem': 'WordPress'}],
+               debian_version_id='13')
+    assert captured['payload']['queries'][0]['package']['ecosystem'] == 'WordPress'
 
 
 def test_query_osv_network_failure_does_not_raise(isolated_db, monkeypatch):
@@ -103,8 +246,37 @@ def test_query_osv_network_failure_does_not_raise(isolated_db, monkeypatch):
         raise httpx.HTTPError('connection refused')
 
     monkeypatch.setattr(httpx, 'post', fake_post)
-    result = query_osv([{'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Debian'}])
+    result = query_osv(
+        [{'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Debian'}],
+        debian_version_id='13',
+    )
     assert result['nginx'] == []  # empty, not an exception
+
+
+def test_query_osv_mixed_ecosystems_in_one_batch(isolated_db, monkeypatch):
+    """A batch with both a Debian-family package and a WordPress package
+    must resolve each independently - the Debian one gets narrowed, the
+    WordPress one doesn't, in the same request."""
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured['payload'] = json
+
+        class R:
+            def raise_for_status(self): pass
+            def json(self): return {'results': [{'vulns': []}, {'vulns': []}]}
+        return R()
+
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    query_osv(
+        [
+            {'name': 'nginx', 'version': '1.28.3', 'ecosystem': 'Debian'},
+            {'name': 'wordpress', 'version': '6.5.2', 'ecosystem': 'WordPress'},
+        ],
+        debian_version_id='13',
+    )
+    ecosystems = [q['package']['ecosystem'] for q in captured['payload']['queries']]
+    assert ecosystems == ['Debian:13', 'WordPress']
 
 
 # ===========================================================================
@@ -166,6 +338,32 @@ def test_full_flow_package_with_no_cves(monkeypatch, isolated_db):
     result = check_cve_audit(host='1.2.3.4')
     assert result['summary']['ok'] == 1
     assert result['findings'][0]['title'] == 'no known CVEs found'
+
+
+def test_full_flow_reads_os_release_and_narrows_debian_ecosystem(monkeypatch, isolated_db):
+    """End-to-end: check_cve_audit() must read /etc/os-release over the
+    same SSH session and pass the resulting release id all the way through
+    to the actual OSV request - the fix's full round trip, not just the
+    individual pieces in isolation."""
+    fake = FakeSSHExecutor(responses={
+        'nginx -v': ('nginx version: nginx/1.28.3', ''),
+        "grep '^VERSION_ID='": ('VERSION_ID="13"\n', ''),
+    })
+    monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
+
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured['payload'] = json
+
+        class R:
+            def raise_for_status(self): pass
+            def json(self): return {'results': [{'vulns': []}]}
+        return R()
+
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    check_cve_audit(host='1.2.3.4')
+    assert captured['payload']['queries'][0]['package']['ecosystem'] == 'Debian:13'
 
 
 @pytest.mark.parametrize('score,expected_severity', [

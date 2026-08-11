@@ -10,6 +10,35 @@ in a 'cve' section with facts and config, so the AI can match a vulnerability
 against the actual configuration instead of just restating a raw CVSS score.
 
 Cache: cve_cache in storage.py, 24h TTL - to avoid hammering OSV.dev on every run.
+
+Debian ecosystem versioning (2026-08-11 fix)
+---------------------------------------------
+Querying OSV.dev with the bare ecosystem string 'Debian' (no release number)
+is a known, still-open OSV.dev issue (google/osv.dev#4230, opened 2025-10-23,
+unresolved as of this writing): OSV matches against the union of ALL Debian
+release version ranges ("widest range" per OSV maintainer michaelkedar's own
+explanation in that thread), not just the one actually installed. In
+practice this means a query for e.g. nginx 1.28.3 returns CVEs going back to
+2000 that were fixed a decade or more ago in every release anyone actually
+runs today - the exact "historical noise" observed running this check
+against a real server (30 findings, most from Debian releases nobody has
+run since the 2000s).
+
+The documented, maintainer-confirmed fix (same thread) is to query the
+*specific* Debian release ecosystem string, e.g. 'Debian:13' for Trixie,
+instead of the bare 'Debian'. This narrows OSV's matching to that release's
+actual fixed-version ranges. This module now reads /etc/os-release on the
+target host to get VERSION_ID (Debian's release number, e.g. '13') and
+builds the ecosystem string as f'Debian:{version_id}' for every
+Debian-family package (WordPress, which uses ecosystem 'WordPress', is
+unaffected by any of this - only Debian-packaged software).
+
+If VERSION_ID can't be read (older os-release format, non-Debian base, etc),
+this module falls back to the bare 'Debian' ecosystem string and accepts the
+historical-noise risk rather than silently skipping CVE matching for that
+host entirely - a noisy result is still strictly more useful than no result,
+and the fallback is visible in collect_os_release()'s return value so a
+caller can tell which path was taken.
 """
 
 from __future__ import annotations
@@ -32,6 +61,12 @@ OSV_BATCH_URL = 'https://api.osv.dev/v1/querybatch'
 OSV_VULN_URL = 'https://api.osv.dev/v1/vulns/{id}'
 CACHE_TTL_HOURS = 24
 
+# Ecosystems where OSV's Debian-release-matching issue (see module
+# docstring) applies - i.e. every ecosystem this module currently collects
+# facts for EXCEPT 'WordPress', which is its own independent OSV ecosystem
+# unaffected by Debian release versioning entirely.
+_DEBIAN_FAMILY_ECOSYSTEM = 'Debian'
+
 
 # ===========================================================================
 # Collecting service versions over SSH
@@ -39,6 +74,24 @@ CACHE_TTL_HOURS = 24
 
 def _parse_version(text: str) -> str | None:
     m = re.search(r'(\d+\.\d+(?:\.\d+)?)', text)
+    return m.group(1) if m else None
+
+
+def collect_os_release(ssh: SSHExecutor) -> str | None:
+    """Returns the Debian release number (VERSION_ID from /etc/os-release,
+    e.g. '13' for Trixie) or None if it can't be determined - old
+    os-release format, non-Debian base, or the file doesn't exist.
+
+    Read-only, single command. Deliberately separate from collect_packages()
+    so it can be unit-tested independently and so a future caller only
+    needing the release number doesn't have to run the full package
+    collection to get it.
+    """
+    out, _ = ssh.run("grep '^VERSION_ID=' /etc/os-release 2>/dev/null")
+    # VERSION_ID is double-quoted in a standard os-release file, e.g.
+    # VERSION_ID="13" - strip the key and the quotes, don't assume a
+    # specific quote style since some minimal/custom images vary.
+    m = re.search(r'VERSION_ID="?([0-9]+)"?', out)
     return m.group(1) if m else None
 
 
@@ -96,8 +149,14 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
 # OSV.dev - matching + details
 # ===========================================================================
 
-def _cache_get(name: str, version: str) -> list | None:
-    row = storage.cve_get(f'{name}::{version}')
+def _cache_get(name: str, version: str, ecosystem: str) -> list | None:
+    # ecosystem is part of the cache key (not just name::version) - a
+    # cached result for ecosystem 'Debian' (pre-fix, noisy) must never be
+    # served back for a query now made with 'Debian:13' (post-fix, narrow),
+    # and vice versa. Without this, the 24h cache would silently keep
+    # returning stale/wrong-shape results after this module's ecosystem
+    # string changes for a host, until the TTL happens to expire.
+    row = storage.cve_get(f'{name}::{version}::{ecosystem}')
     if not row:
         return None
     updated = datetime.fromisoformat(row['updated_at'])
@@ -106,21 +165,40 @@ def _cache_get(name: str, version: str) -> list | None:
     return row['data']
 
 
-def _cache_set(name: str, version: str, data: list) -> None:
-    storage.cve_set(f'{name}::{version}', data)
+def _cache_set(name: str, version: str, ecosystem: str, data: list) -> None:
+    storage.cve_set(f'{name}::{version}::{ecosystem}', data)
 
 
-def query_osv(packages: list[dict]) -> dict[str, list]:
-    """Returns {pkg_name: [vuln_ids...]} using a batch query, with caching."""
+def _resolve_ecosystem(pkg_ecosystem: str, debian_version_id: str | None) -> str:
+    """Turns a package's base ecosystem ('Debian', 'WordPress', ...) into
+    the actual OSV ecosystem string to query. Only 'Debian' is affected -
+    see this module's docstring for why a bare 'Debian' query is a known
+    OSV.dev false-positive source (google/osv.dev#4230) and why appending
+    the release number narrows it. Falls back to the bare ecosystem string
+    if the release number couldn't be determined (collect_os_release()
+    returned None) - a noisy result beats no result for that host."""
+    if pkg_ecosystem == _DEBIAN_FAMILY_ECOSYSTEM and debian_version_id:
+        return f'{_DEBIAN_FAMILY_ECOSYSTEM}:{debian_version_id}'
+    return pkg_ecosystem
+
+
+def query_osv(packages: list[dict], debian_version_id: str | None = None) -> dict[str, list]:
+    """Returns {pkg_name: [vuln_ids...]} using a batch query, with caching.
+
+    debian_version_id (from collect_os_release()) narrows every package
+    whose ecosystem is 'Debian' to 'Debian:{version_id}' - see this
+    module's docstring for why. Packages with a different ecosystem
+    (WordPress) are queried as-is, unaffected."""
     to_query = []
     result: dict[str, list] = {}
 
     for p in packages:
-        cached = _cache_get(p['name'], p['version'])
+        ecosystem = _resolve_ecosystem(p['ecosystem'], debian_version_id)
+        cached = _cache_get(p['name'], p['version'], ecosystem)
         if cached is not None:
             result[p['name']] = cached
         else:
-            to_query.append(p)
+            to_query.append((p, ecosystem))
 
     if not to_query:
         return result
@@ -129,8 +207,8 @@ def query_osv(packages: list[dict]) -> dict[str, list]:
         resp = httpx.post(
             OSV_BATCH_URL,
             json={'queries': [
-                {'package': {'name': p['name'], 'ecosystem': p['ecosystem']}, 'version': p['version']}
-                for p in to_query
+                {'package': {'name': p['name'], 'ecosystem': ecosystem}, 'version': p['version']}
+                for p, ecosystem in to_query
             ]},
             timeout=20,
         )
@@ -138,14 +216,14 @@ def query_osv(packages: list[dict]) -> dict[str, list]:
         batch = resp.json().get('results', [])
     except httpx.HTTPError:
         # OSV is unreachable - don't fail the whole check, just skip CVE data for unqueried ones
-        for p in to_query:
+        for p, _ecosystem in to_query:
             result.setdefault(p['name'], [])
         return result
 
-    for p, r in zip(to_query, batch):
+    for (p, ecosystem), r in zip(to_query, batch):
         ids = [v['id'] for v in r.get('vulns', [])]
         result[p['name']] = ids
-        _cache_set(p['name'], p['version'], ids)
+        _cache_set(p['name'], p['version'], ecosystem, ids)
 
     return result
 
@@ -211,6 +289,7 @@ def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> 
 
     try:
         packages = collect_packages(ssh)
+        debian_version_id = collect_os_release(ssh)
     finally:
         ssh.close()
 
@@ -218,7 +297,7 @@ def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> 
         return {'host': host, 'packages': [], 'findings': [],
                 'summary': {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'ok': 0}}
 
-    vuln_ids_by_pkg = query_osv(packages)
+    vuln_ids_by_pkg = query_osv(packages, debian_version_id)
 
     findings = []
     counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'ok': 0}
