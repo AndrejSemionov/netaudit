@@ -232,7 +232,7 @@ _COMPOSER_LOCK_SAMPLE = json.dumps({
 
 def test_collect_composer_packages_finds_lock_file():
     fake = FakeSSHExecutor(responses={
-        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        "find /var/www /home -maxdepth 6 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
         'cat /var/www/html/composer.lock': (_COMPOSER_LOCK_SAMPLE, ''),
     })
     packages = collect_composer_packages(fake)
@@ -245,7 +245,7 @@ def test_collect_composer_packages_strips_v_prefix():
     with 'v' (e.g. laravel/framework's real lock entries use 'v13.15.0'),
     but OSV's Packagist data is keyed on the bare semver."""
     fake = FakeSSHExecutor(responses={
-        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        "find /var/www /home -maxdepth 6 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
         'cat /var/www/html/composer.lock': (_COMPOSER_LOCK_SAMPLE, ''),
     })
     packages = collect_composer_packages(fake)
@@ -256,7 +256,7 @@ def test_collect_composer_packages_strips_v_prefix():
 
 def test_collect_composer_packages_does_not_strip_non_v_versions():
     fake = FakeSSHExecutor(responses={
-        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        "find /var/www /home -maxdepth 6 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
         'cat /var/www/html/composer.lock': (_COMPOSER_LOCK_SAMPLE, ''),
     })
     packages = collect_composer_packages(fake)
@@ -272,7 +272,7 @@ def test_collect_composer_packages_strip_is_a_single_char_slice_not_lstrip():
     This locks in that only a single leading 'v' is ever removed."""
     lock = json.dumps({'packages': [{'name': 'some/pkg', 'version': 'vv1.0.0'}], 'packages-dev': []})
     fake = FakeSSHExecutor(responses={
-        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        "find /var/www /home -maxdepth 6 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
         'cat /var/www/html/composer.lock': (lock, ''),
     })
     packages = collect_composer_packages(fake)
@@ -282,7 +282,7 @@ def test_collect_composer_packages_strip_is_a_single_char_slice_not_lstrip():
 
 def test_collect_composer_packages_ecosystem_is_packagist():
     fake = FakeSSHExecutor(responses={
-        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        "find /var/www /home -maxdepth 6 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
         'cat /var/www/html/composer.lock': (_COMPOSER_LOCK_SAMPLE, ''),
     })
     packages = collect_composer_packages(fake)
@@ -297,11 +297,74 @@ def test_collect_composer_packages_includes_dev_dependencies():
     server - this module doesn't assume dev dependencies were stripped
     out before deployment."""
     fake = FakeSSHExecutor(responses={
-        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        "find /var/www /home -maxdepth 6 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
         'cat /var/www/html/composer.lock': (_COMPOSER_LOCK_SAMPLE, ''),
     })
     packages = collect_composer_packages(fake)
     assert any(p['name'] == 'spatie/laravel-ignition' for p in packages)
+
+
+def test_collect_composer_packages_excludes_vendor_nested_lock_files():
+    """Regression test for the exact case found running this check
+    against a real Laravel Forge server: `find ... -iname composer.lock`
+    (before the vendor/ exclusion) returned 5 results - the real project
+    root's composer.lock plus 4 nested inside vendor/ sub-dependencies
+    (phpunit/phpunit, mockery/mockery, etc, which ship their own
+    composer.lock as a normal part of being a Composer package
+    themselves). `head -1` on the un-excluded list picked one of the
+    nested vendor files, not the actual project. This test uses the
+    FakeSSHExecutor's real substring-match behavior to confirm the actual
+    find command sent includes the vendor exclusion flag, and that the
+    (correctly filtered, single-result) response is what gets parsed."""
+    fake = FakeSSHExecutor(responses={
+        # the -not -path '*/vendor/*' flag means only the real project
+        # root path is ever returned by the (fake) find command - this
+        # simulates find already having excluded the 4 nested lock files
+        "find /var/www /home -maxdepth 6 -iname 'composer.lock'": (
+            '/home/laravel/example-app/composer.lock\n', ''),
+        'cat /home/laravel/example-app/composer.lock': (_COMPOSER_LOCK_SAMPLE, ''),
+    })
+    packages = collect_composer_packages(fake)
+    names = {p['name'] for p in packages}
+    assert names == {'laravel/framework', 'guzzlehttp/guzzle', 'spatie/laravel-ignition'}
+
+
+def test_collect_composer_packages_find_command_excludes_vendor_path():
+    """Confirms the actual find command sent to the server contains the
+    vendor/ exclusion flag, not just that parsing works when given an
+    already-correct path - this is the literal fix for the bug found on
+    the real Forge server."""
+    calls = []
+
+    class _RecordingSSH:
+        def run(self, cmd):
+            calls.append(cmd)
+            if 'find' in cmd:
+                return '/home/laravel/example-app/composer.lock\n', ''
+            return _COMPOSER_LOCK_SAMPLE, ''
+
+    collect_composer_packages(_RecordingSSH())
+    find_call = next(c for c in calls if 'find' in c)
+    assert "-not -path '*/vendor/*'" in find_call
+
+
+def test_collect_composer_packages_searches_home_for_forge_ploi_envoyer_deployments():
+    """Regression test for the exact gap found on a real server: managed
+    Laravel hosting (Forge, Ploi, Envoyer) deploys sites under
+    /home/<user>/<domain>/, not /var/www - confirmed on a real Forge
+    server (/home/forge/<domain>/composer.lock). Locks in that /home is
+    actually part of the search command, not just /var/www."""
+    calls = []
+
+    class _RecordingSSH:
+        def run(self, cmd):
+            calls.append(cmd)
+            return '', ''
+
+    collect_composer_packages(_RecordingSSH())
+    find_call = next(c for c in calls if 'find' in c)
+    assert '/home' in find_call
+    assert '/var/www' in find_call
 
 
 def test_collect_composer_packages_returns_empty_when_no_lock_file():
@@ -315,7 +378,7 @@ def test_collect_composer_packages_returns_empty_on_malformed_json():
     the whole check - same defensive posture every other parser in this
     module takes."""
     fake = FakeSSHExecutor(responses={
-        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        "find /var/www /home -maxdepth 6 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
         'cat /var/www/html/composer.lock': ('{not valid json!!!', ''),
     })
     packages = collect_composer_packages(fake)
@@ -331,7 +394,7 @@ def test_collect_composer_packages_skips_entries_missing_name_or_version():
         ],
     })
     fake = FakeSSHExecutor(responses={
-        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        "find /var/www /home -maxdepth 6 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
         'cat /var/www/html/composer.lock': (lock, ''),
     })
     packages = collect_composer_packages(fake)
@@ -1240,7 +1303,7 @@ def test_full_flow_composer_lock_packages_included_and_checked(monkeypatch, isol
         'packages-dev': [],
     })
     fake = FakeSSHExecutor(responses={
-        "find /var/www -maxdepth 4 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
+        "find /var/www /home -maxdepth 6 -iname 'composer.lock'": ('/var/www/html/composer.lock\n', ''),
         'cat /var/www/html/composer.lock': (lock, ''),
         "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', ''),
     })

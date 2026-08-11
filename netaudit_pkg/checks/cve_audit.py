@@ -366,12 +366,36 @@ def collect_composer_packages(ssh: SSHExecutor) -> list[dict]:
     unchanged, the same way it already does for 'WordPress') - Packagist
     is entirely independent of which Linux distro the server runs.
 
-    Only the first composer.lock found under /var/www is read (same
-    single-site assumption collect_packages()'s WordPress detection
-    already makes) - a server hosting multiple independent PHP projects
-    would need a different collection strategy, out of scope here.
+    Search locations: /var/www and /home, maxdepth 6, with vendor/
+    directories explicitly excluded. Both were confirmed necessary against
+    real servers, not assumed from documentation:
+
+    - /home is required in addition to /var/www because managed Laravel
+      hosting (Forge, Ploi, Envoyer - all common, real deployment targets)
+      puts sites under /home/<user>/<domain>/, not /var/www. Confirmed on
+      a real server: /home/forge/<domain>/composer.lock. Missing this
+      entirely would silently skip a large fraction of real Laravel
+      deployments.
+    - Excluding vendor/ (`-not -path '*/vendor/*'`) is required because
+      individual Composer dependencies can ship their OWN composer.lock
+      inside their own package directory (e.g. phpunit/phpunit,
+      mockery/mockery both do) - confirmed on a real server where a bare
+      `find ... -iname composer.lock` returned five results, four of them
+      nested inside vendor/ and belonging to sub-dependencies, only one
+      (the project root's own composer.lock) being the actual file this
+      function needs. Without this exclusion, `head -1`'s result depends
+      on find's traversal order, which is not guaranteed to put the real
+      project-root lock file first - on that server it did not.
+
+    Only the first composer.lock found (after the vendor/ exclusion) is
+    read (same single-site assumption collect_packages()'s WordPress
+    detection already makes) - a server hosting multiple independent PHP
+    projects would need a different collection strategy, out of scope here.
     """
-    out, _ = ssh.run("find /var/www -maxdepth 4 -iname 'composer.lock' -type f 2>/dev/null | head -1")
+    out, _ = ssh.run(
+        "find /var/www /home -maxdepth 6 -iname 'composer.lock' -not -path '*/vendor/*' "
+        "-type f 2>/dev/null | head -1"
+    )
     lock_path = out.strip()
     if not lock_path:
         return []
