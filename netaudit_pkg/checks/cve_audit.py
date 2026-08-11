@@ -11,34 +11,40 @@ against the actual configuration instead of just restating a raw CVSS score.
 
 Cache: cve_cache in storage.py, 24h TTL - to avoid hammering OSV.dev on every run.
 
-Debian ecosystem versioning (2026-08-11 fix)
----------------------------------------------
-Querying OSV.dev with the bare ecosystem string 'Debian' (no release number)
-is a known, still-open OSV.dev issue (google/osv.dev#4230, opened 2025-10-23,
-unresolved as of this writing): OSV matches against the union of ALL Debian
-release version ranges ("widest range" per OSV maintainer michaelkedar's own
-explanation in that thread), not just the one actually installed. In
-practice this means a query for e.g. nginx 1.28.3 returns CVEs going back to
-2000 that were fixed a decade or more ago in every release anyone actually
-runs today - the exact "historical noise" observed running this check
-against a real server (30 findings, most from Debian releases nobody has
-run since the 2000s).
+Linux distro identification and OSV ecosystem resolution (2026-08-11)
+------------------------------------------------------------------------
+This module targets Linux server packages generically - it does NOT assume
+every target host is Debian. collect_packages() tags each package it finds
+with the *generic* placeholder ecosystem 'Linux' (not 'Debian', not any
+specific distro), because at collection time the module doesn't yet know
+which distro it's actually talking to. _resolve_ecosystem() is where that
+placeholder gets turned into the real, distro-specific OSV ecosystem string,
+using collect_os_release()'s (os_id, version_id) read from /etc/os-release.
 
-The documented, maintainer-confirmed fix (same thread) is to query the
-*specific* Debian release ecosystem string, e.g. 'Debian:13' for Trixie,
-instead of the bare 'Debian'. This narrows OSV's matching to that release's
-actual fixed-version ranges. This module now reads /etc/os-release on the
-target host to get VERSION_ID (Debian's release number, e.g. '13') and
-builds the ecosystem string as f'Debian:{version_id}' for every
-Debian-family package (WordPress, which uses ecosystem 'WordPress', is
-unaffected by any of this - only Debian-packaged software).
+This distinction matters because OSV.dev's Debian and Ubuntu ecosystems are
+NOT the same namespace with different version formats - they are two
+entirely separate ecosystems with different naming conventions
+('Debian:13' vs 'Ubuntu:24.04:LTS') and different underlying data (Debian
+Security Tracker vs Ubuntu Security Notices/Ubuntu CVE Tracker). A module
+that defaulted every dpkg-based host to 'Debian' would silently mismatch
+every Ubuntu host - which is exactly what happened during development:
+this module originally hardcoded ecosystem='Debian' for every package
+unconditionally, and running it against a real Ubuntu 24.04 server produced
+'no known CVEs found' for nginx/openssh/mariadb across the board, because
+every query used a nonexistent 'Debian:24' ecosystem string (Ubuntu's
+'24.04' VERSION_ID truncated to its first integer group by code that had
+no concept of Ubuntu being a distinct OSV namespace).
 
-If VERSION_ID can't be read (older os-release format, non-Debian base, etc),
-this module falls back to the bare 'Debian' ecosystem string and accepts the
-historical-noise risk rather than silently skipping CVE matching for that
-host entirely - a noisy result is still strictly more useful than no result,
-and the fallback is visible in collect_os_release()'s return value so a
-caller can tell which path was taken.
+Currently resolved distros (see _resolve_ecosystem()): Debian, Ubuntu. Any
+other os_id (RHEL family, SUSE, Alpine, etc - OSV.dev does have ecosystems
+for several of these, e.g. 'AlmaLinux:9', 'Rocky Linux:9', but this module
+doesn't build those ecosystem strings yet) causes the package to be
+reported with ecosystem=None and excluded from OSV querying entirely,
+rather than guessed at with a wrong ecosystem string that would silently
+misreport results the way the old Debian-default did. A caller/UI can
+present "distro not supported for CVE matching yet" for that host instead
+of a false "no known CVEs found" that looks identical to an actually-clean
+result but isn't.
 """
 
 from __future__ import annotations
@@ -61,11 +67,15 @@ OSV_BATCH_URL = 'https://api.osv.dev/v1/querybatch'
 OSV_VULN_URL = 'https://api.osv.dev/v1/vulns/{id}'
 CACHE_TTL_HOURS = 24
 
-# Ecosystems where OSV's Debian-release-matching issue (see module
-# docstring) applies - i.e. every ecosystem this module currently collects
-# facts for EXCEPT 'WordPress', which is its own independent OSV ecosystem
-# unaffected by Debian release versioning entirely.
-_DEBIAN_FAMILY_ECOSYSTEM = 'Debian'
+# Generic placeholder ecosystem collect_packages() tags every dpkg-based
+# package with at collection time, before the real distro is known.
+# _resolve_ecosystem() turns this into the actual OSV ecosystem string
+# (or None, if the distro isn't one this module knows how to resolve) -
+# see this module's top docstring for the full reasoning. This is
+# deliberately NOT 'Debian' - a generic 'Linux' placeholder makes it
+# obvious at every call site that this value is not yet a real OSV
+# ecosystem and must be resolved before being sent anywhere.
+_GENERIC_LINUX_ECOSYSTEM = 'Linux'
 
 
 # ===========================================================================
@@ -77,22 +87,45 @@ def _parse_version(text: str) -> str | None:
     return m.group(1) if m else None
 
 
-def collect_os_release(ssh: SSHExecutor) -> str | None:
-    """Returns the Debian release number (VERSION_ID from /etc/os-release,
-    e.g. '13' for Trixie) or None if it can't be determined - old
-    os-release format, non-Debian base, or the file doesn't exist.
+def collect_os_release(ssh: SSHExecutor) -> tuple[str | None, str | None]:
+    """Returns (ID, VERSION_ID) from /etc/os-release, e.g. ('debian', '13')
+    or ('ubuntu', '24.04'). Either element is None if it couldn't be
+    determined - old os-release format, unrecognized distro, or the file
+    doesn't exist.
+
+    Both fields matter, not just the version number: Debian's VERSION_ID
+    is a plain integer ('13'), Ubuntu's is a dotted year.month ('24.04') -
+    and critically, they use *different* OSV ecosystem namespaces entirely
+    ('Debian:13' vs 'Ubuntu:24.04:LTS'), not just different version
+    formats within the same 'Debian' namespace. A host reporting ID=ubuntu
+    was previously (incorrectly) treated as Debian by this module - see
+    _resolve_ecosystem()'s docstring for the fix and the real-world case
+    that exposed it (a real server's nginx/openssh/mariadb showing 'no
+    known CVEs found' because every query silently used a nonexistent
+    'Debian:24' ecosystem string, built by truncating Ubuntu's '24.04'
+    VERSION_ID down to its first integer group).
 
     Read-only, single command. Deliberately separate from collect_packages()
     so it can be unit-tested independently and so a future caller only
-    needing the release number doesn't have to run the full package
+    needing distro identity doesn't have to run the full package
     collection to get it.
     """
-    out, _ = ssh.run("grep '^VERSION_ID=' /etc/os-release 2>/dev/null")
-    # VERSION_ID is double-quoted in a standard os-release file, e.g.
-    # VERSION_ID="13" - strip the key and the quotes, don't assume a
-    # specific quote style since some minimal/custom images vary.
-    m = re.search(r'VERSION_ID="?([0-9]+)"?', out)
-    return m.group(1) if m else None
+    out, _ = ssh.run("grep -E '^(ID|VERSION_ID)=' /etc/os-release 2>/dev/null")
+    os_id = None
+    version_id = None
+    for line in out.splitlines():
+        # os-release values are typically double-quoted (VERSION_ID="13")
+        # but not always (some minimal/custom images omit quotes) - handle
+        # both without assuming a specific style, same defensive approach
+        # the previous single-field version of this parser used.
+        m_id = re.match(r'ID="?([a-z0-9._-]+)"?$', line)
+        if m_id:
+            os_id = m_id.group(1)
+            continue
+        m_ver = re.match(r'VERSION_ID="?([0-9]+(?:\.[0-9]+)?)"?$', line)
+        if m_ver:
+            version_id = m_ver.group(1)
+    return os_id, version_id
 
 
 def _dpkg_version(ssh: SSHExecutor, dpkg_name: str) -> str | None:
@@ -146,7 +179,7 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
     if upstream_ver:
         dpkg_ver = _dpkg_version(ssh, 'nginx')
         packages.append({'name': 'nginx', 'version': dpkg_ver or upstream_ver,
-                          'upstream_version': upstream_ver, 'ecosystem': 'Debian', 'raw': out.strip()})
+                          'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM, 'raw': out.strip()})
 
     # --- OpenSSH ---
     out, _ = ssh.run('ssh -V 2>&1')
@@ -154,7 +187,7 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
     if upstream_ver:
         dpkg_ver = _dpkg_version(ssh, 'openssh-client') or _dpkg_version(ssh, 'openssh-server')
         packages.append({'name': 'openssh', 'version': dpkg_ver or upstream_ver,
-                          'upstream_version': upstream_ver, 'ecosystem': 'Debian', 'raw': out.strip()})
+                          'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM, 'raw': out.strip()})
 
     # --- MySQL / MariaDB ---
     out, _ = ssh.run('mysql --version 2>/dev/null || mariadb --version 2>/dev/null')
@@ -164,7 +197,7 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
         dpkg_pkg = 'mariadb-server' if name == 'mariadb' else 'mysql-server'
         dpkg_ver = _dpkg_version(ssh, dpkg_pkg)
         packages.append({'name': name, 'version': dpkg_ver or upstream_ver,
-                          'upstream_version': upstream_ver, 'ecosystem': 'Debian', 'raw': out.strip()})
+                          'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM, 'raw': out.strip()})
 
     # --- PHP ---
     out, _ = ssh.run('php -v 2>/dev/null')
@@ -176,7 +209,7 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
         # upstream version for OSV matching for now (same shape of
         # limitation as `linux` below, not a silent omission).
         packages.append({'name': 'php', 'version': upstream_ver,
-                          'upstream_version': upstream_ver, 'ecosystem': 'Debian',
+                          'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
                           'raw': out.strip().splitlines()[0] if out.strip() else ''})
 
     # --- kernel ---
@@ -192,7 +225,7 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
     out, _ = ssh.run('uname -r')
     if out.strip():
         packages.append({'name': 'linux', 'version': out.strip(),
-                          'upstream_version': out.strip(), 'ecosystem': 'Debian', 'raw': out.strip()})
+                          'upstream_version': out.strip(), 'ecosystem': _GENERIC_LINUX_ECOSYSTEM, 'raw': out.strip()})
 
     # --- WordPress (if wp-config.php is found in standard locations) ---
     out, _ = ssh.run("find /var/www -maxdepth 3 -iname 'wp-includes' -type d 2>/dev/null | head -1")
@@ -232,31 +265,101 @@ def _cache_set(name: str, version: str, ecosystem: str, data: list) -> None:
     storage.cve_set(f'{name}::{version}::{ecosystem}', data)
 
 
-def _resolve_ecosystem(pkg_ecosystem: str, debian_version_id: str | None) -> str:
-    """Turns a package's base ecosystem ('Debian', 'WordPress', ...) into
-    the actual OSV ecosystem string to query. Only 'Debian' is affected -
-    see this module's docstring for why a bare 'Debian' query is a known
-    OSV.dev false-positive source (google/osv.dev#4230) and why appending
-    the release number narrows it. Falls back to the bare ecosystem string
-    if the release number couldn't be determined (collect_os_release()
-    returned None) - a noisy result beats no result for that host."""
-    if pkg_ecosystem == _DEBIAN_FAMILY_ECOSYSTEM and debian_version_id:
-        return f'{_DEBIAN_FAMILY_ECOSYSTEM}:{debian_version_id}'
-    return pkg_ecosystem
+# Registry mapping a distro's /etc/os-release ID field to a function that
+# builds its OSV ecosystem string from VERSION_ID. This is the single
+# place new distros get added - no other code in this module needs to
+# change to support a new one. Each builder receives the raw VERSION_ID
+# string exactly as os-release reports it and returns the OSV ecosystem
+# string, or None if that particular version can't be resolved (e.g. a
+# malformed VERSION_ID for that distro's expected format).
+#
+# Every entry here is backed by a confirmed real OSV ecosystem string
+# (checked against osv.dev's own published records / API documentation,
+# not guessed):
+#   - Debian:  'Debian:{N}'                       e.g. 'Debian:13'
+#   - Ubuntu:  'Ubuntu:{X.Y}:LTS' / 'Ubuntu:{X.Y}' e.g. 'Ubuntu:24.04:LTS'
+#   - AlmaLinux: 'AlmaLinux:{N}'                   e.g. 'AlmaLinux:9'
+#   - Rocky Linux: 'Rocky Linux:{N}'               e.g. 'Rocky Linux:9'
+#   - Alpine:  'Alpine:v{X.Y}'                     e.g. 'Alpine:v3.19'
+#
+# Deliberately NOT included: plain 'rhel' (Red Hat Enterprise Linux
+# itself has no OSV ecosystem string as of this writing -
+# google/osv.dev#1404 is still open requesting it) and 'opensuse'/'sles'
+# (OSV's SUSE data exists but this module hasn't confirmed the exact
+# ecosystem string format against a real API response yet - added when
+# that's verified, not guessed at here). A host running one of these
+# gets os_id set correctly by collect_os_release() but no entry in this
+# registry, so _resolve_ecosystem() correctly returns None for it - "we
+# know what this is, we just don't build its OSV string yet" is a
+# different, more honest state than "we don't recognize this at all".
+_DISTRO_ECOSYSTEM_BUILDERS = {
+    'debian': lambda v: f'Debian:{v}',
+    'ubuntu': lambda v: f'Ubuntu:{v}:LTS' if v.endswith('.04') else f'Ubuntu:{v}',
+    'almalinux': lambda v: f'AlmaLinux:{v}',
+    'rocky': lambda v: f'Rocky Linux:{v}',
+    'alpine': lambda v: f'Alpine:v{v}',
+}
 
 
-def query_osv(packages: list[dict], debian_version_id: str | None = None) -> dict[str, list]:
-    """Returns {pkg_name: [vuln_ids...]} using a batch query, with caching.
+def _resolve_ecosystem(pkg_ecosystem: str, os_id: str | None,
+                        version_id: str | None) -> str | None:
+    """Turns a package's generic base ecosystem ('Linux', 'WordPress', ...)
+    into the actual OSV ecosystem string to query, given the real distro
+    identity from collect_os_release(). Returns None if this module
+    doesn't have a registered ecosystem builder for the given os_id (see
+    _DISTRO_ECOSYSTEM_BUILDERS above) - callers must treat that as "can't
+    check this package on this distro yet", not as "no vulnerabilities
+    found". Guessing at a wrong ecosystem string (e.g. defaulting every
+    unrecognized dpkg-based host to 'Debian') is worse than admitting the
+    limitation - that was this module's original bug: it hardcoded every
+    package's ecosystem to 'Debian' regardless of the actual host, which
+    silently mismatched Ubuntu hosts (see this module's top docstring for
+    the real-world case that exposed it).
 
-    debian_version_id (from collect_os_release()) narrows every package
-    whose ecosystem is 'Debian' to 'Debian:{version_id}' - see this
-    module's docstring for why. Packages with a different ecosystem
-    (WordPress) are queried as-is, unaffected."""
+    '_GENERIC_LINUX_ECOSYSTEM' ('Linux') is a placeholder used throughout
+    collect_packages() for "some Linux distro package, distro unknown at
+    collection time" - it is NOT itself a real OSV ecosystem, and must
+    never be sent to OSV as-is. This function looks up os_id in
+    _DISTRO_ECOSYSTEM_BUILDERS and, if found, calls that distro's builder
+    with version_id. Adding support for a new distro means adding one
+    entry to that registry - this function's own logic never needs to
+    change for that.
+
+    WordPress and any other non-'_GENERIC_LINUX_ECOSYSTEM' ecosystem
+    passes through completely unchanged, regardless of os_id/version_id -
+    it's not part of any Linux distro's package ecosystem at all.
+    """
+    if pkg_ecosystem != _GENERIC_LINUX_ECOSYSTEM:
+        return pkg_ecosystem
+    if not version_id or not os_id:
+        return None
+    builder = _DISTRO_ECOSYSTEM_BUILDERS.get(os_id)
+    if builder is None:
+        return None
+    return builder(version_id)
+
+
+def query_osv(packages: list[dict], os_id: str | None = None,
+              version_id: str | None = None) -> dict[str, list | None]:
+    """Returns {pkg_name: [vuln_ids...] | None}, with caching. A value of
+    None (not an empty list) means this package's ecosystem couldn't be
+    resolved for this host's distro (see _resolve_ecosystem()) - it was
+    never sent to OSV at all, and the caller must not report it as "no
+    known CVEs found", which would misrepresent an unchecked package as a
+    checked-and-clean one.
+
+    os_id/version_id (from collect_os_release()) resolve every package
+    whose generic ecosystem is '_GENERIC_LINUX_ECOSYSTEM' to the actual
+    distro-specific OSV ecosystem string. Packages with a different
+    ecosystem (WordPress) are queried as-is, unaffected."""
     to_query = []
-    result: dict[str, list] = {}
+    result: dict[str, list | None] = {}
 
     for p in packages:
-        ecosystem = _resolve_ecosystem(p['ecosystem'], debian_version_id)
+        ecosystem = _resolve_ecosystem(p['ecosystem'], os_id, version_id)
+        if ecosystem is None:
+            result[p['name']] = None
+            continue
         cached = _cache_get(p['name'], p['version'], ecosystem)
         if cached is not None:
             result[p['name']] = cached
@@ -352,21 +455,35 @@ def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> 
 
     try:
         packages = collect_packages(ssh)
-        debian_version_id = collect_os_release(ssh)
+        os_id, version_id = collect_os_release(ssh)
     finally:
         ssh.close()
 
     if not packages:
         return {'host': host, 'packages': [], 'findings': [],
-                'summary': {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'ok': 0}}
+                'summary': {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'ok': 0, 'not_supported': 0}}
 
-    vuln_ids_by_pkg = query_osv(packages, debian_version_id)
+    vuln_ids_by_pkg = query_osv(packages, os_id, version_id)
 
     findings = []
-    counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'ok': 0}
+    counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'ok': 0, 'not_supported': 0}
 
     for p in packages:
-        ids = vuln_ids_by_pkg.get(p['name'], [])
+        ids = vuln_ids_by_pkg.get(p['name'])
+        if ids is None:
+            # Ecosystem couldn't be resolved for this host's distro (see
+            # _resolve_ecosystem()) - this package was never queried
+            # against OSV at all. Must not be reported as 'ok'/"no known
+            # CVEs found", which would misrepresent an unchecked package
+            # as a checked-and-clean one - a distinct 'not_supported'
+            # severity makes the gap visible instead of silently absent.
+            findings.append({
+                'package': p['name'], 'version': p['version'],
+                'severity': 'not_supported', 'cve': None,
+                'title': 'CVE matching not supported for this distro',
+            })
+            counts['not_supported'] += 1
+            continue
         if not ids:
             findings.append({
                 'package': p['name'], 'version': p['version'],

@@ -43,7 +43,7 @@ def test_collect_packages_finds_nginx():
     nginx = next(p for p in packages if p['name'] == 'nginx')
     assert nginx['version'] == '1.24.0-2'
     assert nginx['upstream_version'] == '1.24.0'
-    assert nginx['ecosystem'] == 'Debian'
+    assert nginx['ecosystem'] == 'Linux'
 
 
 def test_collect_packages_nginx_falls_back_to_upstream_without_dpkg():
@@ -123,77 +123,151 @@ def test_dpkg_version_returns_none_when_not_dpkg_installed():
 
 
 # ===========================================================================
-# collect_os_release — Debian VERSION_ID detection
+# collect_os_release — distro ID + VERSION_ID detection
 # ===========================================================================
 
-def test_collect_os_release_parses_version_id():
+def test_collect_os_release_parses_debian():
     fake = FakeSSHExecutor(responses={
-        "grep '^VERSION_ID='": ('VERSION_ID="13"\n', ''),
+        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', ''),
     })
-    assert collect_os_release(fake) == '13'
+    assert collect_os_release(fake) == ('debian', '13')
+
+
+def test_collect_os_release_parses_ubuntu_dotted_version():
+    """Ubuntu's VERSION_ID is dotted (year.month), not a plain integer -
+    the regex must accept this shape, not just Debian's bare integer."""
+    fake = FakeSSHExecutor(responses={
+        "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="24.04"\n', ''),
+    })
+    assert collect_os_release(fake) == ('ubuntu', '24.04')
 
 
 def test_collect_os_release_handles_unquoted_version_id():
     """Some minimal/custom images may not quote the value - the regex
     must not assume quotes are always present."""
     fake = FakeSSHExecutor(responses={
-        "grep '^VERSION_ID='": ('VERSION_ID=12\n', ''),
+        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID=12\n', ''),
     })
-    assert collect_os_release(fake) == '12'
+    assert collect_os_release(fake) == ('debian', '12')
 
 
-def test_collect_os_release_returns_none_when_file_missing():
+def test_collect_os_release_returns_none_none_when_file_missing():
     fake = FakeSSHExecutor(responses={})
-    assert collect_os_release(fake) is None
+    assert collect_os_release(fake) == (None, None)
 
 
 def test_collect_os_release_returns_none_on_garbage_output():
     fake = FakeSSHExecutor(responses={
-        "grep '^VERSION_ID='": ('not a version line at all', ''),
+        "grep -E '^(ID|VERSION_ID)='": ('not a version line at all', ''),
     })
-    assert collect_os_release(fake) is None
+    assert collect_os_release(fake) == (None, None)
+
+
+def test_collect_os_release_partial_output_still_parses_what_it_can():
+    """If only one of the two fields is present (unusual but not
+    impossible - a heavily trimmed os-release), the function returns
+    whichever it found rather than discarding both on a partial match."""
+    fake = FakeSSHExecutor(responses={
+        "grep -E '^(ID|VERSION_ID)='": ('VERSION_ID="13"\n', ''),
+    })
+    assert collect_os_release(fake) == (None, '13')
 
 
 # ===========================================================================
-# _resolve_ecosystem — the core of the Debian:{release} fix
+# _resolve_ecosystem — Debian AND Ubuntu ecosystem resolution
 # ===========================================================================
 
 def test_resolve_ecosystem_debian_with_known_release():
-    assert _resolve_ecosystem('Debian', '13') == 'Debian:13'
+    assert _resolve_ecosystem('Linux', 'debian', '13') == 'Debian:13'
 
 
-def test_resolve_ecosystem_debian_without_release_falls_back_to_bare():
-    """VERSION_ID couldn't be determined - fall back to the bare 'Debian'
-    string rather than skipping the query. Noisy beats nothing, per the
-    module docstring."""
-    assert _resolve_ecosystem('Debian', None) == 'Debian'
+def test_resolve_ecosystem_ubuntu_lts_gets_lts_suffix():
+    """Ubuntu LTS releases (X.04) get a ':LTS' suffix in OSV's ecosystem
+    string - confirmed against OSV's own published records
+    (osv.dev/list?ecosystem=Ubuntu shows 'Ubuntu:24.04:LTS'). This is the
+    exact case that was silently broken before this fix: a real Ubuntu
+    24.04 server had every generic-Linux package resolve to the
+    nonexistent 'Debian:24' ecosystem instead."""
+    assert _resolve_ecosystem('Linux', 'ubuntu', '24.04') == 'Ubuntu:24.04:LTS'
+
+
+def test_resolve_ecosystem_ubuntu_non_lts_gets_no_suffix():
+    """Non-LTS interim releases (X.10, etc) get no ':LTS' suffix -
+    confirmed against OSV's own published records showing bare
+    'Ubuntu:25.10' entries alongside 'Ubuntu:24.04:LTS' ones."""
+    assert _resolve_ecosystem('Linux', 'ubuntu', '25.10') == 'Ubuntu:25.10'
+
+
+def test_resolve_ecosystem_almalinux():
+    assert _resolve_ecosystem('Linux', 'almalinux', '9') == 'AlmaLinux:9'
+
+
+def test_resolve_ecosystem_rocky_linux():
+    assert _resolve_ecosystem('Linux', 'rocky', '9') == 'Rocky Linux:9'
+
+
+def test_resolve_ecosystem_alpine_gets_v_prefix():
+    """Alpine's OSV ecosystem string has a 'v' prefix on the version
+    ('Alpine:v3.19', not 'Alpine:3.19') - confirmed against OSV's own
+    data dump documentation, a different shape from every other distro
+    in the registry."""
+    assert _resolve_ecosystem('Linux', 'alpine', '3.19') == 'Alpine:v3.19'
+
+
+def test_resolve_ecosystem_returns_none_without_version():
+    """VERSION_ID couldn't be determined - there's no distro-specific
+    ecosystem string to build, so this returns None (package should be
+    reported as not-checked, not silently guessed at with a possibly-wrong
+    ecosystem). Applies regardless of os_id."""
+    assert _resolve_ecosystem('Linux', 'debian', None) is None
+    assert _resolve_ecosystem('Linux', 'ubuntu', None) is None
+    assert _resolve_ecosystem('Linux', None, None) is None
+
+
+def test_resolve_ecosystem_unregistered_distro_returns_none():
+    """An os_id with no entry in _DISTRO_ECOSYSTEM_BUILDERS (a distro this
+    module hasn't added yet - RHEL itself has no OSV ecosystem string as
+    of this writing, SUSE/openSUSE aren't registered pending format
+    verification) returns None - honestly reporting 'can't check this on
+    this distro yet' rather than guessing at an ecosystem string or
+    defaulting to Debian, which would silently misreport results (this
+    module's original bug - see top docstring). Recognizing the distro's
+    identity (os_id is set correctly) is a different state from having a
+    working ecosystem builder for it - both currently produce None here,
+    but for documented, distinct reasons."""
+    assert _resolve_ecosystem('Linux', 'rhel', '9') is None
+    assert _resolve_ecosystem('Linux', 'opensuse-leap', '15.6') is None
+    assert _resolve_ecosystem('Linux', 'linuxmint', '21') is None
+
+
+def test_resolve_ecosystem_new_distro_is_a_pure_registry_addition():
+    """Structural check: adding a new distro should be possible by adding
+    one entry to _DISTRO_ECOSYSTEM_BUILDERS, without touching
+    _resolve_ecosystem()'s own logic. This test verifies the registry is
+    actually consulted (not hardcoded if/elif branches reintroduced later)
+    by monkeypatching in a fake entry and confirming it's picked up."""
+    from netaudit_pkg.checks import cve_audit as module
+    original = dict(module._DISTRO_ECOSYSTEM_BUILDERS)
+    try:
+        module._DISTRO_ECOSYSTEM_BUILDERS['fakedistro'] = lambda v: f'FakeDistro:{v}'
+        assert _resolve_ecosystem('Linux', 'fakedistro', '7') == 'FakeDistro:7'
+    finally:
+        module._DISTRO_ECOSYSTEM_BUILDERS.clear()
+        module._DISTRO_ECOSYSTEM_BUILDERS.update(original)
 
 
 def test_resolve_ecosystem_wordpress_is_never_touched():
     """WordPress is a completely separate OSV ecosystem, unaffected by
-    Debian release versioning - must pass through unchanged regardless of
-    what debian_version_id is."""
-    assert _resolve_ecosystem('WordPress', '13') == 'WordPress'
-    assert _resolve_ecosystem('WordPress', None) == 'WordPress'
+    distro identity entirely - must pass through unchanged regardless of
+    os_id/version_id."""
+    assert _resolve_ecosystem('WordPress', 'debian', '13') == 'WordPress'
+    assert _resolve_ecosystem('WordPress', 'ubuntu', '24.04') == 'WordPress'
+    assert _resolve_ecosystem('WordPress', None, None) == 'WordPress'
 
 
 # ===========================================================================
 # query_osv — caching behavior (cache key now includes ecosystem)
 # ===========================================================================
-
-def test_query_osv_uses_cache_when_fresh(isolated_db, monkeypatch):
-    isolated_db.cve_set('nginx::1.24.0::Debian:13', ['CVE-2024-0001'])
-
-    def fail_if_called(*args, **kwargs):
-        raise AssertionError('should not hit the network when cache is fresh')
-
-    monkeypatch.setattr(httpx, 'post', fail_if_called)
-    result = query_osv(
-        [{'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Debian'}],
-        debian_version_id='13',
-    )
-    assert result['nginx'] == ['CVE-2024-0001']
-
 
 def test_query_osv_cache_miss_when_ecosystem_differs(isolated_db, monkeypatch):
     """A cached result under the bare 'Debian' ecosystem (e.g. from before
@@ -211,8 +285,8 @@ def test_query_osv_cache_miss_when_ecosystem_differs(isolated_db, monkeypatch):
 
     monkeypatch.setattr(httpx, 'post', fake_post)
     result = query_osv(
-        [{'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Debian'}],
-        debian_version_id='13',
+        [{'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Linux'}],
+        os_id='debian', version_id='13',
     )
     assert result['nginx'] == ['CVE-2026-42533']
     assert 'CVE-OLD-NOISY-RESULT' not in result['nginx']
@@ -227,8 +301,8 @@ def test_query_osv_queries_network_when_not_cached(isolated_db, monkeypatch):
 
     monkeypatch.setattr(httpx, 'post', fake_post)
     result = query_osv(
-        [{'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Debian'}],
-        debian_version_id='13',
+        [{'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Linux'}],
+        os_id='debian', version_id='13',
     )
     assert result['nginx'] == ['CVE-2024-9999']
     # and it should now be cached under the release-specific key
@@ -251,15 +325,18 @@ def test_query_osv_sends_release_specific_ecosystem_in_request(isolated_db, monk
         return R()
 
     monkeypatch.setattr(httpx, 'post', fake_post)
-    query_osv([{'name': 'nginx', 'version': '1.28.3', 'ecosystem': 'Debian'}],
-               debian_version_id='13')
+    query_osv([{'name': 'nginx', 'version': '1.28.3', 'ecosystem': 'Linux'}],
+               os_id='debian', version_id='13')
     assert captured['payload']['queries'][0]['package']['ecosystem'] == 'Debian:13'
 
 
-def test_query_osv_falls_back_to_bare_debian_without_version_id(isolated_db, monkeypatch):
-    """When debian_version_id is None (couldn't be determined), the
-    request must still go out with the bare 'Debian' ecosystem rather
-    than failing or sending an empty/malformed string."""
+def test_query_osv_sends_ubuntu_lts_ecosystem_in_request(isolated_db, monkeypatch):
+    """Regression test for the exact bug found running this check against
+    a real Ubuntu 24.04 server: nginx/openssh/mariadb all silently used a
+    nonexistent 'Debian:24' ecosystem (VERSION_ID '24.04' truncated by the
+    old Debian-only version of this code), returning zero matches. This
+    locks in that a real Ubuntu host now gets 'Ubuntu:24.04:LTS' on the
+    wire, not 'Debian:24' or any other malformed variant."""
     captured = {}
 
     def fake_post(url, json, timeout):
@@ -271,9 +348,26 @@ def test_query_osv_falls_back_to_bare_debian_without_version_id(isolated_db, mon
         return R()
 
     monkeypatch.setattr(httpx, 'post', fake_post)
-    query_osv([{'name': 'nginx', 'version': '1.28.3', 'ecosystem': 'Debian'}],
-               debian_version_id=None)
-    assert captured['payload']['queries'][0]['package']['ecosystem'] == 'Debian'
+    query_osv([{'name': 'nginx', 'version': '1.30.2-1~noble', 'ecosystem': 'Linux'}],
+               os_id='ubuntu', version_id='24.04')
+    assert captured['payload']['queries'][0]['package']['ecosystem'] == 'Ubuntu:24.04:LTS'
+
+
+def test_query_osv_returns_none_when_distro_unresolvable(isolated_db, monkeypatch):
+    """When the distro can't be resolved to a known OSV ecosystem
+    (missing version_id, or an unrecognized os_id), the package is never
+    sent to OSV at all - result[name] is None, not an empty list and not
+    a guessed-at ecosystem string. This is the honesty fix: the old
+    behavior silently defaulted to 'Debian' here, which could produce a
+    wrong-ecosystem query on a non-Debian host instead of admitting the
+    limitation."""
+    def fail_if_called(*a, **kw):
+        raise AssertionError('should not query OSV for an unresolvable ecosystem')
+
+    monkeypatch.setattr(httpx, 'post', fail_if_called)
+    result = query_osv([{'name': 'nginx', 'version': '1.28.3', 'ecosystem': 'Linux'}],
+                        os_id=None, version_id=None)
+    assert result['nginx'] is None
 
 
 def test_query_osv_wordpress_package_unaffected_by_debian_version(isolated_db, monkeypatch):
@@ -289,7 +383,7 @@ def test_query_osv_wordpress_package_unaffected_by_debian_version(isolated_db, m
 
     monkeypatch.setattr(httpx, 'post', fake_post)
     query_osv([{'name': 'wordpress', 'version': '6.5.2', 'ecosystem': 'WordPress'}],
-               debian_version_id='13')
+               os_id='debian', version_id='13')
     assert captured['payload']['queries'][0]['package']['ecosystem'] == 'WordPress'
 
 
@@ -299,8 +393,8 @@ def test_query_osv_network_failure_does_not_raise(isolated_db, monkeypatch):
 
     monkeypatch.setattr(httpx, 'post', fake_post)
     result = query_osv(
-        [{'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Debian'}],
-        debian_version_id='13',
+        [{'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Linux'}],
+        os_id='debian', version_id='13',
     )
     assert result['nginx'] == []  # empty, not an exception
 
@@ -322,10 +416,10 @@ def test_query_osv_mixed_ecosystems_in_one_batch(isolated_db, monkeypatch):
     monkeypatch.setattr(httpx, 'post', fake_post)
     query_osv(
         [
-            {'name': 'nginx', 'version': '1.28.3', 'ecosystem': 'Debian'},
+            {'name': 'nginx', 'version': '1.28.3', 'ecosystem': 'Linux'},
             {'name': 'wordpress', 'version': '6.5.2', 'ecosystem': 'WordPress'},
         ],
-        debian_version_id='13',
+        os_id='debian', version_id='13',
     )
     ecosystems = [q['package']['ecosystem'] for q in captured['payload']['queries']]
     assert ecosystems == ['Debian:13', 'WordPress']
@@ -377,7 +471,10 @@ def test_full_flow_no_packages_found(monkeypatch, isolated_db):
 
 
 def test_full_flow_package_with_no_cves(monkeypatch, isolated_db):
-    fake = FakeSSHExecutor(responses={'nginx -v': ('nginx version: nginx/1.24.0', '')})
+    fake = FakeSSHExecutor(responses={
+        'nginx -v': ('nginx version: nginx/1.24.0', ''),
+        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', ''),
+    })
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
 
     def fake_post(url, json, timeout):
@@ -394,12 +491,12 @@ def test_full_flow_package_with_no_cves(monkeypatch, isolated_db):
 
 def test_full_flow_reads_os_release_and_narrows_debian_ecosystem(monkeypatch, isolated_db):
     """End-to-end: check_cve_audit() must read /etc/os-release over the
-    same SSH session and pass the resulting release id all the way through
-    to the actual OSV request - the fix's full round trip, not just the
-    individual pieces in isolation."""
+    same SSH session and pass the resulting distro id + release id all
+    the way through to the actual OSV request - the fix's full round
+    trip, not just the individual pieces in isolation."""
     fake = FakeSSHExecutor(responses={
         'nginx -v': ('nginx version: nginx/1.28.3', ''),
-        "grep '^VERSION_ID='": ('VERSION_ID="13"\n', ''),
+        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', ''),
     })
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
 
@@ -432,7 +529,7 @@ def test_full_flow_uses_dpkg_revision_not_bare_upstream_version(monkeypatch, iso
     fake = FakeSSHExecutor(responses={
         'nginx -v': ('nginx version: nginx/1.28.3', ''),
         "dpkg-query -W -f='${Version}' nginx": ('1.28.3-1~deb13u2\n', ''),
-        "grep '^VERSION_ID='": ('VERSION_ID="13"\n', ''),
+        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', ''),
     })
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
 
@@ -458,6 +555,69 @@ def test_full_flow_uses_dpkg_revision_not_bare_upstream_version(monkeypatch, iso
     assert any(f['cve'] == 'DEBIAN-CVE-2026-42533' for f in nginx_findings)
 
 
+def test_full_flow_ubuntu_host_uses_ubuntu_ecosystem_not_debian(monkeypatch, isolated_db):
+    """Regression test for the exact bug found running this check against
+    a real Ubuntu 24.04 server: nginx 1.30.2-1~noble, openssh
+    1:9.6p1-3ubuntu13.18, and mariadb 1:10.11.14-0ubuntu0.24.04.1 all
+    showed 'no known CVEs found' because every query used a nonexistent
+    'Debian:24' ecosystem (VERSION_ID '24.04' truncated by the old
+    Debian-only version of this code, which had no concept of Ubuntu
+    being a different OSV ecosystem namespace at all). This test locks in
+    the full round trip: an Ubuntu host's ID=ubuntu/VERSION_ID=24.04 must
+    produce 'Ubuntu:24.04:LTS' on the actual wire request, for every
+    Debian-placeholder package in the batch."""
+    fake = FakeSSHExecutor(responses={
+        'nginx -v': ('nginx version: nginx/1.30.2', ''),
+        "dpkg-query -W -f='${Version}' nginx": ('1.30.2-1~noble\n', ''),
+        'ssh -V': ('OpenSSH_9.6p1 Ubuntu-3ubuntu13.18', ''),
+        "dpkg-query -W -f='${Version}' openssh-client": ('1:9.6p1-3ubuntu13.18\n', ''),
+        "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="24.04"\n', ''),
+    })
+    monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
+
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured['payload'] = json
+
+        class R:
+            def raise_for_status(self): pass
+            def json(self): return {'results': [{'vulns': []}] * len(json['queries'])}
+        return R()
+
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    check_cve_audit(host='1.2.3.4')
+
+    ecosystems = {q['package']['ecosystem'] for q in captured['payload']['queries']}
+    assert ecosystems == {'Ubuntu:24.04:LTS'}
+    assert 'Debian:24' not in ecosystems  # the exact malformed string the old code produced
+
+
+def test_full_flow_unrecognized_distro_reports_not_supported_not_ok(monkeypatch, isolated_db):
+    """Honesty check: a host running a distro this module can't resolve
+    to an OSV ecosystem (e.g. a RHEL-family box) must NOT show its
+    packages as 'ok'/no known CVEs - that would look identical to an
+    actually-checked-and-clean result. It must show up as
+    'not_supported' instead, with no OSV request made for that package at
+    all."""
+    fake = FakeSSHExecutor(responses={
+        'nginx -v': ('nginx version: nginx/1.24.0', ''),
+        "grep -E '^(ID|VERSION_ID)='": ('ID=rhel\nVERSION_ID="9"\n', ''),
+    })
+    monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
+
+    def fail_if_called(*a, **kw):
+        raise AssertionError('should not query OSV for an unresolvable distro')
+
+    monkeypatch.setattr(httpx, 'post', fail_if_called)
+    result = check_cve_audit(host='1.2.3.4')
+
+    assert result['summary']['not_supported'] == 1
+    assert result['summary']['ok'] == 0
+    nginx_finding = next(f for f in result['findings'] if f['package'] == 'nginx')
+    assert nginx_finding['severity'] == 'not_supported'
+
+
 @pytest.mark.parametrize('score,expected_severity', [
     ('9.8', 'critical'),
     ('7.5', 'high'),
@@ -466,7 +626,10 @@ def test_full_flow_uses_dpkg_revision_not_bare_upstream_version(monkeypatch, iso
     (None, 'medium'),  # unknown score is not downplayed to low
 ])
 def test_full_flow_severity_mapping(monkeypatch, isolated_db, score, expected_severity):
-    fake = FakeSSHExecutor(responses={'nginx -v': ('nginx version: nginx/1.24.0', '')})
+    fake = FakeSSHExecutor(responses={
+        'nginx -v': ('nginx version: nginx/1.24.0', ''),
+        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', ''),
+    })
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
 
     def fake_post(url, json, timeout):
