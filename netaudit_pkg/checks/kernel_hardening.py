@@ -4,10 +4,12 @@ forwarding, ICMP/redirect handling, reverse-path filtering, SYN flood
 protection, and process-dump safety — scored 0-100 per
 docs/checks/kernel_hardening.md.
 
-Step 2 of the module's build-out (per session plan): adds _build_findings()
-on top of Step 1's _build_components(). Still no audit_kernel_hardening_score(),
-no check_kernel_hardening(), no registry entry — those remain separate,
-deliberately sequenced steps.
+Step 3 of the module's build-out (per session plan): adds
+audit_kernel_hardening_score() and the check_kernel_hardening() registry
+entrypoint on top of Step 1's _build_components() and Step 2's
+_build_findings(). This completes the module — after this, the only
+remaining action is adding `from . import kernel_hardening` to
+checks/__init__.py so the @register decorator actually runs.
 
 Every control's PASS/FAIL condition, weight, and the one graded exception
 (suid_dumpable) below is a direct transcription of
@@ -36,13 +38,25 @@ that spec, it does not re-derive it. In particular:
   case (0) here, since PASS produces no finding at all, but the same
   discipline applies to Component.reason if that field is ever populated
   in a future revision of this module.
+- N/A handling (spec section 5) is simpler than ssh_hardening's: there is
+  only one group-level N/A case (KernelConfig.readable is False), no
+  "tool not installed" branch like ssh_hardening's SSHConfig.version check
+  - sysctl always exists on Linux, unlike sshd which may not be installed
+  at all. See audit_kernel_hardening_score() below.
 """
 
 from __future__ import annotations
 
-from ..kernel_config import KernelConfig
+from ..registry import register
+from ..kernel_config import KernelConfig, collect_kernel_config
 from ..findings import finding as _finding
-from ..scoring import Component
+from ..scoring import Component, weighted_score
+from ..ssh import SSHExecutor, HostKeyMismatchError
+
+try:
+    import paramiko
+except ImportError:
+    paramiko = None
 
 # ===========================================================================
 # Per-control weights (docs/checks/kernel_hardening.md section 6)
@@ -480,3 +494,101 @@ def _build_findings(cfg: KernelConfig) -> list[dict]:
         _f_suid_dumpable(cfg),
     ]
     return [f for f in findings if f is not None]
+
+
+# ===========================================================================
+# Internal reusable API
+# ===========================================================================
+
+def audit_kernel_hardening_score(ssh: SSHExecutor) -> dict:
+    """Scores kernel sysctl hardening (ASLR, pointer/dmesg exposure,
+    forwarding, ICMP/redirect handling, reverse-path filtering, SYN flood
+    protection, process-dump safety) from an already-connected
+    SSHExecutor. Does NOT open or close the SSH session itself - same
+    two-layer API rationale ssh_hardening.audit_ssh_hardening_score() and
+    nginx_hardening.audit_nginx_hardening_score() already established.
+
+    Unlike ssh_hardening (which references audit_ssh_hardening()'s
+    pre-existing findings for 3 of its 14 controls), no pre-existing
+    kernel-sysctl findings function exists to link to — this module's
+    Components and Findings are both fully self-contained (spec section 7).
+
+    N/A handling (spec section 5) is a single group-level case, simpler
+    than ssh_hardening's two-case handling (tool-not-installed vs.
+    resolved-but-empty): sysctl is a kernel interface, not an optional
+    installed package, so there is no "kernel doesn't have sysctl"
+    equivalent to sshd-not-installed. The only failure mode is
+    KernelConfig.readable being False - sudo lacked access, or `sysctl -a`
+    returned nothing usable - in which case no hardening score is
+    produced at all, matching nginx_hardening's and ssh_hardening's
+    identical handling of the same shape of failure (no partial score).
+    """
+    cfg = collect_kernel_config(ssh)
+    if not cfg.readable:
+        result = {'readable': False,
+                   'error': 'sysctl -a requires root — no read access to the effective '
+                            'kernel configuration'}
+        if cfg.kernel_version:
+            # uname -r needs no privilege and is collected independently of
+            # sysctl -a (see kernel_config.py's collect_kernel_config()) -
+            # still worth returning even when the hardening score can't be
+            # computed, same as ssh_hardening returns cfg.version in its
+            # equivalent N/A branch.
+            result['kernel_version'] = cfg.kernel_version
+        return result
+
+    hardening = weighted_score(_build_components(cfg))
+    findings = _build_findings(cfg)
+
+    return {
+        'readable': True,
+        'kernel_version': cfg.kernel_version,
+        'hardening': hardening,
+        'findings': findings,
+    }
+
+
+# ===========================================================================
+# Registry entrypoint
+# ===========================================================================
+
+@register(
+    id='kernel_hardening', label='Kernel sysctl hardening (SSH)', category='hardening',
+    params=[
+        {'name': 'host', 'type': 'text', 'label': 'Host', 'default': ''},
+        {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
+        {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
+        {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
+        {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
+    ],
+    required_tools=[],
+    risk_level='READ_ONLY',
+    description='Scores Linux kernel sysctl hardening — ASLR, kernel pointer/dmesg '
+                'exposure, IP forwarding, ICMP/redirect handling, reverse-path '
+                'filtering, SYN flood protection, and process-dump safety — against '
+                'docs/checks/kernel_hardening.md (16 controls, 0-100 hardening score). '
+                'Read-only.',
+)
+def check_kernel_hardening(host='', user='root', port=22, key_path='', password='') -> dict:
+    """Public registry entrypoint - opens its own SSH session when run
+    standalone, then delegates to audit_kernel_hardening_score(). Callers
+    that already hold an open SSHExecutor should call
+    audit_kernel_hardening_score(ssh) directly instead, to avoid a second
+    SSH connection to the same host. Mirrors check_ssh_hardening()'s and
+    check_nginx_hardening()'s identical connect/delegate/close shape."""
+    if paramiko is None:
+        return {'error': 'paramiko not installed'}
+    if not host:
+        return {'error': 'host not specified'}
+
+    try:
+        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+    except HostKeyMismatchError as e:
+        return {'error': str(e)}
+    except Exception as e:
+        return {'error': f'could not connect: {e}'}
+
+    try:
+        return audit_kernel_hardening_score(ssh)
+    finally:
+        ssh.close()
