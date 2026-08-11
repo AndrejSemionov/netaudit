@@ -38,6 +38,7 @@ def test_collect_packages_finds_nginx():
     fake = FakeSSHExecutor(responses={
         'nginx -v': ('nginx version: nginx/1.24.0', ''),
         "dpkg-query -W -f='${Version}' nginx": ('1.24.0-2', ''),
+        'apt-cache policy nginx': (_APT_POLICY_NGINX_NATIVE_DEBIAN, ''),
     })
     packages = collect_packages(fake)
     nginx = next(p for p in packages if p['name'] == 'nginx')
@@ -59,19 +60,85 @@ def test_collect_packages_nginx_falls_back_to_upstream_without_dpkg():
     assert nginx['upstream_version'] == '1.24.0'
 
 
+_APT_POLICY_NGINX_PPA = """nginx:
+  Installed: 1.30.2-1~noble
+  Candidate: 1.30.2-1~noble
+  Version table:
+ *** 1.30.2-1~noble 500
+        500 https://nginx.org/packages/ubuntu noble/nginx amd64 Packages
+        100 /var/lib/dpkg/status
+     1.24.0-2ubuntu7 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+"""
+
+_APT_POLICY_NGINX_NATIVE_UBUNTU = """nginx:
+  Installed: 1.24.0-2ubuntu7.15
+  Candidate: 1.24.0-2ubuntu7.15
+  Version table:
+ *** 1.24.0-2ubuntu7.15 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        100 /var/lib/dpkg/status
+"""
+
+_APT_POLICY_NGINX_NATIVE_DEBIAN = """nginx:
+  Installed: 1.26.3-3+deb13u6
+  Candidate: 1.26.3-3+deb13u6
+  Version table:
+ *** 1.26.3-3+deb13u6 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+        100 /var/lib/dpkg/status
+"""
+
+
 def test_collect_packages_flags_nginx_org_ppa_as_third_party():
     """Regression test for the exact case found running this check
     against a real server: nginx installed from nginx.org's own apt repo
-    produces a dpkg version like '1.30.2-1~noble' - no 'ubuntu' marker,
-    just a tilde + release codename, the documented shape of a
-    non-distro-native package."""
+    (a legitimate, nginx-recommended install method) is flagged because
+    the actual repository URL (from `apt-cache policy`, not a guess from
+    the version string) is nginx.org, not archive.ubuntu.com."""
     fake = FakeSSHExecutor(responses={
         'nginx -v': ('nginx version: nginx/1.30.2', ''),
         "dpkg-query -W -f='${Version}' nginx": ('1.30.2-1~noble\n', ''),
+        'apt-cache policy nginx': (_APT_POLICY_NGINX_PPA, ''),
     })
     packages = collect_packages(fake)
     nginx = next(p for p in packages if p['name'] == 'nginx')
     assert nginx['third_party_repo'] is True
+
+
+def test_collect_packages_does_not_flag_native_ubuntu_nginx():
+    fake = FakeSSHExecutor(responses={
+        'nginx -v': ('nginx version: nginx/1.24.0', ''),
+        "dpkg-query -W -f='${Version}' nginx": ('1.24.0-2ubuntu7.15\n', ''),
+        'apt-cache policy nginx': (_APT_POLICY_NGINX_NATIVE_UBUNTU, ''),
+    })
+    packages = collect_packages(fake)
+    nginx = next(p for p in packages if p['name'] == 'nginx')
+    assert nginx['third_party_repo'] is False
+
+
+def test_collect_packages_does_not_flag_native_debian_nginx():
+    fake = FakeSSHExecutor(responses={
+        'nginx -v': ('nginx version: nginx/1.26.3', ''),
+        "dpkg-query -W -f='${Version}' nginx": ('1.26.3-3+deb13u6\n', ''),
+        'apt-cache policy nginx': (_APT_POLICY_NGINX_NATIVE_DEBIAN, ''),
+    })
+    packages = collect_packages(fake)
+    nginx = next(p for p in packages if p['name'] == 'nginx')
+    assert nginx['third_party_repo'] is False
+
+
+def test_collect_packages_third_party_flag_false_without_dpkg_version():
+    """If dpkg-query found nothing (package not dpkg-installed at all),
+    third_party_repo must be False, not an accidental True from an empty
+    apt-cache policy lookup - there's no dpkg package to check the source
+    of in the first place."""
+    fake = FakeSSHExecutor(responses={
+        'nginx -v': ('nginx version: nginx/1.24.0', ''),
+    })
+    packages = collect_packages(fake)
+    nginx = next(p for p in packages if p['name'] == 'nginx')
+    assert nginx['third_party_repo'] is False
 
 
 def test_collect_packages_distinguishes_mariadb_from_mysql():
@@ -88,6 +155,11 @@ def test_collect_packages_uses_dpkg_version_for_mariadb_when_available():
     fake = FakeSSHExecutor(responses={
         'mysql --version': ('mysql  Ver 15.1 Distrib 10.11.6-MariaDB', ''),
         "dpkg-query -W -f='${Version}' mariadb-server": ('1:10.11.6-0+deb12u1', ''),
+        'apt-cache policy mariadb-server': (
+            'mariadb-server:\n  Installed: 1:10.11.6-0+deb12u1\n  Candidate: 1:10.11.6-0+deb12u1\n'
+            '  Version table:\n *** 1:10.11.6-0+deb12u1 500\n'
+            '        500 http://deb.debian.org/debian bookworm/main amd64 Packages\n'
+            '        100 /var/lib/dpkg/status\n', ''),
     })
     packages = collect_packages(fake)
     db_pkg = next(p for p in packages if p['name'] == 'mariadb')
@@ -140,46 +212,78 @@ def test_dpkg_version_returns_none_when_not_dpkg_installed():
 
 
 # ===========================================================================
-# _looks_like_third_party_repo_version — vendor-repo detection
+# _get_package_source_url / _is_official_distro_source — vendor-repo
+# detection via apt-cache policy (real repository URL, not a guess from
+# the version string's formatting)
 # ===========================================================================
 
-def test_third_party_detection_nginx_org_ppa_version():
-    """The exact real-world case: nginx.org's own apt repo, no 'ubuntu'
-    marker, tilde + release codename."""
-    from netaudit_pkg.checks.cve_audit import _looks_like_third_party_repo_version
-    assert _looks_like_third_party_repo_version('1.30.2-1~noble') is True
+def test_get_package_source_url_nginx_org_ppa():
+    """The exact real-world case: nginx.org's own apt repo."""
+    from netaudit_pkg.checks.cve_audit import _get_package_source_url
+    fake = FakeSSHExecutor(responses={
+        'apt-cache policy nginx': (_APT_POLICY_NGINX_PPA, ''),
+    })
+    assert _get_package_source_url(fake, 'nginx') == 'https://nginx.org/packages/ubuntu'
 
 
-def test_third_party_detection_native_ubuntu_version():
-    """A genuine native Ubuntu package revision contains 'ubuntu' - per
-    Ubuntu's own packaging documentation, this is the official marker for
-    "native package, not auto-synced from Debian"."""
-    from netaudit_pkg.checks.cve_audit import _looks_like_third_party_repo_version
-    assert _looks_like_third_party_repo_version('1.28.3-2ubuntu1.8') is False
+def test_get_package_source_url_native_ubuntu_archive():
+    from netaudit_pkg.checks.cve_audit import _get_package_source_url
+    fake = FakeSSHExecutor(responses={
+        'apt-cache policy nginx': (_APT_POLICY_NGINX_NATIVE_UBUNTU, ''),
+    })
+    assert _get_package_source_url(fake, 'nginx') == 'http://archive.ubuntu.com/ubuntu'
 
 
-def test_third_party_detection_native_debian_version():
-    """A plain Debian package revision has neither 'ubuntu' nor a
-    tilde - the ordinary '+debXXuY' backport-adjacent security-update
-    shape."""
-    from netaudit_pkg.checks.cve_audit import _looks_like_third_party_repo_version
-    assert _looks_like_third_party_repo_version('1:10.11.6-0+deb12u1') is False
+def test_get_package_source_url_native_debian_archive():
+    from netaudit_pkg.checks.cve_audit import _get_package_source_url
+    fake = FakeSSHExecutor(responses={
+        'apt-cache policy nginx': (_APT_POLICY_NGINX_NATIVE_DEBIAN, ''),
+    })
+    assert _get_package_source_url(fake, 'nginx') == 'http://deb.debian.org/debian'
 
 
-def test_third_party_detection_debian_backport_version():
-    """Debian backports use a tilde too ('~bpoN') - treated as
-    third-party-shaped here since the base-release security tracker
-    doesn't cover backports either, per this function's own docstring."""
-    from netaudit_pkg.checks.cve_audit import _looks_like_third_party_repo_version
-    assert _looks_like_third_party_repo_version('2.4.58-1~bpo12+1') is True
+def test_get_package_source_url_returns_none_when_not_installed():
+    from netaudit_pkg.checks.cve_audit import _get_package_source_url
+    fake = FakeSSHExecutor(responses={
+        'apt-cache policy nginx': ('nginx:\n  Installed: (none)\n  Candidate: 1.24.0-2ubuntu7\n', ''),
+    })
+    assert _get_package_source_url(fake, 'nginx') is None
 
 
-def test_third_party_detection_ubuntu_ppa_still_flagged_if_no_ubuntu_marker():
-    """A third-party PPA version targeting Ubuntu might still contain a
-    tilde + codename without the 'ubuntu' marker (e.g. a PPA maintainer's
-    own custom revision '2.1-1~jammy1') - still correctly flagged."""
-    from netaudit_pkg.checks.cve_audit import _looks_like_third_party_repo_version
-    assert _looks_like_third_party_repo_version('2.1-1~jammy1') is True
+def test_get_package_source_url_returns_none_on_empty_output():
+    from netaudit_pkg.checks.cve_audit import _get_package_source_url
+    fake = FakeSSHExecutor(responses={})
+    assert _get_package_source_url(fake, 'nginx') is None
+
+
+def test_is_official_distro_source_debian_domain():
+    from netaudit_pkg.checks.cve_audit import _is_official_distro_source
+    assert _is_official_distro_source('http://deb.debian.org/debian') is True
+    assert _is_official_distro_source('http://security.debian.org/debian-security') is True
+
+
+def test_is_official_distro_source_ubuntu_domain():
+    from netaudit_pkg.checks.cve_audit import _is_official_distro_source
+    assert _is_official_distro_source('http://archive.ubuntu.com/ubuntu') is True
+    assert _is_official_distro_source('http://security.ubuntu.com/ubuntu') is True
+
+
+def test_is_official_distro_source_vendor_repo():
+    from netaudit_pkg.checks.cve_audit import _is_official_distro_source
+    assert _is_official_distro_source('https://nginx.org/packages/ubuntu') is False
+
+
+def test_is_official_distro_source_ppa():
+    from netaudit_pkg.checks.cve_audit import _is_official_distro_source
+    assert _is_official_distro_source('https://ppa.launchpadcontent.net/git-core/ppa/ubuntu') is False
+
+
+def test_is_official_distro_source_none_is_not_official():
+    """Unknown source (couldn't determine at all) must NOT default to
+    'assume official' - that's the same optimistic-default mistake this
+    module's ecosystem-resolution fix eliminated elsewhere."""
+    from netaudit_pkg.checks.cve_audit import _is_official_distro_source
+    assert _is_official_distro_source(None) is False
 
 
 # ===========================================================================
@@ -690,6 +794,7 @@ def test_full_flow_third_party_repo_not_reported_as_ok(monkeypatch, isolated_db)
     fake = FakeSSHExecutor(responses={
         'nginx -v': ('nginx version: nginx/1.30.2', ''),
         "dpkg-query -W -f='${Version}' nginx": ('1.30.2-1~noble\n', ''),
+        'apt-cache policy nginx': (_APT_POLICY_NGINX_PPA, ''),
         "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="24.04"\n', ''),
     })
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
@@ -719,6 +824,7 @@ def test_full_flow_third_party_repo_with_actual_cve_still_reported(monkeypatch, 
     fake = FakeSSHExecutor(responses={
         'nginx -v': ('nginx version: nginx/1.30.2', ''),
         "dpkg-query -W -f='${Version}' nginx": ('1.30.2-1~noble\n', ''),
+        'apt-cache policy nginx': (_APT_POLICY_NGINX_PPA, ''),
         "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="24.04"\n', ''),
     })
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)

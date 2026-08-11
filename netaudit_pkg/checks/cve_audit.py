@@ -152,40 +152,99 @@ def _dpkg_version(ssh: SSHExecutor, dpkg_name: str) -> str | None:
     return out if out else None
 
 
-def _looks_like_third_party_repo_version(dpkg_version: str) -> bool:
-    """True if a dpkg version string looks like it came from a
-    non-distro-native repository (a vendor's own apt repo, a PPA, etc)
-    rather than the distro's own package archive, and so almost certainly
-    isn't tracked by that distro's security team - OSV's Debian/Ubuntu
-    ecosystem matching would silently produce an unreliable result for it.
+def _get_package_source_url(ssh: SSHExecutor, dpkg_name: str) -> str | None:
+    """Returns the apt repository URL a package's currently-installed
+    version actually came from (e.g. 'http://archive.ubuntu.com/ubuntu',
+    'https://nginx.org/packages/ubuntu'), or None if it can't be
+    determined - package not installed via dpkg, no matching entry in
+    `apt-cache policy` output (can happen if the local package cache is
+    stale relative to what's actually installed), etc.
 
-    The distinguishing signal is documented, not guessed: per Ubuntu's own
-    packaging documentation, a native Debian-derived Ubuntu package's
-    revision is marked by the literal substring 'ubuntu' (e.g.
-    '2.0-2ubuntu1' - "the marker suffix for a native package shall be
-    ubuntu"), and a tilde ('~') in the revision is "commonly used in PPAs
-    and backports" to sort before the version it's inserted ahead of
-    (e.g. nginx.org's own apt repo produces versions like
-    '1.30.2-1~noble' - no 'ubuntu' marker at all, just a tilde + release
-    codename). A plain Debian package's revision has neither concern: it
-    simply won't contain 'ubuntu', and Debian's own official archive
-    doesn't use tildes in ordinary releases either (Debian backports use
-    a different, still-official '~bpoN' pattern, which this function
-    treats as third-party-shaped too, since backports aren't covered by
-    the base-release security tracker either - the caller degrades to
-    'can't verify' rather than silently trusting a backport-shaped
-    version against non-backport OSV data).
+    Uses `apt-cache policy <pkg>`, which reports each available version
+    together with its priority and repository origin URL - the direct,
+    factual answer to "where did this package come from," as opposed to
+    inferring it from the version string's formatting (see this module's
+    git history: an earlier revision of this file guessed at third-party
+    origin from tilde/'ubuntu' markers in the version string per Ubuntu's
+    packaging conventions - a real signal, but indirect. `apt-cache
+    policy` reports the actual configured repository directly).
 
-    This is a heuristic, not a certainty - a distro could theoretically
-    use unconventional versioning that avoids all these markers. It
-    trades a small false-negative rate (an actual third-party version
-    that happens to look native) for catching the common, real cases
-    (vendor apt repos like nginx.org, docker.com, etc) without needing a
-    hardcoded list of known vendor repo URLs.
+    Only the installed version's line is used - apt-cache policy lists
+    every version APT knows about across all configured repositories
+    (including ones not currently installed), and this function must
+    report where the version actually running came from, not some other
+    candidate version that happens to be available.
     """
-    if 'ubuntu' in dpkg_version.lower():
+    out, _ = ssh.run(f'apt-cache policy {dpkg_name} 2>/dev/null')
+    lines = out.splitlines()
+
+    installed_version = None
+    for line in lines:
+        line = line.strip()
+        if line.startswith('Installed:'):
+            installed_version = line.split(':', 1)[1].strip()
+            break
+    if not installed_version or installed_version == '(none)':
+        return None
+
+    # `apt-cache policy` output shape (confirmed against real output, not
+    # assumed from the manual page's column description alone):
+    #  *** <version> <priority>        <- 1-space indent, '***' marks installed
+    #         <priority> <repo-url> <suite>/<component> <arch> Packages
+    #         ...possibly more source lines for the same version...
+    #      <next version> <priority>    <- 5-space indent, not installed
+    #         <priority> <repo-url> ...
+    # Version-header lines and their source lines are both indented, but
+    # by different amounts (5 or 8 spaces respectively in observed
+    # output) - a source line is reliably identified as one containing an
+    # http(s) URL, which no version-header line does, so that's the
+    # actual discriminator used below rather than counting spaces (more
+    # robust against minor formatting differences across apt versions).
+    in_installed_block = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        has_url = 'http://' in stripped or 'https://' in stripped
+        if not has_url:
+            # a version-header line (installed marked with a leading '***')
+            header = stripped[4:] if stripped.startswith('*** ') else stripped
+            in_installed_block = header.startswith(installed_version + ' ')
+            continue
+        if in_installed_block:
+            for part in stripped.split():
+                if part.startswith('http://') or part.startswith('https://'):
+                    return part
+    return None
+
+
+# Domain suffixes that are the distro's own official archive/security
+# infrastructure - packages sourced from these are covered by that
+# distro's security tracking (Debian Security Tracker / Ubuntu Security
+# Notices), so OSV's Debian/Ubuntu ecosystem matching is expected to have
+# real data for them. Any other domain (nginx.org, docker.com, a PPA on
+# launchpadcontent.net, etc) is a vendor's own repository, which that
+# distro's security team does not track regardless of how legitimate or
+# official the vendor's own repo is.
+_OFFICIAL_DISTRO_ARCHIVE_DOMAINS = ('.debian.org', '.ubuntu.com')
+
+
+def _is_official_distro_source(source_url: str | None) -> bool:
+    """True if source_url (from _get_package_source_url()) points at the
+    distro's own official package archive - see
+    _OFFICIAL_DISTRO_ARCHIVE_DOMAINS above for exactly which domains
+    count. Returns False (not officially tracked) for None too - if the
+    source couldn't be determined at all, this function does not assume
+    it's fine; the caller treats "unknown source" the same as "known
+    third-party source" for safety, since guessing "probably official"
+    when unsure is the same optimistic-default mistake this module's
+    ecosystem-resolution fix (see collect_os_release()/_resolve_ecosystem())
+    was written to eliminate elsewhere in this file.
+    """
+    if not source_url:
         return False
-    return '~' in dpkg_version
+    host = source_url.split('/')[2] if source_url.count('/') >= 2 else source_url
+    return any(host.endswith(suffix) for suffix in _OFFICIAL_DISTRO_ARCHIVE_DOMAINS)
 
 
 def collect_packages(ssh: SSHExecutor) -> list[dict]:
@@ -202,7 +261,7 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
 
     `third_party_repo` (bool) flags packages whose dpkg version looks like
     it came from a vendor's own apt repo rather than the distro's own
-    archive - see _looks_like_third_party_repo_version()'s docstring. This
+    archive - see _is_official_distro_source()'s docstring. This
     was found running this check against a real server: nginx installed
     from nginx.org's official apt repo showed version '1.30.2-1~noble' -
     upstream 1.30.2 is actually below the CVE-2026-42533 fix (1.30.4), but
@@ -219,19 +278,25 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
     upstream_ver = _parse_version(out)
     if upstream_ver:
         dpkg_ver = _dpkg_version(ssh, 'nginx')
+        source_url = _get_package_source_url(ssh, 'nginx') if dpkg_ver else None
         packages.append({'name': 'nginx', 'version': dpkg_ver or upstream_ver,
                           'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
-                          'third_party_repo': bool(dpkg_ver) and _looks_like_third_party_repo_version(dpkg_ver),
+                          'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(source_url),
                           'raw': out.strip()})
 
     # --- OpenSSH ---
     out, _ = ssh.run('ssh -V 2>&1')
     upstream_ver = _parse_version(out)
     if upstream_ver:
-        dpkg_ver = _dpkg_version(ssh, 'openssh-client') or _dpkg_version(ssh, 'openssh-server')
+        openssh_dpkg_pkg = 'openssh-client'
+        dpkg_ver = _dpkg_version(ssh, openssh_dpkg_pkg)
+        if not dpkg_ver:
+            openssh_dpkg_pkg = 'openssh-server'
+            dpkg_ver = _dpkg_version(ssh, openssh_dpkg_pkg)
+        source_url = _get_package_source_url(ssh, openssh_dpkg_pkg) if dpkg_ver else None
         packages.append({'name': 'openssh', 'version': dpkg_ver or upstream_ver,
                           'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
-                          'third_party_repo': bool(dpkg_ver) and _looks_like_third_party_repo_version(dpkg_ver),
+                          'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(source_url),
                           'raw': out.strip()})
 
     # --- MySQL / MariaDB ---
@@ -241,9 +306,10 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
         name = 'mariadb' if 'mariadb' in out.lower() else 'mysql'
         dpkg_pkg = 'mariadb-server' if name == 'mariadb' else 'mysql-server'
         dpkg_ver = _dpkg_version(ssh, dpkg_pkg)
+        source_url = _get_package_source_url(ssh, dpkg_pkg) if dpkg_ver else None
         packages.append({'name': name, 'version': dpkg_ver or upstream_ver,
                           'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
-                          'third_party_repo': bool(dpkg_ver) and _looks_like_third_party_repo_version(dpkg_ver),
+                          'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(source_url),
                           'raw': out.strip()})
 
     # --- PHP ---
@@ -539,18 +605,26 @@ def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> 
                 # A resolved ecosystem query came back empty, but this
                 # package's dpkg version looks like it came from a
                 # vendor's own apt repo rather than the distro's archive
-                # (see _looks_like_third_party_repo_version()'s
-                # docstring) - the distro's security team almost
-                # certainly doesn't track this exact package/version at
-                # all, so an empty OSV result here means "no data", not
-                # "verified clean". Reporting this as plain 'ok' would be
-                # the same false-negative shape as the module's original
+                # (see _is_official_distro_source()'s
+                # docstring) - e.g. nginx installed from nginx.org's own
+                # official apt repo, a legitimate and nginx-recommended
+                # install method, not a red flag in itself. The point
+                # isn't that the source is untrustworthy - it's that the
+                # distro's security team (Ubuntu, Debian, ...) doesn't
+                # track that vendor's package/version at all, so an
+                # empty OSV result here means "no data", not "verified
+                # clean". Reporting this as plain 'ok' would be the same
+                # false-negative shape as the module's original
                 # Debian-hardcoding bug: a technically-correct-looking
-                # query silently produces a misleading "all clear".
+                # query silently produces a misleading "all clear". The
+                # user-facing text below is deliberately neutral (not
+                # "third-party"/"untrusted") - it names the actual gap
+                # (distro tracker coverage), not a judgment on the
+                # package's origin.
                 findings.append({
                     'package': p['name'], 'version': p['version'],
                     'severity': 'third_party_repo', 'cve': None,
-                    'title': 'installed from a third-party repository — CVE tracking unreliable',
+                    'title': 'not tracked by the distro security team — checked separately',
                 })
                 counts['third_party_repo'] += 1
                 continue
