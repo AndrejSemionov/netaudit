@@ -152,99 +152,70 @@ def _dpkg_version(ssh: SSHExecutor, dpkg_name: str) -> str | None:
     return out if out else None
 
 
-def _get_package_source_url(ssh: SSHExecutor, dpkg_name: str) -> str | None:
-    """Returns the apt repository URL a package's currently-installed
-    version actually came from (e.g. 'http://archive.ubuntu.com/ubuntu',
-    'https://nginx.org/packages/ubuntu'), or None if it can't be
-    determined - package not installed via dpkg, no matching entry in
-    `apt-cache policy` output (can happen if the local package cache is
-    stale relative to what's actually installed), etc.
+def _get_package_origin(ssh: SSHExecutor, dpkg_name: str) -> str | None:
+    """Returns a package's 'Origin' field (e.g. 'Ubuntu', 'Debian') via
+    `apt-cache show`, or None if it can't be determined - package not
+    installed via dpkg, no matching cache entry, etc.
 
-    Uses `apt-cache policy <pkg>`, which reports each available version
-    together with its priority and repository origin URL - the direct,
-    factual answer to "where did this package come from," as opposed to
-    inferring it from the version string's formatting (see this module's
-    git history: an earlier revision of this file guessed at third-party
-    origin from tilde/'ubuntu' markers in the version string per Ubuntu's
-    packaging conventions - a real signal, but indirect. `apt-cache
-    policy` reports the actual configured repository directly).
+    This is the direct, distro-independent factual answer to "is this
+    package tracked by the distro's own security team" - the Origin
+    field is set by whoever built the repository's package index and
+    names the distro/vendor that produced it, completely independent of
+    which URL/mirror the package was actually fetched from. This matters
+    in practice: a server using a regional or hosting-provider mirror
+    (e.g. Hetzner's own Ubuntu mirror at mirror.hetzner.com) still gets
+    'Origin: Ubuntu' on every genuinely-Ubuntu package, so checking the
+    Origin field works correctly regardless of which mirror is
+    configured - unlike an earlier version of this function that checked
+    the repository URL's domain against a hardcoded list of official
+    domains (archive.ubuntu.com, deb.debian.org, ...), which incorrectly
+    flagged mirror-sourced native packages as third-party the first time
+    it was tested against a real server using a mirror.
 
-    Only the installed version's line is used - apt-cache policy lists
-    every version APT knows about across all configured repositories
-    (including ones not currently installed), and this function must
-    report where the version actually running came from, not some other
-    candidate version that happens to be available.
+    Confirmed empirically (not assumed from documentation) that `apt-cache
+    show <pkg>` prints an `Origin:` line for a genuinely-Ubuntu package
+    even when the configured repository is a third-party mirror - the
+    mirror only changes where the bytes are fetched from, not what the
+    package's own metadata says about who produced it.
+
+    A package can have multiple Origin lines if multiple repository
+    entries provide it (e.g. both -updates and -security pools) - this
+    returns the first, since they're expected to agree on the same
+    distro/vendor for any given package.
     """
-    out, _ = ssh.run(f'apt-cache policy {dpkg_name} 2>/dev/null')
-    lines = out.splitlines()
-
-    installed_version = None
-    for line in lines:
+    out, _ = ssh.run(f'apt-cache show {dpkg_name} 2>/dev/null')
+    for line in out.splitlines():
         line = line.strip()
-        if line.startswith('Installed:'):
-            installed_version = line.split(':', 1)[1].strip()
-            break
-    if not installed_version or installed_version == '(none)':
-        return None
-
-    # `apt-cache policy` output shape (confirmed against real output, not
-    # assumed from the manual page's column description alone):
-    #  *** <version> <priority>        <- 1-space indent, '***' marks installed
-    #         <priority> <repo-url> <suite>/<component> <arch> Packages
-    #         ...possibly more source lines for the same version...
-    #      <next version> <priority>    <- 5-space indent, not installed
-    #         <priority> <repo-url> ...
-    # Version-header lines and their source lines are both indented, but
-    # by different amounts (5 or 8 spaces respectively in observed
-    # output) - a source line is reliably identified as one containing an
-    # http(s) URL, which no version-header line does, so that's the
-    # actual discriminator used below rather than counting spaces (more
-    # robust against minor formatting differences across apt versions).
-    in_installed_block = False
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        has_url = 'http://' in stripped or 'https://' in stripped
-        if not has_url:
-            # a version-header line (installed marked with a leading '***')
-            header = stripped[4:] if stripped.startswith('*** ') else stripped
-            in_installed_block = header.startswith(installed_version + ' ')
-            continue
-        if in_installed_block:
-            for part in stripped.split():
-                if part.startswith('http://') or part.startswith('https://'):
-                    return part
+        if line.startswith('Origin:'):
+            origin = line.split(':', 1)[1].strip()
+            return origin if origin else None
     return None
 
 
-# Domain suffixes that are the distro's own official archive/security
-# infrastructure - packages sourced from these are covered by that
-# distro's security tracking (Debian Security Tracker / Ubuntu Security
-# Notices), so OSV's Debian/Ubuntu ecosystem matching is expected to have
-# real data for them. Any other domain (nginx.org, docker.com, a PPA on
-# launchpadcontent.net, etc) is a vendor's own repository, which that
-# distro's security team does not track regardless of how legitimate or
-# official the vendor's own repo is.
-_OFFICIAL_DISTRO_ARCHIVE_DOMAINS = ('.debian.org', '.ubuntu.com')
+# Origin values that are a distro's own official archive - packages
+# carrying one of these are covered by that distro's security tracking
+# (Debian Security Tracker / Ubuntu Security Notices), so OSV's
+# Debian/Ubuntu ecosystem matching is expected to have real data for
+# them regardless of which mirror the package was actually fetched
+# through. Any other Origin value (nginx.org's own repo doesn't set this
+# field the same way, a PPA sets 'LP-PPA-<name>', etc) is a vendor's own
+# repository, which that distro's security team does not track
+# regardless of how legitimate or official the vendor's own repo is.
+_OFFICIAL_DISTRO_ORIGINS = ('Ubuntu', 'Debian')
 
 
-def _is_official_distro_source(source_url: str | None) -> bool:
-    """True if source_url (from _get_package_source_url()) points at the
-    distro's own official package archive - see
-    _OFFICIAL_DISTRO_ARCHIVE_DOMAINS above for exactly which domains
-    count. Returns False (not officially tracked) for None too - if the
-    source couldn't be determined at all, this function does not assume
-    it's fine; the caller treats "unknown source" the same as "known
-    third-party source" for safety, since guessing "probably official"
+def _is_official_distro_source(origin: str | None) -> bool:
+    """True if origin (from _get_package_origin()) is one of the distro's
+    own official archive origins - see _OFFICIAL_DISTRO_ORIGINS above.
+    Returns False (not officially tracked) for None too - if the origin
+    couldn't be determined at all, this function does not assume it's
+    fine; the caller treats "unknown origin" the same as "known
+    third-party origin" for safety, since guessing "probably official"
     when unsure is the same optimistic-default mistake this module's
     ecosystem-resolution fix (see collect_os_release()/_resolve_ecosystem())
     was written to eliminate elsewhere in this file.
     """
-    if not source_url:
-        return False
-    host = source_url.split('/')[2] if source_url.count('/') >= 2 else source_url
-    return any(host.endswith(suffix) for suffix in _OFFICIAL_DISTRO_ARCHIVE_DOMAINS)
+    return origin in _OFFICIAL_DISTRO_ORIGINS
 
 
 def collect_packages(ssh: SSHExecutor) -> list[dict]:
@@ -278,10 +249,10 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
     upstream_ver = _parse_version(out)
     if upstream_ver:
         dpkg_ver = _dpkg_version(ssh, 'nginx')
-        source_url = _get_package_source_url(ssh, 'nginx') if dpkg_ver else None
+        origin = _get_package_origin(ssh, 'nginx') if dpkg_ver else None
         packages.append({'name': 'nginx', 'version': dpkg_ver or upstream_ver,
                           'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
-                          'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(source_url),
+                          'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(origin),
                           'raw': out.strip()})
 
     # --- OpenSSH ---
@@ -293,10 +264,10 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
         if not dpkg_ver:
             openssh_dpkg_pkg = 'openssh-server'
             dpkg_ver = _dpkg_version(ssh, openssh_dpkg_pkg)
-        source_url = _get_package_source_url(ssh, openssh_dpkg_pkg) if dpkg_ver else None
+        origin = _get_package_origin(ssh, openssh_dpkg_pkg) if dpkg_ver else None
         packages.append({'name': 'openssh', 'version': dpkg_ver or upstream_ver,
                           'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
-                          'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(source_url),
+                          'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(origin),
                           'raw': out.strip()})
 
     # --- MySQL / MariaDB ---
@@ -306,10 +277,10 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
         name = 'mariadb' if 'mariadb' in out.lower() else 'mysql'
         dpkg_pkg = 'mariadb-server' if name == 'mariadb' else 'mysql-server'
         dpkg_ver = _dpkg_version(ssh, dpkg_pkg)
-        source_url = _get_package_source_url(ssh, dpkg_pkg) if dpkg_ver else None
+        origin = _get_package_origin(ssh, dpkg_pkg) if dpkg_ver else None
         packages.append({'name': name, 'version': dpkg_ver or upstream_ver,
                           'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
-                          'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(source_url),
+                          'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(origin),
                           'raw': out.strip()})
 
     # --- PHP ---
