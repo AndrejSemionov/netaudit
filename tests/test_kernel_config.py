@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from netaudit_pkg.kernel_config import KernelConfig, _parse_sysctl_a, collect_kernel_config
+from netaudit_pkg.kernel_config import _parse_sysctl_a, collect_kernel_config
 
 
 # ===========================================================================
