@@ -302,20 +302,28 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
                           'raw': out.strip().splitlines()[0] if out.strip() else ''})
 
     # --- kernel ---
-    # Deliberately still uses `uname -r` (upstream/ABI version), not
-    # dpkg-query - the installed package name for the running kernel is
-    # `linux-image-$(uname -r)` (or a meta-package like `linux-image-amd64`
-    # that doesn't carry the real version itself), resolving which one
-    # applies is a second, separate problem from this fix's scope
-    # (Debian-family package version precision for nginx/openssh/mariadb/
-    # mysql). Not addressed here to avoid conflating two different fixes
-    # in one change - a future revision can add kernel-specific dpkg
-    # resolution as its own deliberate step.
+    # linux-image-<uname -r> is the running kernel's dpkg package name -
+    # confirmed the same ABI-vs-package-version gap exists here as it did
+    # for nginx/openssh/mariadb before those were fixed: `uname -r`
+    # reports the kernel's ABI/release string (e.g. '6.8.0-124-generic'),
+    # which is NOT the same as the dpkg package's own version (e.g.
+    # '6.8.0-124.124' or similar, with its own build/security-patch
+    # revision) - a documented, well-known distinction (Debian's own
+    # kernel-version documentation: "3.16.0-4 is *not* the kernel version
+    # but the ABI name used"). OSV's Ubuntu/Debian ecosystem records
+    # compare against the dpkg package version, same as every other
+    # Debian-family package this module collects - resolved here the
+    # same way, via dpkg-query on the specific linux-image package for
+    # the currently-running kernel.
     out, _ = ssh.run('uname -r')
-    if out.strip():
-        packages.append({'name': 'linux', 'version': out.strip(),
-                          'upstream_version': out.strip(), 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
-                          'third_party_repo': False, 'raw': out.strip()})
+    kernel_release = out.strip()
+    if kernel_release:
+        dpkg_ver = _dpkg_version(ssh, f'linux-image-{kernel_release}')
+        origin = _get_package_origin(ssh, f'linux-image-{kernel_release}', dpkg_ver) if dpkg_ver else None
+        packages.append({'name': 'linux', 'version': dpkg_ver or kernel_release,
+                          'upstream_version': kernel_release, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
+                          'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(origin),
+                          'raw': kernel_release})
 
     # --- WordPress (if wp-config.php is found in standard locations) ---
     out, _ = ssh.run("find /var/www -maxdepth 3 -iname 'wp-includes' -type d 2>/dev/null | head -1")

@@ -153,11 +153,46 @@ def test_collect_packages_uses_dpkg_version_for_mariadb_when_available():
     # NOTE: upstream_version here reflects a pre-existing, separate bug in
     # _parse_version() - `mysql --version` prints the CLIENT utility
     # version (15.1) before the server version (10.11.6-MariaDB), and the
-    # regex takes the first match. Not this fix's scope to correct (see
-    # collect_packages' `linux` comment for the same "one fix at a time"
-    # reasoning) - documented here so this isn't mistaken for a new
+    # regex takes the first match. Not this fix's scope to correct - documented here so this isn't mistaken for a new
     # regression introduced by the dpkg-version change.
     assert db_pkg['upstream_version'] == '15.1'
+
+
+def test_collect_packages_uses_dpkg_version_for_kernel_when_available():
+    """Regression test for the kernel-specific version of the same fix
+    already applied to nginx/openssh/mariadb: `uname -r` reports the
+    ABI/release string, not the dpkg package's own version - Debian's own
+    documentation is explicit that these are not the same thing ('3.16.0-4
+    is *not* the kernel version but the ABI name used'). The dpkg version
+    of linux-image-<uname -r> is what OSV's Ubuntu/Debian ecosystem
+    records actually compare against."""
+    fake = FakeSSHExecutor(responses={
+        'uname -r': ('6.8.0-124-generic\n', ''),
+        "dpkg-query -W -f='${Version}' linux-image-6.8.0-124-generic": ('6.8.0-124.124\n', ''),
+        'apt-cache show linux-image-6.8.0-124-generic=6.8.0-124.124': (
+            'Package: linux-image-6.8.0-124-generic\nOrigin: Ubuntu\n', ''),
+    })
+    packages = collect_packages(fake)
+    kernel = next(p for p in packages if p['name'] == 'linux')
+    assert kernel['version'] == '6.8.0-124.124'
+    assert kernel['upstream_version'] == '6.8.0-124-generic'
+    assert kernel['third_party_repo'] is False
+
+
+def test_collect_packages_kernel_falls_back_to_uname_without_dpkg():
+    """A custom-built, cloud-provider, or otherwise non-dpkg-tracked
+    kernel (no matching linux-image-<release> package in dpkg) falls back
+    to the uname -r string for OSV matching, same fallback shape every
+    other Debian-family package in this module already has - a less
+    precise match beats no match at all."""
+    fake = FakeSSHExecutor(responses={
+        'uname -r': ('6.8.0-124-generic\n', ''),
+    })
+    packages = collect_packages(fake)
+    kernel = next(p for p in packages if p['name'] == 'linux')
+    assert kernel['version'] == '6.8.0-124-generic'
+    assert kernel['upstream_version'] == '6.8.0-124-generic'
+    assert kernel['third_party_repo'] is False
 
 
 def test_collect_packages_finds_wordpress():
