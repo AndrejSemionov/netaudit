@@ -502,9 +502,23 @@ def fetch_vuln_details(vuln_id: str) -> dict:
         return {'id': vuln_id, 'error': 'failed to fetch details'}
 
     severity = None
+    vendor_priority = None
     for sev in data.get('severity', []):
         if sev.get('type') == 'CVSS_V3':
             severity = sev.get('score')
+        elif sev.get('type') in ('Ubuntu', 'Debian'):
+            # Distro-vendor-assigned priority (negligible/low/medium/high/
+            # critical for Ubuntu) - kept separate from the CVSS score
+            # because the two can and do disagree, and when they do, the
+            # vendor's own assessment for their own distro is the more
+            # accurate one to act on. Confirmed via Ubuntu's own published
+            # guidance: "If the affected package is maintained by an OS
+            # vendor, the severity as indicated by the vendor is used and
+            # not the severity determined by NVD" (Canonical's own
+            # documentation on CVE prioritisation - this is standard
+            # practice other vulnerability scanners already follow, not
+            # a netaudit-specific policy).
+            vendor_priority = sev.get('score')
 
     fixed_versions = []
     for aff in data.get('affected', []):
@@ -517,6 +531,7 @@ def fetch_vuln_details(vuln_id: str) -> dict:
         'id': vuln_id,
         'summary': data.get('summary') or data.get('details', '')[:200],
         'severity': severity,
+        'vendor_priority': vendor_priority,
         'fixed_versions': sorted(set(fixed_versions)),
         'references': [r['url'] for r in data.get('references', [])[:3]],
     }
@@ -619,15 +634,37 @@ def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> 
             continue
         for vid in ids[:10]:  # cap it so we don't DDoS OSV for a package with a hundred CVEs
             details = fetch_vuln_details(vid)
-            score = details.get('severity')
-            try:
-                score_f = float(score.split('/')[0]) if score else None
-            except (ValueError, AttributeError):
-                score_f = None
-            if score_f is not None:
-                sev = 'critical' if score_f >= 9 else 'high' if score_f >= 7 else 'medium' if score_f >= 4 else 'low'
+            vendor_priority = details.get('vendor_priority')
+            if vendor_priority:
+                # Prefer the distro's own priority over CVSS when both are
+                # known - per Ubuntu's own published guidance, the vendor's
+                # assessment for their own distro is the more accurate one
+                # (see fetch_vuln_details()'s docstring comment for the
+                # full reasoning and source). This is also what fixes the
+                # historical-noise problem found running this check
+                # against a real Ubuntu 26.04 server: Ubuntu's own CVE
+                # tracker carries many old kernel CVE entries marked
+                # 'negligible'/'low' priority ("For informational purposes
+                # only. We recommend not to cherry-pick updates.") that
+                # OSV's version-range data alone doesn't distinguish from
+                # an actually-actionable finding - CVSS-only scoring
+                # treated all of them as at least 'medium', which buried
+                # the few genuinely severe/actionable findings in a wall
+                # of Ubuntu's own already-triaged-as-low-priority noise.
+                sev = {
+                    'negligible': 'low', 'low': 'low', 'medium': 'medium',
+                    'high': 'high', 'critical': 'critical',
+                }.get(vendor_priority.lower(), 'medium')
             else:
-                sev = 'medium'  # unknown score - don't downplay it
+                score = details.get('severity')
+                try:
+                    score_f = float(score.split('/')[0]) if score else None
+                except (ValueError, AttributeError):
+                    score_f = None
+                if score_f is not None:
+                    sev = 'critical' if score_f >= 9 else 'high' if score_f >= 7 else 'medium' if score_f >= 4 else 'low'
+                else:
+                    sev = 'medium'  # unknown score - don't downplay it
             counts[sev] = counts.get(sev, 0) + 1
             findings.append({
                 'package': p['name'], 'version': p['version'], 'severity': sev,

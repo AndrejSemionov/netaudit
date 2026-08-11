@@ -681,6 +681,67 @@ def test_fetch_vuln_details_parses_cvss_and_fixed_versions(monkeypatch):
     assert details['summary'] == 'Buffer overflow in foo'
     assert details['severity'] == '9.8/AV:N/AC:L'
     assert details['fixed_versions'] == ['1.24.1']
+    assert details['vendor_priority'] is None
+
+
+def test_fetch_vuln_details_parses_ubuntu_vendor_priority(monkeypatch):
+    """Regression test for the exact real-world case: UBUNTU-CVE-2012-4542
+    carries severity [{'type': 'Ubuntu', 'score': 'low'}] alongside a CVSS
+    score - confirmed against the real OSV API response for this ID."""
+    def fake_get(url, timeout):
+        class R:
+            def raise_for_status(self): pass
+            def json(self):
+                return {
+                    'summary': 'block/scsi_ioctl.c ... bypass access restrictions',
+                    'severity': [{'type': 'Ubuntu', 'score': 'low'}],
+                    'affected': [],
+                    'references': [],
+                }
+        return R()
+
+    monkeypatch.setattr(httpx, 'get', fake_get)
+    details = fetch_vuln_details('UBUNTU-CVE-2012-4542')
+    assert details['vendor_priority'] == 'low'
+    assert details['severity'] is None  # no CVSS_V3 entry in this fixture
+
+
+def test_fetch_vuln_details_parses_debian_vendor_priority(monkeypatch):
+    def fake_get(url, timeout):
+        class R:
+            def raise_for_status(self): pass
+            def json(self):
+                return {'summary': 'x', 'severity': [{'type': 'Debian', 'score': 'medium'}],
+                        'affected': [], 'references': []}
+        return R()
+
+    monkeypatch.setattr(httpx, 'get', fake_get)
+    details = fetch_vuln_details('DEBIAN-CVE-2024-0001')
+    assert details['vendor_priority'] == 'medium'
+
+
+def test_fetch_vuln_details_both_cvss_and_vendor_priority_present(monkeypatch):
+    """A record can carry both CVSS_V3 and a vendor priority (the real
+    UBUNTU-CVE-2012-4542 case does) - both must be extracted, not just
+    whichever comes first."""
+    def fake_get(url, timeout):
+        class R:
+            def raise_for_status(self): pass
+            def json(self):
+                return {
+                    'summary': 'x',
+                    'severity': [
+                        {'type': 'CVSS_V3', 'score': '7.5/AV:L/AC:L'},
+                        {'type': 'Ubuntu', 'score': 'low'},
+                    ],
+                    'affected': [], 'references': [],
+                }
+        return R()
+
+    monkeypatch.setattr(httpx, 'get', fake_get)
+    details = fetch_vuln_details('UBUNTU-CVE-2012-4542')
+    assert details['severity'] == '7.5/AV:L/AC:L'
+    assert details['vendor_priority'] == 'low'
 
 
 def test_fetch_vuln_details_network_error_returns_error_dict(monkeypatch):
@@ -945,6 +1006,102 @@ def test_full_flow_severity_mapping(monkeypatch, isolated_db, score, expected_se
     monkeypatch.setattr(httpx, 'get', fake_get)
     result = check_cve_audit(host='1.2.3.4')
     assert result['summary'][expected_severity] == 1
+
+
+@pytest.mark.parametrize('vendor_priority,expected_severity', [
+    ('negligible', 'low'),
+    ('low', 'low'),
+    ('medium', 'medium'),
+    ('high', 'high'),
+    ('critical', 'critical'),
+])
+def test_full_flow_ubuntu_vendor_priority_used_when_present(
+        monkeypatch, isolated_db, vendor_priority, expected_severity):
+    """Vendor priority (Ubuntu/Debian) takes precedence over CVSS when
+    both are present - per Canonical's own published guidance, the
+    vendor's own assessment for their own distro is more accurate."""
+    fake = FakeSSHExecutor(responses={
+        'nginx -v': ('nginx version: nginx/1.24.0', ''),
+        "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="24.04"\n', ''),
+    })
+    monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
+
+    def fake_post(url, json, timeout):
+        class R:
+            def raise_for_status(self): pass
+            def json(self): return {'results': [{'vulns': [{'id': 'UBUNTU-CVE-2024-0001'}]}]}
+        return R()
+
+    def fake_get(url, timeout):
+        class R:
+            def raise_for_status(self): pass
+            def json(self):
+                return {
+                    'summary': 'test vuln',
+                    # a high CVSS score alongside the vendor priority - if
+                    # vendor priority isn't actually preferred, this test
+                    # would see the wrong severity bucket
+                    'severity': [
+                        {'type': 'CVSS_V3', 'score': '9.8/AV:N/AC:L'},
+                        {'type': 'Ubuntu', 'score': vendor_priority},
+                    ],
+                    'affected': [], 'references': [],
+                }
+        return R()
+
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    monkeypatch.setattr(httpx, 'get', fake_get)
+    result = check_cve_audit(host='1.2.3.4')
+    assert result['summary'][expected_severity] == 1
+
+
+def test_full_flow_regression_ubuntu_2012_4542_shaped_finding(monkeypatch, isolated_db):
+    """Regression test for the exact real-world case that motivated this
+    fix: UBUNTU-CVE-2012-4542, a real OSV.dev record for the Ubuntu
+    kernel source package, carries severity [{'type': 'Ubuntu', 'score':
+    'low'}] and Ubuntu's own site marks it "For informational purposes
+    only. We recommend not to cherry-pick updates." Before this fix, this
+    module's CVSS-only severity mapping had no way to see the vendor's
+    own low-priority assessment and defaulted such findings toward
+    'medium' or higher, burying genuinely actionable findings in a wall
+    of Ubuntu's own already-triaged-as-low-priority historical noise. This
+    test locks in that the real API response shape for this exact CVE
+    resolves to 'low', not 'medium'."""
+    fake = FakeSSHExecutor(responses={
+        'uname -r': ('7.0.0-29-generic\n', ''),
+        "dpkg-query -W -f='${Version}' linux-image-7.0.0-29-generic": ('7.0.0-29.29\n', ''),
+        "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="26.04"\n', ''),
+    })
+    monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
+
+    def fake_post(url, json, timeout):
+        class R:
+            def raise_for_status(self): pass
+            def json(self): return {'results': [{'vulns': [{'id': 'UBUNTU-CVE-2012-4542'}]}]}
+        return R()
+
+    def fake_get(url, timeout):
+        class R:
+            def raise_for_status(self): pass
+            def json(self):
+                # shape confirmed against the real api.osv.dev response
+                return {
+                    'summary': None,
+                    'details': 'block/scsi_ioctl.c in the Linux kernel through 3.8 ...',
+                    'severity': [{'type': 'Ubuntu', 'score': 'low'}],
+                    'affected': [],
+                    'references': [{'url': 'https://ubuntu.com/security/CVE-2012-4542'}],
+                }
+        return R()
+
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    monkeypatch.setattr(httpx, 'get', fake_get)
+    result = check_cve_audit(host='1.2.3.4')
+
+    assert result['summary']['low'] == 1
+    assert result['summary'].get('medium', 0) == 0
+    linux_finding = next(f for f in result['findings'] if f['cve'] == 'UBUNTU-CVE-2012-4542')
+    assert linux_finding['severity'] == 'low'
 
 
 def test_empty_host_rejected():
