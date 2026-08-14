@@ -277,13 +277,14 @@ python3 netaudit.py run aide_check --host 1.2.3.4 --user root --mode check
 
 ## Checks
 
-28 checks across 6 categories: network (mtr, tcptraceroute, ping, dig, arping),
+29 checks across 6 categories: network (mtr, tcptraceroute, ping, dig, arping),
 site (ssl, http, security headers, external web audit, SQL injection, DNS audit,
 Certificate Transparency monitoring), security (open ports, firewall, CVE audit,
 data breach check), performance (CPU/RAM/disk, iperf3), server via SSH (SSH audit,
-full security audit, Lynis hardening audit, systemd sandboxing audit, rootkit check,
-file integrity monitoring, backup verification, Docker container audit), traffic
-capture (tshark, MikroTik) with threat scoring of destinations.
+full security audit, Lynis hardening audit, systemd sandboxing audit, kernel sysctl
+hardening audit, rootkit check, file integrity monitoring, backup verification,
+Docker container audit), traffic capture (tshark, MikroTik) with threat scoring of
+destinations.
 
 **Lynis audit** (`lynis_audit`, SSH) — runs `lynis audit system` on the remote host and parses
 `/var/log/lynis-report.dat`: hardening index (0–100), warnings mapped to `high` severity,
@@ -303,6 +304,17 @@ official overall exposure score (0.0–10.0) and predicate (OK/MEDIUM/EXPOSED/UN
 second plain-text invocation, since `--json=short` doesn't expose the values needed to
 recompute that score exactly. Defaults to `nginx.service` but works with any systemd unit.
 Read-only; requires systemd >= 246 (Ubuntu 20.04+, Debian 11+) on the target.
+
+**Kernel sysctl hardening audit** (`kernel_hardening`, SSH) — reads the running kernel's
+sysctl values via `sysctl -a` (sudo required for a complete, error-free read) and scores 16
+controls: ASLR, kernel pointer/dmesg exposure, IP/IPv6 forwarding, ICMP redirect handling,
+reverse-path filtering, SYN flood protection, and SUID core-dump safety. Two controls
+(`rp_filter`, `kptr_restrict`) accept a range of values as equally valid rather than a single
+exact match; `fs.suid_dumpable` is graded (not binary) since its three possible values
+represent genuinely different security postures, not just "more" or "less" secure. No
+router-role auto-detection in this version — a genuine NAT/router host will legitimately
+score lower on the three forwarding-related controls; see `docs/checks/kernel_hardening.md`
+for the full control list and scoring rationale. Read-only.
 
 ## Security
 

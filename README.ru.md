@@ -296,7 +296,7 @@ python3 netaudit.py run aide_check --host 1.2.3.4 --user root --mode check
 | Сайт | ssl (openssl s_client), http (curl-тайминги по фазам), security_headers |
 | Безопасность | ports (ss), firewall (ufw/nft) |
 | Производительность | performance (CPU/RAM/диск), iperf (пропускная способность) |
-| Сервер | ssh_audit, server_audit (полный SSH-аудит), lynis_audit, systemd_hardening (sandboxing systemd-юнита), rootkit_check, aide_check, backup_check, docker_audit |
+| Сервер | ssh_audit, server_audit (полный SSH-аудит), lynis_audit, systemd_hardening (sandboxing systemd-юнита), kernel_hardening (sysctl-харденинг ядра), rootkit_check, aide_check, backup_check, docker_audit |
 
 **tcptraceroute** — ключевой для споров с ISP: идёт TCP SYN-пакетами (как веб-трафик),
 опровергает отговорку «у нас просто ICMP так настроен».
@@ -413,6 +413,22 @@ Lynis пропускает, о чём плагин честно предупре
 По умолчанию проверяет `nginx.service`, но работает с любым systemd-юнитом (mysql, fail2ban,
 свой сервис и т.д.) — имя юнита задаётся параметром. Read-only, требует systemd >= 246
 (Ubuntu 20.04+, Debian 11+) на целевом сервере.
+
+### Аудит sysctl-харденинга ядра
+
+Плагин `kernel_hardening` — по SSH читает значения sysctl запущенного ядра через `sysctl -a`
+(нужен sudo для полного, без ошибок доступа, чтения) и оценивает 16 контролов: ASLR, скрытие
+kernel-указателей/dmesg, IPv4/IPv6 forwarding, обработку ICMP redirect, reverse-path
+filtering, защиту от SYN flood и безопасность core dump'ов для SUID-процессов.
+
+Два контрола (`rp_filter`, `kptr_restrict`) допускают несколько равнозначно валидных значений
+вместо жёсткого точного совпадения; `fs.suid_dumpable` оценивается не бинарно, а
+градуированно — три возможных значения этого параметра действительно означают разные уровни
+защищённости, а не просто «больше/меньше безопасно».
+
+В этой версии нет авто-детекции роли хоста (роутер/NAT) — реальный NAT-роутер закономерно
+получит более низкую оценку по трём forwarding-контролам; полный список контролов и логика
+скоринга — в `docs/checks/kernel_hardening.md`. Read-only.
 
 ### Проверка SQL-инъекций
 

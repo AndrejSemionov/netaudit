@@ -4,13 +4,6 @@ forwarding, ICMP/redirect handling, reverse-path filtering, SYN flood
 protection, and process-dump safety — scored 0-100 per
 docs/checks/kernel_hardening.md.
 
-Step 3 of the module's build-out (per session plan): adds
-audit_kernel_hardening_score() and the check_kernel_hardening() registry
-entrypoint on top of Step 1's _build_components() and Step 2's
-_build_findings(). This completes the module — after this, the only
-remaining action is adding `from . import kernel_hardening` to
-checks/__init__.py so the @register decorator actually runs.
-
 Every control's PASS/FAIL condition, weight, and the one graded exception
 (suid_dumpable) below is a direct transcription of
 docs/checks/kernel_hardening.md sections 3 and 6 - this module implements
@@ -262,10 +255,10 @@ def _c_suid_dumpable(cfg: KernelConfig) -> Component:
 
 def _build_components(cfg: KernelConfig) -> list[Component]:
     """All 16 Components, in docs/checks/kernel_hardening.md section 3
-    order. Caller (audit_kernel_hardening_score(), not yet written) is
-    responsible for checking cfg.readable before calling this — this
-    function assumes a readable, fully-populated KernelConfig and does not
-    itself handle the group-level N/A case (spec section 5)."""
+    order. Caller (audit_kernel_hardening_score(), below) is responsible
+    for checking cfg.readable before calling this — this function assumes
+    a readable, fully-populated KernelConfig and does not itself handle
+    the group-level N/A case (spec section 5)."""
     return [
         _c_randomize_va_space(cfg),
         _c_dmesg_restrict(cfg),
