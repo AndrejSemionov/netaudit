@@ -1,6 +1,7 @@
 # `kernel_hardening` specification
 
-Status: **specification only, no code yet**. Follows the same methodology
+Status: **implemented and deployed** — see section 10 for the current
+implementation status. This spec follows the same methodology
 `docs/checks/ssh_hardening.md` and `docs/checks/nginx_hardening.md`
 established — every control below must honestly answer PASS/FAIL/N/A from
 data NetAudit can actually collect, per `docs/scoring.md`'s Component

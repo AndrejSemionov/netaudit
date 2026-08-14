@@ -1,6 +1,8 @@
 # `nginx_hardening` specification
 
-Status: **specification only, no code yet**. This document exists to answer, before
+Status: **implemented and deployed** (`netaudit_pkg/checks/nginx_hardening.py`,
+9 Tier-1 controls, shipped 2026-08-09 — see section 8.1 for final weights and
+synthetic-validation results). This document exists to answer, before
 a single line of `nginx_hardening.py` is written: *"if nginx scores 82/100, does
 that actually mean what we want to tell the user?"* — per `docs/scoring.md`'s
 Component contract. If a control here can't honestly answer PASS/FAIL/N/A from data
@@ -473,8 +475,9 @@ than speculatively generalized from this one resolved scenario.
 4. Tests: pure-function tests for each control's PASS/FAIL/N/A logic (no SSH mock
    needed, same pattern as `test_scoring.py`), plus `FakeSSHExecutor` tests for the
    full check like `test_server_security_nginx.py`.
-5. `docs/scoring.md` "Status" section update once `nginx_hardening` ships — it
-   currently says no hardening module exists yet.
+5. `docs/scoring.md` "Status" section update once `nginx_hardening` ships —
+   **Done**: it now records `nginx_hardening` as the first shipped hardening
+   module.
 
 ## 10. Explicit exclusions (recap)
 

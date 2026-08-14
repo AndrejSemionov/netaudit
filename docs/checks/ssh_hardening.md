@@ -1,6 +1,7 @@
 # `ssh_hardening` specification
 
-Status: **specification only, no code yet**. This document exists to answer, before
+Status: **implemented and deployed** (`netaudit_pkg/checks/ssh_hardening.py`,
+14 Tier-1 controls, severity-weighted per-control). This document exists to answer, before
 a single line of `ssh_hardening.py` is written: *"if a server scores 82/100, does
 that actually mean what we want to tell the user?"* — per `docs/scoring.md`'s
 Component contract. If a control here can't honestly answer PASS/FAIL/N/A from data
@@ -522,9 +523,10 @@ citation this document can stand behind, the same bar section 6.2 met.
 
 ## 8. Weights and synthetic validation
 
-**Run against the actual `weighted_score()` engine** (2026-08-10, spike script,
-not yet merged into production code — see section 9 step 5), following the same
-process that caught `nginx_hardening`'s Exposure-weight problem.
+**Run against the actual `weighted_score()` engine** (2026-08-10, spike script),
+following the same process that caught `nginx_hardening`'s Exposure-weight
+problem. The resulting weights below are hardcoded as-is in
+`netaudit_pkg/checks/ssh_hardening.py` (e.g. `_W_PERMIT_ROOT_LOGIN = 0.0900`).
 
 ### 8.1 Severity multiplier — the weighting mechanism
 
@@ -724,5 +726,5 @@ which is the kind of sanity check this whole validation process exists to run.
   extension away, deferred to keep v1's crypto scope bounded (section 7).
 - SSH protocol version (v1 vs v2) — Tier 2, effectively extinct on any
   OpenSSH version modern enough to matter (section 7).
-- Weight finalization and synthetic validation — **not yet done** (section 8);
-  this is the concrete next step, not a future nice-to-have.
+- Weight finalization and synthetic validation — **Done**; see section 8 for
+  the shipped weights.
