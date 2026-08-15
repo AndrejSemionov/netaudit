@@ -283,9 +283,24 @@ without re-deriving the design:
 | NGX-HDR-005 | Referrer-Policy present | same as above |
 | NGX-HDR-006 | Permissions-Policy present | same as above |
 | NGX-CONF-003 | `client_max_body_size` set to a sane bound | `client_max_body_size: str \| None` |
-| NGX-CONF-004 | Dangerous HTTP methods disabled (TRACE, etc.) | `limit_except` / method restriction parsing |
+| NGX-CONF-004 | ~~Dangerous HTTP methods disabled (TRACE, etc.)~~ — **BLOCKED / SPEC REVIEW** | see note below |
 | NGX-EXP-002 | HTTP→HTTPS redirect enforced | needs per-`server{}` block parsing, not just global directives — `NginxConfig` currently only captures the flattened `conf` text, not a structured server-block model |
 | NGX-EXP-003 | No unintended default server exposure | same per-block parsing gap as above |
+
+**NGX-CONF-004 status note (added during Tier-2 planning, verified against
+nginx.org and a nginx-devs mailing list post by Maxim Dounin):** the original
+"TRACE, etc." framing is factually wrong for nginx — TRACE has been
+unconditionally rejected with 405 by nginx core since version 0.5.17
+(2006), with no configuration involved, so there is nothing for a config
+audit to check there. The control cannot be implemented as originally
+worded. A replacement formulation (e.g. flagging locations that allow
+methods beyond what's needed) was considered and rejected: unlike TRACE,
+"which methods a location should allow" is an application-policy decision,
+not a security baseline NetAudit can assert without imposing an opinion the
+project doesn't otherwise take. NGX-CONF-004 stays defined but
+unimplemented until a precise, nginx-accurate semantic is proposed — it is
+not silently dropped, and no `NginxConfigV2` field (`trace_disabled`,
+`dangerous_methods`, etc.) should be added on its account until then.
 
 The per-`server{}`-block gap (NGX-EXP-002/003) is the largest one: `NginxConfig`
 today treats the whole `nginx -T` output as one flat blob, which is enough for
