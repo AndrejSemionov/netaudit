@@ -474,6 +474,65 @@ designed against that concrete case (what should the cap be, does it apply befor
 or after weight redistribution, does it interact with `applicable=False`) rather
 than speculatively generalized from this one resolved scenario.
 
+### 8.3 Tier-2 weight integration (16 controls total)
+
+Section 8.1 above fixed the weights `nginx_hardening.py`'s original 9 Tier-1
+controls shipped with. Adding Tier-2's seven controls (section 7:
+`NGX-TLS-004`, `NGX-HDR-004/005/006`, `NGX-CONF-003`, `NGX-EXP-002/003` —
+`NGX-CONF-004` stays BLOCKED and is not part of this weight model) brings the
+total to `9 + 7 = 16` components feeding the same `nginx_hardening` score.
+
+**Group-level weights (TLS 40% / Headers 20% / Config 20% / Exposure 20%)
+remain unchanged.** Tier-2 controls are incorporated by redistributing weight
+only within their existing group, not by re-deriving group weights from
+scratch — the group-level split was already synthetically validated once
+(section 8.1) and this integration doesn't introduce a new class of risk the
+original validation didn't cover, only more controls inside classes that
+already existed. Redistributing within-group avoids re-opening a settled
+question (do TLS issues matter more than header issues) to answer a
+different one (how much does each control inside TLS matter relative to its
+siblings).
+
+The revised individual weights below were validated against synthetic
+scoring scenarios run through the real `weighted_score()` engine (all-PASS,
+all-FAIL, single critical-weight FAIL, single lowest-weight FAIL, Tier-2-only
+FAIL vs legacy-only FAIL, and the project's own real VM baseline shape — TLS
+entirely absent, six TLS-dependent components N/A) — none produced an
+implausible or degenerate score. **UNKNOWN and N/A both use
+`Component.applicable=False` for scoring purposes and therefore participate
+in the same proportional weight redistribution `weighted_score()` already
+implements (see this document's section 8.1 and `docs/scoring.md`); their
+semantic distinction (not evaluable vs. genuinely inapplicable) is retained
+in a component's evidence/reason text, not in the arithmetic** — the scoring
+engine has exactly one mechanism for "this component doesn't count right
+now," and UNKNOWN doesn't need a second one.
+
+| Group | ID | Control | Weight | Rationale |
+|---|---|---|---:|---|
+| TLS (0.40) | NGX-TLS-001 | Legacy protocols disabled | 0.16 | Unchanged direct defect; weight trimmed from 0.20 to make room for NGX-TLS-004 without shrinking the two lower-weight TLS controls below meaningful impact |
+| | NGX-TLS-004 | Weak cipher policy (section 7) | 0.12 | **Not a statement that cipher policy matters less than legacy-protocol status.** Reflects this control's asymmetric proof burden (docs/checks/nginx_hardening.md Tier-2 planning: FAIL requires only a provable dangerous inclusion, PASS requires a provably sufficient policy — most real configs using bare aliases like `HIGH` resolve to UNKNOWN, not PASS or FAIL) — a control that will often sit out of the arithmetic via `applicable=False` shouldn't simultaneously carry the highest weight in its group |
+| | NGX-TLS-002 | Modern protocol level | 0.07 | Unchanged rationale (section 8.1), trimmed proportionally |
+| | NGX-TLS-003 | Explicit `ssl_protocols` | 0.05 | Unchanged rationale (section 8.1), trimmed proportionally |
+| Headers (0.20) | NGX-HDR-001 | HSTS | 0.055 | Enforces HTTPS use directly; weighted equal to CSP as the group's two highest-impact controls |
+| | NGX-HDR-004 | Content-Security-Policy (section 7) | 0.055 | The single most consequential header against XSS available to this control catalogue — weighted equal to HSTS, not fractionally below it, because its protection class is comparably broad |
+| | NGX-HDR-002 | X-Frame-Options | 0.025 | Unchanged rationale (section 8.1), trimmed proportionally |
+| | NGX-HDR-003 | X-Content-Type-Options | 0.025 | Unchanged rationale (section 8.1), trimmed proportionally |
+| | NGX-HDR-005 | Referrer-Policy (section 7) | 0.02 | Presence-only, no security-strength grading (deliberate v1 scope limit, section 7) — narrower claim than CSP/HSTS, weighted accordingly |
+| | NGX-HDR-006 | Permissions-Policy (section 7) | 0.02 | Same rationale as NGX-HDR-005 — structural presence check, not a policy-strength assessment |
+| Config (0.20) | NGX-CONF-002 | `autoindex` | 0.09 | Unchanged rationale (section 8.1), trimmed proportionally |
+| | NGX-CONF-001 | `server_tokens` | 0.06 | Unchanged rationale (section 8.1), trimmed proportionally |
+| | NGX-CONF-003 | `client_max_body_size` (section 7) | 0.05 | v1 scope is narrow by design — only `0` (unrestricted) fails; no upper-bound policy is asserted (section 7) — weighted as a specific, well-defined defect check, comparable to `server_tokens` |
+| Exposure (0.20) | NGX-EXP-001 | TLS available | 0.10 | Trimmed from 0.20, but kept the largest single weight in its group: this control is a logical prerequisite for NGX-EXP-002 (a redirect can't be evaluated without a TLS endpoint to redirect to) and remains the closest thing this catalogue has to a foundational exposure fact |
+| | NGX-EXP-002 | HTTP→HTTPS redirect (section 7) | 0.06 | Meaningful but downstream of NGX-EXP-001 — an HTTP-only site by design (this project's own VM baseline) resolves this to UNKNOWN, not FAIL, so its practical scoring impact is concentrated on sites that do have paired TLS/non-TLS endpoints |
+| | NGX-EXP-003 | Default server exposure (section 7) | 0.04 | Narrowest-scope control in the whole catalogue — only fires when multiple server blocks share an address:port with no explicit `default_server` (section 7); the lowest weight here reflects how rarely it's expected to apply, not reduced severity when it does |
+
+Sum: `(0.16+0.12+0.07+0.05) + (0.055+0.055+0.025+0.025+0.02+0.02) + (0.09+0.06+0.05) + (0.10+0.06+0.04) = 0.40 + 0.20 + 0.20 + 0.20 = 1.00`.
+
+These weights are frozen for the initial Tier-2 implementation. As with
+section 8.1's original weights, a genuine reason to revisit them (a synthetic
+or real-world case producing an implausible score) should prompt a fresh
+validation pass, not an ad-hoc tweak to one number.
+
 ## 9. Implementation checklist (for when this spec is approved)
 
 1. Add `id=` to the relevant `audit_nginx()` findings (server_tokens, TLS, each
