@@ -270,22 +270,47 @@ methods, and listening ports are none of them currently parsed. They're catalogu
 honestly in Tier 2 (section 7) as concrete collector extension work, rather than
 padding this table with controls that would have to fake their PASS/FAIL logic.
 
-## 7. Control catalogue — Tier 2 (requires extending `NginxConfig` first)
+## 7. Control catalogue — Tier 2
 
-Not implemented in v1. Each entry names the `NginxConfig` field that would need to
-be added and by which regex/parsing logic, so this is ready to pick up later
-without re-deriving the design:
+**Implemented and shipped** (as of the Tier-2 integration work — see
+`netaudit_pkg/nginx_config_v2.py`, `netaudit_pkg/nginx_v2_resolvers.py`,
+`netaudit_pkg/checks/nginx_hardening.py`'s `_build_tier2_components()`):
+NGX-TLS-004, NGX-HDR-004/005/006, NGX-CONF-003, NGX-EXP-002/003 — 7 of the 8
+controls originally scoped here. NGX-CONF-004 remains BLOCKED / SPEC REVIEW
+(see note below) and is not part of the shipped 16-component
+`weighted_score()` model (section 8.3).
 
-| ID | Name | Requires new `NginxConfig` field |
+This section is kept as the authoritative semantics reference for those 7
+controls — not a pre-implementation plan. The "required field" column below
+describes the actual shipped data model
+(`NginxConfigV2`/`nginx_v2_resolvers.py`), not the earlier `NginxConfig`
+field-by-field sketch this section originally contained before Milestone 2's
+architecture was settled.
+
+| ID | Name | Data model used |
 |---|---|---|
-| NGX-TLS-004 | Weak cipher suites disabled | `ssl_ciphers: str` — parse `ssl_ciphers` directive |
-| NGX-HDR-004 | Content-Security-Policy present (and non-trivial) | `header_values: dict[str, str]` — capture `add_header` values, not just presence |
-| NGX-HDR-005 | Referrer-Policy present | same as above |
-| NGX-HDR-006 | Permissions-Policy present | same as above |
-| NGX-CONF-003 | `client_max_body_size` set to a sane bound | `client_max_body_size: str \| None` |
+| NGX-TLS-004 | Weak cipher suites disabled | `ServerBlock.directives['ssl_ciphers']`, resolved via `resolve_cascading_value()` → `EffectiveValue` |
+| NGX-HDR-004 | Content-Security-Policy present (and non-trivial) | `AddHeader` list, resolved via `resolve_add_headers()` + `find_effective_header()` |
+| NGX-HDR-005 | Referrer-Policy present, valid W3C token | same as NGX-HDR-004 |
+| NGX-HDR-006 | Permissions-Policy present, at least one non-wildcard allowlist | same as NGX-HDR-004 |
+| NGX-CONF-003 | `client_max_body_size` explicitly bounded (see semantics below — **not** a "sane bound" judgment) | `ServerBlock.directives['client_max_body_size']`, resolved via `resolve_cascading_value()` → `EffectiveValue` |
 | NGX-CONF-004 | ~~Dangerous HTTP methods disabled (TRACE, etc.)~~ — **BLOCKED / SPEC REVIEW** | see note below |
-| NGX-EXP-002 | HTTP→HTTPS redirect enforced | needs per-`server{}` block parsing, not just global directives — `NginxConfig` currently only captures the flattened `conf` text, not a structured server-block model |
-| NGX-EXP-003 | No unintended default server exposure | same per-block parsing gap as above |
+| NGX-EXP-002 | HTTP→HTTPS redirect enforced | `ServerBlock`/`ListenEndpoint` pairing via `find_https_pair()` + `is_https_redirect_target()` |
+| NGX-EXP-003 | No unintended default server exposure | `ListenEndpoint` grouped by `address:port` via `resolve_listen_groups()` — the one control evaluated per listen-group, not per `ServerBlock` |
+
+**NGX-CONF-003 exact semantics** (the table cell above intentionally does not
+say "sane bound" — that wording described an earlier, rejected design):
+
+- Explicit finite literal (e.g. `10m`, `100m`, `1g`) → **PASS**. No
+  upper-bound "saneness" policy is evaluated — a very large limit is not
+  flagged, only an explicitly disabled check is.
+- Literal `0` → **FAIL** (nginx.org: "Setting size to 0 disables checking of
+  client request body size" — an explicit, documented unrestricted state).
+- Value containing an nginx variable, or an unparseable literal → **UNKNOWN**
+  (variable) or **FAIL** (unparseable — a malformed literal is a config
+  defect, not an unprovable one).
+- Directive absent everywhere in the http→server cascade → resolves to
+  nginx's own compiled-in default (`1m`) → **PASS**, `source=nginx-default`.
 
 **NGX-CONF-004 status note (added during Tier-2 planning, verified against
 nginx.org and a nginx-devs mailing list post by Maxim Dounin):** the original
@@ -302,13 +327,202 @@ unimplemented until a precise, nginx-accurate semantic is proposed — it is
 not silently dropped, and no `NginxConfigV2` field (`trace_disabled`,
 `dangerous_methods`, etc.) should be added on its account until then.
 
-The per-`server{}`-block gap (NGX-EXP-002/003) is the largest one: `NginxConfig`
-today treats the whole `nginx -T` output as one flat blob, which is enough for
-global directives (`server_tokens`, `ssl_protocols`) but not for "does *this specific*
-vhost redirect HTTP to HTTPS" when a host runs multiple server blocks. Extending
-`NginxConfig` to a structured multi-block model is a bigger parser rewrite than
-adding one new field, and is called out here rather than attempted inside this
-first version.
+### 7.1 Tier-2 scope limitation: server-block level only
+
+**Tier-2 controls evaluate configuration at the server-block level.
+Location-level directive overrides are parsed and retained by
+`NginxConfigV2` (`ServerBlock.locations: list[LocationBlock]`) but are not
+currently evaluated by any of the 7 shipped Tier-2 controls.**
+
+Concretely: if a `server{}` block sets `add_header Content-Security-Policy
+"default-src 'self'"` at server level (NGX-HDR-004 sees this and PASSes),
+but a specific `location /admin { add_header Content-Security-Policy
+"unsafe-inline"; }` overrides it to something weaker for that one path,
+NGX-HDR-004's verdict for that server is still PASS — the location-level
+override is invisible to the control, even though `LocationBlock` correctly
+parsed and stored it. The same applies to NGX-CONF-003 and any other
+Tier-2 control: a `location`-scoped override of a directive this project
+evaluates is not currently factored into the verdict.
+
+This is an explicit, deliberate scope limitation carried consistently
+across all 7 Tier-2 controls (see e.g. `_verdict_hdr_004_csp()` and
+`_verdict_conf_003_body_size()` in `checks/nginx_hardening.py`, both of
+which call the relevant resolver with server-level directives only, never
+`location_directives`/`location_add_headers`) — **it is not an indication
+that location directives went unparsed, and it must not be inferred from
+the mere presence of `LocationBlock` in the data model that Tier-2 controls
+already use it.** `LocationBlock` exists in `NginxConfigV2` because the
+parser needs a faithful structural transcription of the config regardless
+of which controls currently read it (see `nginx_config_v2.py`'s module
+docstring), not because any Tier-2 control currently does.
+
+Extending these 7 controls to location-level evaluation — deciding whether
+a location override should win over, merge with, or be reported alongside
+its parent server's verdict — is a separate, future scope item (a
+plausible Tier-3 candidate) and should not be attempted as an incidental
+fix to any single control.
+
+### 7.2 Multi-vhost aggregation
+
+The per-`server{}`-block gap (NGX-EXP-002/003) that originally motivated
+building `NginxConfigV2` is closed: `NginxConfigV2` treats each `server{}`
+block as a structured, independently-addressable unit (`ServerBlock`,
+`ListenEndpoint`), not a flat blob of global directives — enough to answer
+"does *this specific* vhost redirect HTTP to HTTPS" per server, and "is
+`default_server` ambiguous for *this* `address:port` pair" per listen
+group. Where a real deployment has more than one `server{}` block, each of
+the 7 Tier-2 controls evaluates every relevant block independently and then
+combines the per-block verdicts into the single `Component` `weighted_score()`
+needs via `_aggregate_server_verdicts()` (`checks/nginx_hardening.py`):
+worst-case priority `FAIL > UNKNOWN > PASS`, with `N/A` blocks excluded
+before that priority is applied (a block that isn't applicable to a given
+control — e.g. no `ssl` listen for NGX-TLS-004 — doesn't get outvoted by
+blocks that are). NGX-EXP-003 alone aggregates over `ListenEndpoint`
+groups rather than `ServerBlock`s, since default-server ambiguity is a
+property of an `address:port` pair, not a single server (`resolve_listen_groups()`).
+
+### 7.3 Full per-control semantics
+
+The rules below are the authoritative reference for each control's
+PASS/FAIL/UNKNOWN/N/A logic — transcribed from the shipped `_verdict_*`
+functions in `checks/nginx_hardening.py` (not re-derived), so this section
+and the code should never diverge. All seven are evaluated per
+`ServerBlock` except NGX-EXP-003 (per `ListenEndpoint` address:port group
+— see 7.1/7.2 above); results across blocks/groups combine via the
+worst-case aggregation in 7.2.
+
+#### NGX-TLS-004 — weak cipher suites disabled
+
+Evaluates the effective `ssl_ciphers` value (`http`→`server` cascade,
+default `HIGH:!aNULL:!MD5` if unset anywhere).
+
+- **N/A** — the server has no `listen ... ssl` endpoint at all.
+- **FAIL** — the effective value provably includes a forbidden class
+  without a preceding `!`/`-` exclusion. Forbidden classes: `eNULL`/`NULL`,
+  `aNULL`, `EXPORT`, `RC4`, `DES`/`3DES`, `MD5`, `kRSA`.
+- **PASS** — the value sets `@SECLEVEL=n` with `n >= 2` (last occurrence in
+  the string wins) and no forbidden class is explicitly included after
+  that point.
+- **UNKNOWN** — a bare alias (`HIGH`, `DEFAULT`, `ALL`, `MEDIUM`) with no
+  `@SECLEVEL`/explicit exclusions; an unresolvable `+`/`-` construct; the
+  effective value containing an nginx variable; or the directive absent
+  everywhere (nginx's own default, `HIGH:!aNULL:!MD5`, contains a bare
+  `HIGH` alias and is therefore **not** automatically PASS just because
+  it's what nginx ships with unconfigured).
+
+#### NGX-HDR-004 — Content-Security-Policy present and non-trivial
+
+Evaluates the effective `Content-Security-Policy` header (`add_header`,
+all-or-nothing `http`→`server` inheritance — see 6.x's `add_header`
+inheritance model).
+
+- **FAIL** — the header is absent after inheritance resolution, or present
+  but structurally trivial: every fetch-directive's source list consists
+  only of the bare `*` token (e.g. `default-src *`), or the value has no
+  directives at all.
+- **UNKNOWN** — the effective value contains an nginx variable.
+- **PASS** — at least one fetch-directive has a source-list token other
+  than bare `*` (e.g. `'self'`, a scheme, a host, a nonce/hash). No
+  grading of *how* restrictive the policy is — a minimal `default-src
+  'self'` and an elaborate nonce-based policy both PASS identically; this
+  control checks presence and non-triviality only (section 7.1 covers why
+  this stops short of full CSP analysis).
+
+#### NGX-HDR-005 — Referrer-Policy present, valid W3C token
+
+Evaluates the effective `Referrer-Policy` header (same `add_header`
+inheritance model as NGX-HDR-004).
+
+- **FAIL** — the header is absent after inheritance resolution, or present
+  with a value that is not one of the eight W3C-defined tokens (an invalid
+  literal is treated the same as absence, per the W3C spec's own "unknown
+  policy values will be ignored" rule — a typo has the same real-world
+  effect as no header at all).
+- **UNKNOWN** — the effective value contains an nginx variable.
+- **PASS** — the value is any of: `no-referrer`, `no-referrer-when-downgrade`,
+  `same-origin`, `origin`, `strict-origin`, `origin-when-cross-origin`,
+  `strict-origin-when-cross-origin`, `unsafe-url`. **No security-strength
+  grading between these eight** — `unsafe-url` PASSes exactly like
+  `strict-origin` does. This is presence-and-validity only, by deliberate
+  design (see the table's "same as above" scope note).
+
+#### NGX-HDR-006 — Permissions-Policy present, at least one non-wildcard allowlist
+
+Evaluates the effective `Permissions-Policy` header (same `add_header`
+inheritance model as NGX-HDR-004/005), parsed as comma-separated
+`feature=allowlist` pairs.
+
+- **FAIL** — the header is absent after inheritance resolution, or present
+  but not syntactically parseable as at least one well-formed
+  `feature=allowlist` pair.
+- **UNKNOWN** — the effective value contains an nginx variable, or every
+  parsed feature's allowlist is the bare `*` wildcard (valid syntax, but
+  not provably constraining — a feature explicitly set to `*` permits
+  exactly as much as not restricting it at all).
+- **PASS** — at least one feature has a non-`*` allowlist: `()` (explicit
+  deny-all), `(self)`, a concrete origin list, or a bare `self`/`none`
+  token. A config mixing wildcard and restricted features (e.g.
+  `geolocation=*, camera=()`) still PASSes on the strength of the
+  restricted one. **No fixed list of "features that must be restricted"**
+  — this checks that the policy does something explicit somewhere, not
+  that any specific feature is covered (section 7.1's rejected-design note
+  covers why a per-feature list isn't built).
+
+#### NGX-CONF-003 — client_max_body_size explicitly bounded
+
+Evaluates the effective `client_max_body_size` value (`http`→`server`
+cascade, nginx's own default `1m` if unset anywhere). See the exact
+semantics already given earlier in this section (right after the control
+catalogue table) — restated here for consistency with the other six:
+explicit finite literal → PASS, literal `0` → FAIL, nginx variable →
+UNKNOWN, unparseable literal → FAIL, directive absent → resolves to `1m`
+default → PASS. No upper-bound policy is evaluated.
+
+#### NGX-EXP-002 — HTTP→HTTPS redirect enforced
+
+Evaluates whether an HTTP (`listen`, no `ssl`) server has a working
+redirect to its paired HTTPS server, where pairing requires an
+exact-literal `server_name` match between the two (see 7.1's related note:
+wildcard/regex `server_name` forms are not resolved).
+
+- **N/A** — the server has no non-SSL `listen` endpoint at all (nothing to
+  redirect from).
+- **UNKNOWN** — any of the server's `server_name`s is a wildcard/regex
+  form; no exact-match HTTPS server_name pair can be found at all (an
+  HTTP-only site by design — e.g. this project's own VM baseline — is not
+  provably a redirect gap); or a redirect directive exists but its target
+  begins with an nginx variable (e.g. `$scheme://...`) rather than the
+  literal `https://`, so the resulting protocol can't be proven statically.
+- **FAIL** — an exact-match HTTPS pair exists, but no `return` directive
+  with a redirect-capable status code (`301`, `302`, `303`, `307`, `308`)
+  is found on the HTTP server, or its target does not begin with the
+  literal `https://`.
+- **PASS** — an exact-match HTTPS pair exists, and the HTTP server has a
+  redirect-capable `return` whose target begins with the literal
+  `https://` (anything after that literal — including nginx variables like
+  `$host`/`$request_uri` — does not affect this; only the protocol prefix
+  itself must be a literal). `rewrite ... redirect|permanent` is not
+  recognized as an alternative mechanism in v1 (out of scope, see the
+  implementation note in `_find_redirect_directive()`).
+
+#### NGX-EXP-003 — no unintended default server exposure
+
+The one control evaluated per `address:port` `ListenEndpoint` group
+(`resolve_listen_groups()`), not per `ServerBlock` — see 7.1/7.2. Has no
+UNKNOWN path: a listen group's ambiguity is always a definite fact from
+the parsed config, never something this project "can't prove statically".
+
+- **PASS** — the group has exactly one member (the default is unambiguous
+  because no alternative exists), or has more than one member with an
+  explicit `default_server` declared on one of them (administrator intent
+  is expressed).
+- **FAIL** — more than one member shares the `address:port` and none
+  declares `default_server` explicitly. nginx silently selects the first
+  one by config order in this case (nginx.org's own documented
+  `default_server` fallback rule) — this project treats that silent,
+  order-dependent selection as unintended exposure. This control does not
+  evaluate whether the resulting default server is itself safe, only
+  whether its selection was deliberate.
 
 ## 8. Open implementation gap: `Finding.id` stability
 
