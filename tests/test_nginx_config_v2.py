@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from netaudit_pkg.nginx_config_v2 import (
     AddHeader,
-    ListenEndpoint,
     parse_nginx_config_v2,
 )
 
