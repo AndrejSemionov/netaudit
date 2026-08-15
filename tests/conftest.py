@@ -98,7 +98,7 @@ def fake_ssh():
     return FakeSSHExecutor()
 
 
-_RC_MARKER_RE = re.compile(r"printf '\\n%s:%s\\n' '(__NETAUDIT_RC_[0-9a-f]+__)'")
+_RC_MARKER_RE = re.compile(r'(__NETAUDIT_RC_[0-9a-f]+__)')
 
 
 class ExitCodeFakeSSHExecutor(FakeSSHExecutor):
@@ -137,7 +137,7 @@ class ExitCodeFakeSSHExecutor(FakeSSHExecutor):
         self._raw_responses = responses or {}
         self._exit_codes = exit_codes or {}
 
-    def run(self, cmd: str, timeout: int = 20) -> tuple[str, str]:
+    def _respond(self, cmd: str) -> tuple[str, str]:
         self.calls.append(cmd)
         m = _RC_MARKER_RE.search(cmd)
         marker = m.group(1) if m else None
@@ -155,12 +155,27 @@ class ExitCodeFakeSSHExecutor(FakeSSHExecutor):
 
         if marker is None or exit_code is None:
             # No marker in the wrapped command (shouldn't happen for a
-            # run_command_with_exit_code() caller) or no exit code
-            # registered for this command - simulate a collection
-            # failure: raw stdout with no completion marker at all,
-            # exactly like a dropped/truncated SSH command.
+            # run_command_with_exit_code()/_run_sudo_with_exit_code()
+            # caller) or no exit code registered for this command -
+            # simulate a collection failure: raw stdout with no
+            # completion marker at all, exactly like a dropped/truncated
+            # SSH command.
             return stdout, ''
         return f'{stdout}\n{marker}:{exit_code}\n', ''
+
+    def run(self, cmd: str, timeout: int = 20) -> tuple[str, str]:
+        return self._respond(cmd)
+
+    def sudo(self, cmd: str, timeout: int = 20) -> tuple[str, str]:
+        # Same marker-recovery logic as run() - firewall_config.py's
+        # _run_sudo_with_exit_code() wraps its script differently (`sh -c
+        # <quoted script>` rather than a bare `{ ... }` group, since sudo
+        # can't parse a shell reserved word as a bare argument - see that
+        # module's docstring), but the marker itself is still just
+        # __NETAUDIT_RC_<hex>__ embedded somewhere in the command text,
+        # which _RC_MARKER_RE finds regardless of the surrounding
+        # shell-quoting style.
+        return self._respond(cmd)
 
 
 def exit_marked(stdout: str, exit_code: int, marker: str = '__NETAUDIT_CVE_AUDIT_EXIT__') -> str:

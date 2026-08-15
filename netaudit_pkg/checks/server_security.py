@@ -148,57 +148,226 @@ def audit_fail2ban(ssh: SSHExecutor) -> dict:
 # firewall
 # ===========================================================================
 
+# iptables -A INPUT rule with -j ACCEPT and no preceding match criteria at
+# all (no -s/-d/-p/--dport/-i/-m/...) - this is functionally identical to
+# an ACCEPT policy with zero rules (accepts everything), just spelled out
+# as an explicit rule instead of the chain default. Matches only the
+# EXACT unconditional form; any match option before -j ACCEPT means the
+# rule is conditional (e.g. '-p tcp --dport 22 -j ACCEPT' is fine) and
+# does not match this pattern.
+_IPTABLES_UNCONDITIONAL_ACCEPT_RE = re.compile(r'^-A INPUT\s+-j ACCEPT\s*$')
+
+
+def _ufw_verdict(evidence) -> tuple[str, dict]:
+    """Returns (verdict, context) for the UFW backend.
+
+    verdict is one of:
+      'NOT_PRESENT' - confirmed absent (command -v exit 127) - not a
+                       finding at all, this host simply doesn't have ufw.
+      'ACTIVE'      - confirmed 'Status: active'
+      'INACTIVE'    - confirmed 'Status: inactive' - HIGH finding
+      'UNKNOWN'     - presence or status could not be confirmed; context
+                       carries the specific reason (never silently 'ok').
+
+    context is a dict with a 'reason' key for UNKNOWN, used to build the
+    finding's detail text - never invented text, always the actual
+    evidence (exit code, stdout snippet) that produced the verdict.
+    """
+    from ..firewall_config import tool_is_present
+
+    present = tool_is_present(evidence.ufw_present)
+    if present is None:
+        if not evidence.ufw_present.completed:
+            return 'UNKNOWN', {'reason': 'could not confirm whether ufw is installed (command did not complete)'}
+        return 'UNKNOWN', {'reason': f'unexpected exit code {evidence.ufw_present.exit_code} checking for ufw'}
+    if present is False:
+        return 'NOT_PRESENT', {}
+
+    status = evidence.ufw_status
+    if status is None or not status.completed:
+        return 'UNKNOWN', {'reason': 'ufw is installed, but `ufw status` did not complete'}
+    if status.exit_code != 0:
+        return 'UNKNOWN', {'reason': f'ufw is installed, but `ufw status` failed (exit {status.exit_code})'}
+    if 'Status: active' in status.stdout:
+        return 'ACTIVE', {}
+    if 'Status: inactive' in status.stdout:
+        return 'INACTIVE', {}
+    return 'UNKNOWN', {'reason': f'ufw is installed, but status output was not recognized: {status.stdout[:120]!r}'}
+
+
+def _nftables_verdict(evidence) -> tuple[str, dict]:
+    """Returns (verdict, context) for the nftables backend.
+
+    verdict is one of:
+      'LIVE_ACTIVE'  - confirmed non-empty live ruleset (exit 0, non-empty
+                        stdout) - the only way to reach this verdict; a
+                        readable config file alone is NEVER sufficient
+                        (this is the direct fix for FW-3).
+      'LIVE_EMPTY'   - confirmed empty live ruleset (exit 0, empty
+                        stdout) - a real, confirmed fact, not a
+                        collection failure.
+      'LIVE_UNKNOWN' - live ruleset collection did not complete or
+                        failed (permission denied, timeout, etc).
+
+    context carries 'config_readable' (bool) and, when true,
+    'config_path'/'config_rule_lines' - config-file evidence is ALWAYS
+    attached as context, never used to upgrade LIVE_EMPTY or
+    LIVE_UNKNOWN into an ACTIVE-shaped verdict. The caller uses
+    config_readable to decide whether a LIVE_EMPTY verdict deserves the
+    stronger "config says rules exist but the kernel has none" finding.
+    """
+    cfg = evidence.nftables_config
+    config_readable = cfg.completed and cfg.exit_code == 0 and bool(cfg.content.strip())
+    context = {'config_readable': config_readable}
+    if config_readable:
+        context['config_path'] = cfg.path
+        context['config_rule_lines'] = len(
+            [l for l in cfg.content.splitlines() if l.strip() and not l.strip().startswith('#')])
+
+    live = evidence.nftables_live
+    if not live.completed:
+        return 'LIVE_UNKNOWN', {**context, 'reason': 'nft list ruleset did not complete'}
+    if live.exit_code != 0:
+        return 'LIVE_UNKNOWN', {**context, 'reason': f'nft list ruleset failed (exit {live.exit_code})'}
+    if live.stdout.strip():
+        return 'LIVE_ACTIVE', context
+    return 'LIVE_EMPTY', context
+
+
+def _parse_iptables_input(stdout: str) -> tuple[str | None, list[str]]:
+    """Extracts the INPUT chain's policy and its -A INPUT rule lines from
+    raw `iptables -S` output. Returns (policy, rule_lines) - policy is
+    None if no '-P INPUT ...' line was found at all (shouldn't happen on
+    a real host, but this function doesn't assume it)."""
+    policy = None
+    rules = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if line.startswith('-P INPUT '):
+            policy = line.split()[2] if len(line.split()) > 2 else None
+        elif line.startswith('-A INPUT'):
+            rules.append(line)
+    return policy, rules
+
+
+def _iptables_verdict(evidence) -> tuple[str, dict]:
+    """Returns (verdict, context) for the iptables backend.
+
+    verdict is one of:
+      'OPEN'     - INPUT policy ACCEPT with either zero -A INPUT rules,
+                   or an unconditional '-A INPUT -j ACCEPT' rule among
+                   them (functionally identical to zero rules - this is
+                   the direct fix for FW-4, which previously only
+                   checked rule COUNT, not content).
+      'FILTERED' - INPUT policy is not ACCEPT, or ACCEPT with only
+                   conditional (match-qualified) rules.
+      'UNKNOWN'  - collection did not complete/failed, or no INPUT
+                   policy line was found in otherwise-successful output.
+    """
+    live = evidence.iptables_live
+    if not live.completed:
+        return 'UNKNOWN', {'reason': 'iptables -S did not complete'}
+    if live.exit_code != 0:
+        return 'UNKNOWN', {'reason': f'iptables -S failed (exit {live.exit_code})'}
+
+    policy, rules = _parse_iptables_input(live.stdout)
+    if policy is None:
+        return 'UNKNOWN', {'reason': 'iptables -S succeeded but no INPUT policy line was found',
+                            'raw_snippet': live.stdout[:200]}
+
+    unconditional_accept = any(_IPTABLES_UNCONDITIONAL_ACCEPT_RE.match(r) for r in rules)
+    if policy == 'ACCEPT' and (not rules or unconditional_accept):
+        return 'OPEN', {'policy': policy, 'rule_count': len(rules),
+                         'unconditional_accept': unconditional_accept}
+    return 'FILTERED', {'policy': policy, 'rule_count': len(rules)}
+
+
 def audit_firewall(ssh: SSHExecutor) -> dict:
+    """Findings-producing firewall audit. Thin wrapper over
+    firewall_config.collect_firewall_config() (raw evidence collection)
+    and the per-backend verdict functions above (_ufw_verdict/
+    _nftables_verdict/_iptables_verdict, pure functions with no I/O -
+    the actual interpretation logic, independently unit-testable without
+    SSH mocking).
+
+    Each backend produces its own, independent finding(s) - there is
+    deliberately NO aggregate "firewall is secure/open" verdict across
+    backends (see this function's quality-audit session notes): a host
+    can legitimately run more than one of these simultaneously (e.g.
+    iptables-nft plus a leftover UFW install), and collapsing three
+    independent facts into one verdict would suppress real findings the
+    same way the pre-refactor code's single `active` flag did (e.g. an
+    active-but-open iptables chain being silently masked by an
+    unrelated, correctly-configured nftables ruleset).
+
+    UNKNOWN is never reported as 'ok' - see the individual verdict
+    functions' docstrings for exactly what UNKNOWN means for each
+    backend and why. This is the direct fix for FW-1 (UFW collection
+    failure previously read as "not installed"), FW-3 (a readable
+    nftables config file previously counted as proof of an active
+    firewall), and FW-4 (iptables rule-count-only open-firewall
+    detection previously missed an explicit unconditional ACCEPT rule).
+    """
+    from ..firewall_config import collect_firewall_config
+
+    evidence = collect_firewall_config(ssh)
     findings = []
 
-    # nftables: try reading the config file directly first (doesn't require root
-    # if the file has normal read permissions) - this is more reliable than
-    # live 'nft list ruleset', which always fails with 'Operation not permitted'
-    # without root/CAP_NET_ADMIN and gives a false "firewall not configured"
-    # even though one actually exists.
-    nft_conf = ''
-    nft_conf_path = ''
-    for path in ('/etc/nftables.conf', '/etc/nftables/nftables.conf', '/etc/nftables/main.nft'):
-        out, _ = ssh.run(f'cat {path} 2>/dev/null')
-        if out.strip():
-            nft_conf = out
-            nft_conf_path = path
-            break
-
-    # ufw?
-    ufw, _ = ssh.run('which ufw && ufw status 2>/dev/null || echo NOUFW')
-    nft, _ = ssh.run('nft list ruleset 2>/dev/null | head -100 || echo NONFT')
-    ipt, _ = ssh.run('iptables -S 2>/dev/null | head -60 || echo NOIPT')
-
-    active = False
-    if 'Status: active' in ufw:
-        active = True
+    # --- UFW ---
+    ufw_verdict, ufw_ctx = _ufw_verdict(evidence)
+    if ufw_verdict == 'ACTIVE':
         findings.append(_finding('ok', 'ufw is active'))
-    elif 'NOUFW' not in ufw and 'Status: inactive' in ufw:
+    elif ufw_verdict == 'INACTIVE':
         findings.append(_finding('high', 'ufw is installed but disabled'))
+    elif ufw_verdict == 'UNKNOWN':
+        findings.append(_finding('low', 'could not determine ufw status', ufw_ctx['reason'],
+                                  requires_manual_verification=True))
+    # NOT_PRESENT produces no finding - ufw simply isn't on this host.
 
-    if nft_conf:
-        active = True
-        rules = len([l for l in nft_conf.splitlines() if l.strip() and not l.strip().startswith('#')])
-        findings.append(_finding('ok', f'nftables: config {nft_conf_path}, ~{rules} rule lines',
-                                 'read from the file (without root - live nft list ruleset requires root/CAP_NET_ADMIN)'))
-    elif 'NONFT' not in nft and nft.strip():
-        rules = len([l for l in nft.splitlines() if l.strip()])
-        active = True
-        findings.append(_finding('ok', f'nftables: ~{rules} rules'))
-
-    if not active:
-        if 'NOIPT' not in ipt and ipt.strip():
-            # check the INPUT policy
-            if '-P INPUT ACCEPT' in ipt and ipt.count('-A INPUT') == 0:
-                findings.append(_finding('high', 'firewall is effectively open',
-                                         'iptables INPUT policy ACCEPT with no rules — everything is allowed'))
-            else:
-                findings.append(_finding('ok', 'iptables: rules are present'))
+    # --- nftables ---
+    nft_verdict, nft_ctx = _nftables_verdict(evidence)
+    if nft_verdict == 'LIVE_ACTIVE':
+        detail = f'{len(evidence.nftables_live.stdout.splitlines())} lines in the live ruleset'
+        findings.append(_finding('ok', 'nftables: active ruleset loaded in the kernel', detail))
+    elif nft_verdict == 'LIVE_EMPTY':
+        if nft_ctx['config_readable']:
+            # The core FW-3 case: declared rules exist, but the kernel
+            # confirms none are actually loaded - a real discrepancy,
+            # not a guess, and NOT downgraded to 'ok' just because a
+            # config file happens to exist.
+            findings.append(_finding(
+                'high',
+                'nftables config file has rules, but the live kernel ruleset is empty',
+                f"config: {nft_ctx['config_path']} (~{nft_ctx['config_rule_lines']} rule lines); "
+                'the configuration may not have been loaded (service not started/reloaded, '
+                'syntax error, or a stale/unused file)',
+                requires_manual_verification=True,
+            ))
         else:
-            findings.append(_finding('low', 'could not determine firewall status',
-                                     'neither ufw, nor nftables (live), nor iptables rules were detected over SSH '
-                                     'without root; if nftables is configured via a non-standard config path — check manually'))
+            findings.append(_finding('low', 'nftables: no rules loaded and no config file found',
+                                      'live ruleset is empty and no readable nftables config file was found'))
+    else:  # LIVE_UNKNOWN
+        detail = nft_ctx['reason']
+        if nft_ctx['config_readable']:
+            detail += (f" (a readable config file exists at {nft_ctx['config_path']} with "
+                       f"~{nft_ctx['config_rule_lines']} rule lines, but this does NOT confirm "
+                       'those rules are actually loaded - see live ruleset collection failure above)')
+        findings.append(_finding('low', 'could not determine nftables live ruleset state', detail,
+                                  requires_manual_verification=True))
+
+    # --- iptables ---
+    ipt_verdict, ipt_ctx = _iptables_verdict(evidence)
+    if ipt_verdict == 'OPEN':
+        reason = ('explicit unconditional ACCEPT rule' if ipt_ctx.get('unconditional_accept')
+                  else 'no filtering rules')
+        findings.append(_finding('high', 'iptables INPUT is effectively open',
+                                 f'policy {ipt_ctx["policy"]}, {reason} — everything is allowed'))
+    elif ipt_verdict == 'FILTERED':
+        findings.append(_finding('ok', 'iptables: INPUT chain is filtered',
+                                 f'policy {ipt_ctx["policy"]}, {ipt_ctx["rule_count"]} rule(s)'))
+    else:  # UNKNOWN
+        findings.append(_finding('low', 'could not determine iptables status', ipt_ctx['reason'],
+                                  requires_manual_verification=True))
 
     return {'findings': findings}
 
