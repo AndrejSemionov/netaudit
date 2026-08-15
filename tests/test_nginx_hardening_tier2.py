@@ -14,9 +14,12 @@ test_nginx_v2_resolvers.py).
 from __future__ import annotations
 
 from netaudit_pkg.nginx_config_v2 import parse_nginx_config_v2
+from netaudit_pkg.nginx_v2_resolvers import resolve_listen_groups
 from netaudit_pkg.checks.nginx_hardening import (
     _aggregate_server_verdicts,
     _c_conf_003_body_size,
+    _c_exp_002_https_redirect,
+    _c_exp_003_default_server,
     _c_hdr_004_csp,
     _c_hdr_005_referrer_policy,
     _c_hdr_006_permissions_policy,
@@ -24,6 +27,8 @@ from netaudit_pkg.checks.nginx_hardening import (
     _is_structurally_trivial_csp,
     _parse_permissions_policy,
     _verdict_conf_003_body_size,
+    _verdict_exp_002_https_redirect,
+    _verdict_exp_003_default_server,
     _verdict_hdr_004_csp,
     _verdict_hdr_005_referrer_policy,
     _verdict_hdr_006_permissions_policy,
@@ -1106,3 +1111,372 @@ def test_vm_baseline_conf003_is_pass_via_nginx_default():
     comp = _c_conf_003_body_size(cfg)
     assert comp.score == 100
     assert comp.finding_id is None
+
+
+# ===========================================================================
+# NGX-EXP-002 (HTTP -> HTTPS redirect) — per-server verdict
+# ===========================================================================
+
+def test_exp002_no_http_listen_is_na():
+    cfg = parse_nginx_config_v2('http { server { listen 443 ssl; } }')
+    verdict, _ = _verdict_exp_002_https_redirect(cfg.servers[0], cfg.servers)
+    assert verdict == 'N/A'
+
+
+def test_exp002_no_https_pair_is_unknown():
+    # HTTP-only site by design (this project's own VM baseline shape) —
+    # not provably a redirect-exposure gap.
+    cfg = parse_nginx_config_v2('http { server { listen 80; server_name a.com; } }')
+    verdict, evidence = _verdict_exp_002_https_redirect(cfg.servers[0], cfg.servers)
+    assert verdict == 'UNKNOWN'
+    assert 'HTTP-only site by design' in evidence
+
+
+def test_exp002_paired_with_literal_https_redirect_is_pass():
+    conf = '''
+    http {
+        server {
+            listen 80;
+            server_name example.com;
+            return 301 https://$host$request_uri;
+        }
+        server {
+            listen 443 ssl;
+            server_name example.com;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, evidence = _verdict_exp_002_https_redirect(cfg.servers[0], cfg.servers)
+    assert verdict == 'PASS'
+    assert 'https://$host$request_uri' in evidence
+
+
+def test_exp002_paired_but_no_redirect_is_fail():
+    conf = '''
+    http {
+        server {
+            listen 80;
+            server_name example.com;
+        }
+        server {
+            listen 443 ssl;
+            server_name example.com;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, evidence = _verdict_exp_002_https_redirect(cfg.servers[0], cfg.servers)
+    assert verdict == 'FAIL'
+    assert 'no redirect' in evidence
+
+
+def test_exp002_scheme_variable_prefix_is_unknown():
+    # $scheme resolves at request time; protocol can't be proven static.
+    conf = '''
+    http {
+        server {
+            listen 80;
+            server_name example.com;
+            return 301 $scheme://$host$request_uri;
+        }
+        server {
+            listen 443 ssl;
+            server_name example.com;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, evidence = _verdict_exp_002_https_redirect(cfg.servers[0], cfg.servers)
+    assert verdict == 'UNKNOWN'
+    assert 'begins with a variable' in evidence
+
+
+def test_exp002_wildcard_server_name_is_unknown():
+    conf = '''
+    http {
+        server {
+            listen 80;
+            server_name *.example.com;
+            return 301 https://$host$request_uri;
+        }
+        server {
+            listen 443 ssl;
+            server_name *.example.com;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, evidence = _verdict_exp_002_https_redirect(cfg.servers[0], cfg.servers)
+    assert verdict == 'UNKNOWN'
+    assert 'wildcard/regex' in evidence
+
+
+def test_exp002_regex_server_name_is_unknown():
+    conf = r'''
+    http {
+        server {
+            listen 80;
+            server_name ~^www\d+\.example\.com$;
+            return 301 https://$host$request_uri;
+        }
+        server {
+            listen 443 ssl;
+            server_name example.com;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, _ = _verdict_exp_002_https_redirect(cfg.servers[0], cfg.servers)
+    assert verdict == 'UNKNOWN'
+
+
+def test_exp002_non_redirect_status_code_is_fail():
+    conf = '''
+    http {
+        server {
+            listen 80;
+            server_name example.com;
+            return 200 https://example.com;
+        }
+        server {
+            listen 443 ssl;
+            server_name example.com;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, _ = _verdict_exp_002_https_redirect(cfg.servers[0], cfg.servers)
+    assert verdict == 'FAIL'
+
+
+def test_exp002_partial_name_overlap_still_pairs_and_passes():
+    conf = '''
+    http {
+        server {
+            listen 80;
+            server_name example.com other.com;
+            return 301 https://$host$request_uri;
+        }
+        server {
+            listen 443 ssl;
+            server_name example.com different.com;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, _ = _verdict_exp_002_https_redirect(cfg.servers[0], cfg.servers)
+    assert verdict == 'PASS'
+
+
+def test_exp002_all_supported_redirect_codes():
+    for code in ('301', '302', '303', '307', '308'):
+        conf = f'''
+        http {{
+            server {{
+                listen 80;
+                server_name example.com;
+                return {code} https://$host$request_uri;
+            }}
+            server {{
+                listen 443 ssl;
+                server_name example.com;
+            }}
+        }}
+        '''
+        cfg = parse_nginx_config_v2(conf)
+        verdict, _ = _verdict_exp_002_https_redirect(cfg.servers[0], cfg.servers)
+        assert verdict == 'PASS', f'code {code} should PASS'
+
+
+# ===========================================================================
+# _c_exp_002_https_redirect() — Component-level, weight, multi-vhost
+# ===========================================================================
+
+def test_exp002_component_weight_is_006():
+    cfg = parse_nginx_config_v2('http { server { listen 443 ssl; } }')
+    comp = _c_exp_002_https_redirect(cfg)
+    assert comp.weight == 0.06
+
+
+def test_exp002_component_pass_scores_100():
+    conf = '''
+    http {
+        server {
+            listen 80;
+            server_name example.com;
+            return 301 https://$host$request_uri;
+        }
+        server {
+            listen 443 ssl;
+            server_name example.com;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_exp_002_https_redirect(cfg)
+    assert comp.score == 100
+    assert comp.finding_id is None
+
+
+def test_exp002_component_fail_scores_0_with_finding_id():
+    conf = '''
+    http {
+        server { listen 80; server_name example.com; }
+        server { listen 443 ssl; server_name example.com; }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_exp_002_https_redirect(cfg)
+    assert comp.score == 0
+    assert comp.finding_id == 'NGX-EXP-002'
+
+
+def test_exp002_component_unknown_no_https_pair_not_applicable():
+    cfg = parse_nginx_config_v2('http { server { listen 80; server_name a.com; } }')
+    comp = _c_exp_002_https_redirect(cfg)
+    assert comp.applicable is False
+    assert comp.finding_id is None
+
+
+def test_vm_baseline_exp002_is_unknown_no_https_pair():
+    cfg = parse_nginx_config_v2(VM_BASELINE_CONF)
+    comp = _c_exp_002_https_redirect(cfg)
+    assert comp.applicable is False
+    assert comp.finding_id is None
+
+
+# ===========================================================================
+# NGX-EXP-003 (default server exposure) — per-listen-group verdict
+# ===========================================================================
+
+def test_exp003_single_server_on_port_is_pass():
+    cfg = parse_nginx_config_v2('http { server { listen 80; } }')
+    groups = resolve_listen_groups(cfg.servers)
+    verdict, evidence = _verdict_exp_003_default_server(groups[0])
+    assert verdict == 'PASS'
+    assert 'unambiguous' in evidence
+
+
+def test_exp003_multi_server_explicit_default_is_pass():
+    conf = '''
+    http {
+        server { listen 80 default_server; server_name a.com; }
+        server { listen 80; server_name b.com; }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    groups = resolve_listen_groups(cfg.servers)
+    verdict, evidence = _verdict_exp_003_default_server(groups[0])
+    assert verdict == 'PASS'
+    assert 'a.com' in evidence
+
+
+def test_exp003_multi_server_no_explicit_default_is_fail():
+    conf = '''
+    http {
+        server { listen 80; server_name first.com; }
+        server { listen 80; server_name second.com; }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    groups = resolve_listen_groups(cfg.servers)
+    verdict, evidence = _verdict_exp_003_default_server(groups[0])
+    assert verdict == 'FAIL'
+    # Implicit default is the FIRST server by config order.
+    assert 'first.com' in evidence
+
+
+def test_exp003_ipv4_and_ipv6_are_separate_groups_each_evaluated():
+    conf = '''
+    http {
+        server {
+            listen 80;
+            listen [::]:80;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    groups = resolve_listen_groups(cfg.servers)
+    assert len(groups) == 2
+    for g in groups:
+        verdict, _ = _verdict_exp_003_default_server(g)
+        assert verdict == 'PASS'  # each group has exactly 1 member
+
+
+# ===========================================================================
+# _c_exp_003_default_server() — Component-level, weight, multi-group
+# ===========================================================================
+
+def test_exp003_component_weight_is_004():
+    cfg = parse_nginx_config_v2('http { server { listen 80; } }')
+    comp = _c_exp_003_default_server(cfg)
+    assert comp.weight == 0.04
+
+
+def test_exp003_component_single_server_scores_100():
+    cfg = parse_nginx_config_v2('http { server { listen 80; } }')
+    comp = _c_exp_003_default_server(cfg)
+    assert comp.score == 100
+    assert comp.finding_id is None
+
+
+def test_exp003_component_ambiguous_group_scores_0_with_finding_id():
+    conf = '''
+    http {
+        server { listen 80; server_name x.com; }
+        server { listen 80; server_name y.com; }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_exp_003_default_server(cfg)
+    assert comp.score == 0
+    assert comp.finding_id == 'NGX-EXP-003'
+
+
+def test_exp003_component_mixed_groups_one_ambiguous_aggregates_fail():
+    # One address:port group is fine (single server), another is
+    # ambiguous (2 servers, no explicit default) — worst-case
+    # aggregation must catch the ambiguous one.
+    conf = '''
+    http {
+        server { listen 80; server_name x.com; }
+        server { listen 80; server_name y.com; }
+        server { listen 8080; server_name z.com; }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_exp_003_default_server(cfg)
+    assert comp.score == 0
+    assert comp.finding_id == 'NGX-EXP-003'
+    assert 'x.com' in comp.reason
+
+
+def test_vm_baseline_exp003_is_pass_single_server():
+    cfg = parse_nginx_config_v2(VM_BASELINE_CONF)
+    comp = _c_exp_003_default_server(cfg)
+    assert comp.score == 100
+    assert comp.finding_id is None
+
+
+# ===========================================================================
+# _build_tier2_components() — all 6 controls wired together
+# ===========================================================================
+
+def test_build_tier2_components_returns_all_seven():
+    from netaudit_pkg.checks.nginx_hardening import _build_tier2_components
+    cfg = parse_nginx_config_v2(VM_BASELINE_CONF)
+    components = _build_tier2_components(cfg)
+    assert len(components) == 7
+    names = {c.name for c in components}
+    assert names == {
+        'tls_004_ciphers',
+        'hdr_004_csp',
+        'hdr_005_referrer_policy',
+        'hdr_006_permissions_policy',
+        'conf_003_body_size',
+        'exp_002_https_redirect',
+        'exp_003_default_server',
+    }
+    weights = sorted(c.weight for c in components)
+    assert weights == sorted([0.12, 0.055, 0.02, 0.02, 0.05, 0.06, 0.04])

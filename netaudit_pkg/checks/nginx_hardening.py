@@ -35,7 +35,14 @@ from ..scoring import Component, weighted_score
 from ..ssh import SSHExecutor, HostKeyMismatchError
 from ..nginx_config import NginxConfig, collect_nginx_config
 from ..nginx_config_v2 import NginxConfigV2, ServerBlock
-from ..nginx_v2_resolvers import find_effective_header, resolve_add_headers, resolve_cascading_value
+from ..nginx_v2_resolvers import (
+    find_effective_header,
+    find_https_pair,
+    is_https_redirect_target,
+    resolve_add_headers,
+    resolve_cascading_value,
+    resolve_listen_groups,
+)
 from ..nginx_v2_utils import has_nginx_variable, parse_nginx_size
 
 try:
@@ -686,12 +693,167 @@ def _c_conf_003_body_size(cfg_v2: NginxConfigV2) -> Component:
                       reason=evidence if verdict == 'FAIL' else None)
 
 
+_REDIRECT_CODES = {'301', '302', '303', '307', '308'}
+
+
+def _find_redirect_directive(server: ServerBlock) -> str | None:
+    """Look for a `return <code> <target>;` directive on `server` where
+    `<code>` is one of nginx's redirect-capable status codes (301, 302,
+    303, 307, 308 - ngx_http_rewrite_module's `return` directive:
+    "it is possible to specify either a redirect URL... for codes 301,
+    302, 303, 307, and 308"). Returns the target string if found, else
+    None. `rewrite ... redirect|permanent` is explicitly out of scope
+    for v1 (docs/checks/nginx_hardening.md section 7's decision to keep
+    NGX-EXP-002 to the simpler, more reliably provable `return`
+    mechanism - backlog item for later).
+
+    If more than one `return` with a redirect code exists on the same
+    server (unusual but not forbidden by nginx grammar - though only the
+    first one actually executes at runtime, since `return` halts
+    processing), the first one found is used, matching nginx's own
+    first-executed-wins behavior more closely than last-wins would.
+    """
+    for raw in server.directives.get('return', []):
+        parts = raw.split(None, 1)
+        if len(parts) == 2 and parts[0] in _REDIRECT_CODES:
+            return parts[1]
+    return None
+
+
+def _verdict_exp_002_https_redirect(server: ServerBlock, all_servers: list[ServerBlock]) -> tuple[Verdict, str]:
+    """NGX-EXP-002 - HTTP->HTTPS redirect, per
+    docs/checks/nginx_hardening.md section 7's finalized semantics.
+
+    N/A: `server` has no non-SSL listen endpoint at all - there is no
+    HTTP-facing endpoint here to evaluate a redirect for.
+    UNKNOWN: any of `server`'s server_names is a wildcard/regex form (see
+    find_https_pair() - this project doesn't implement nginx's
+    wildcard/regex server_name matching priority); or no exact-match
+    HTTPS server_name pair can be proven to exist (an HTTP-only site by
+    design, like this project's own VM baseline, is not provably a
+    redirect gap - see this control's Milestone 1.5/EXP-002 discussion);
+    or a redirect directive exists but its target begins with an nginx
+    variable (e.g. `$scheme://...`) rather than a literal `https://` -
+    the protocol cannot be proven statically in that case.
+    FAIL: an exact-match HTTPS pair exists, but no redirect-capable
+    `return` directive (301/302/303/307/308) is found on this server, or
+    its target does not begin with a literal `https://`.
+    PASS: an exact-match HTTPS pair exists, and this server has a
+    redirect-capable `return` whose target begins with the literal
+    `https://` (anything after that literal, including nginx variables
+    like $host/$request_uri, does not change this - see
+    is_https_redirect_target()'s docstring).
+    """
+    label = _server_label(server)
+
+    if not any(not le.ssl for le in server.listens):
+        return 'N/A', f'{label}: no HTTP (non-SSL) listen endpoint'
+
+    pair = find_https_pair(server, all_servers)
+    if pair.reason == 'wildcard_or_regex_name':
+        return 'UNKNOWN', f'{label}: server_name uses a wildcard/regex form this project does not resolve'
+    if pair.reason == 'no_https_endpoint':
+        return 'UNKNOWN', f'{label}: no exact-match HTTPS server_name pair found (may be an HTTP-only site by design)'
+
+    target = _find_redirect_directive(server)
+    if target is None:
+        return 'FAIL', f'{label}: no redirect to the paired HTTPS server ({_server_label(pair.https_server)}) found'
+
+    if has_nginx_variable(target) and not target.startswith('https://'):
+        return 'UNKNOWN', f'{label}: redirect target "{target}" begins with a variable, protocol cannot be proven statically'
+
+    if is_https_redirect_target(target):
+        return 'PASS', f'{label}: redirects to "{target}" (paired with {_server_label(pair.https_server)})'
+
+    return 'FAIL', f'{label}: redirect target "{target}" does not begin with a literal https://'
+
+
+def _c_exp_002_https_redirect(cfg_v2: NginxConfigV2) -> Component:
+    # NGX-EXP-002 - HTTP->HTTPS redirect, weight 0.06 (section 8.3)
+    verdicts = [_verdict_exp_002_https_redirect(s, cfg_v2.servers) for s in cfg_v2.servers]
+    verdict, evidence = _aggregate_server_verdicts(verdicts)
+
+    if verdict in ('N/A', 'UNKNOWN'):
+        return Component(name='exp_002_https_redirect', weight=0.06, score=0, max=100,
+                          applicable=False, reason=evidence, finding_id=None)
+    score = 100 if verdict == 'PASS' else 0
+    return Component(name='exp_002_https_redirect', weight=0.06, score=score, max=100,
+                      finding_id=None if verdict == 'PASS' else 'NGX-EXP-002',
+                      reason=evidence if verdict == 'FAIL' else None)
+
+
+def _group_label(group_key: tuple[str, int | None]) -> str:
+    """Short evidence label for a listen group's address:port key -
+    mirrors _server_label()'s role but for resolve_listen_groups()'
+    ListenGroup, which has no single ServerBlock to name (a group can
+    span several)."""
+    address, port = group_key
+    return f'{address}:{port}' if port is not None else address
+
+
+def _verdict_exp_003_default_server(group) -> tuple[str, str]:
+    """NGX-EXP-003 - default server exposure, per
+    docs/checks/nginx_hardening.md section 7's finalized semantics,
+    evaluated per address:port ListenGroup (resolve_listen_groups()),
+    NOT per ServerBlock - this is the one Tier-2 control whose evaluation
+    unit differs from the other six (see this project's EXP-003 planning:
+    "default_server is evaluated per address:port listen group, not as a
+    property of the ServerBlock itself").
+
+    PASS: the group has exactly one member (default is unambiguous - no
+    alternative exists), or more than one member with an explicit
+    `default_server` declared on one of them (administrator intent is
+    expressed, per nginx.org's own default_server semantics).
+    FAIL: more than one member share this address:port and none declares
+    `default_server` explicitly - nginx silently picks the first one by
+    config order (nginx.org: "the first server with the address:port
+    pair will be the default server for this pair"), which this project
+    treats as unintended exposure, per section 7's explicit ruling. This
+    control does not evaluate whether the resulting default server is
+    itself "safe" - only whether its selection was deliberate.
+
+    No N/A/UNKNOWN path in this control's own logic - resolve_listen_groups()
+    always produces exactly one ListenGroup per distinct address:port
+    with at least one member, and `ambiguous` is always a definite
+    True/False from that data, so unlike every other Tier-2 control
+    there is no "cannot be proven statically" case here to route to
+    UNKNOWN.
+    """
+    label = _group_label(group.group_key)
+    if not group.ambiguous:
+        if len(group.members) == 1:
+            return 'PASS', f'{label}: single server block, default is unambiguous'
+        default_server, _ = group.effective_default
+        return 'PASS', f'{label}: default_server explicitly declared on {_server_label(default_server)}'
+
+    implicit_default, _ = group.effective_default
+    return 'FAIL', (
+        f'{label}: {len(group.members)} server blocks share this address:port with no explicit '
+        f'default_server; nginx implicitly selects {_server_label(implicit_default)} (first by config order)'
+    )
+
+
+def _c_exp_003_default_server(cfg_v2: NginxConfigV2) -> Component:
+    # NGX-EXP-003 - default server exposure, weight 0.04 (section 8.3)
+    groups = resolve_listen_groups(cfg_v2.servers)
+    verdicts = [_verdict_exp_003_default_server(g) for g in groups]
+    verdict, evidence = _aggregate_server_verdicts(verdicts)
+
+    if verdict in ('N/A', 'UNKNOWN'):
+        return Component(name='exp_003_default_server', weight=0.04, score=0, max=100,
+                          applicable=False, reason=evidence, finding_id=None)
+    score = 100 if verdict == 'PASS' else 0
+    return Component(name='exp_003_default_server', weight=0.04, score=score, max=100,
+                      finding_id=None if verdict == 'PASS' else 'NGX-EXP-003',
+                      reason=evidence if verdict == 'FAIL' else None)
+
+
 def _build_tier2_components(cfg_v2: NginxConfigV2) -> list[Component]:
-    """The 6 currently-implemented Tier-2 controls (NGX-CONF-004 is
-    BLOCKED, see docs/checks/nginx_hardening.md section 7 - not part of
-    this list). Extended incrementally as each control lands - see
-    docs/checks/nginx_hardening.md section 9 for the implementation
-    checklist tracking the rest.
+    """All 6 implemented Tier-2 controls (NGX-CONF-004 is BLOCKED, see
+    docs/checks/nginx_hardening.md section 7 - not part of this list).
+    This completes Tier-2's initial control set; integration into
+    audit_nginx_hardening()'s single 16-Component weighted_score() call
+    (section 8.3) is the next and final step.
     """
     return [
         _c_tls_004_ciphers(cfg_v2),
@@ -699,6 +861,8 @@ def _build_tier2_components(cfg_v2: NginxConfigV2) -> list[Component]:
         _c_hdr_005_referrer_policy(cfg_v2),
         _c_hdr_006_permissions_policy(cfg_v2),
         _c_conf_003_body_size(cfg_v2),
+        _c_exp_002_https_redirect(cfg_v2),
+        _c_exp_003_default_server(cfg_v2),
     ]
 
 
