@@ -8,12 +8,17 @@ HTTPS endpoint exist" or "is default_server ambiguous for *this*
 address:port pair" need the block structure, not a flattened blob of every
 directive found anywhere in the file.
 
-This module is domain model + parsing ONLY. It has no opinion about
-PASS/FAIL/UNKNOWN for any NGX-* control, and no opinion about *effective*
-values across the http -> server -> location cascade - that is
-nginx_v2_resolvers.py's job, deliberately kept separate (see that module's
-docstring). NginxConfigV2 stores what each level of the config literally
-says, nothing more.
+The dataclasses and parse_nginx_config_v2() below are domain model +
+parsing ONLY - no opinion about PASS/FAIL/UNKNOWN for any NGX-* control,
+and no opinion about *effective* values across the http -> server ->
+location cascade (that's nginx_v2_resolvers.py's job, deliberately kept
+separate - see that module's docstring). collect_nginx_config_v2() at the
+bottom of this file is the one exception to "parsing only" - it's the SSH
+I/O wrapper around parse_nginx_config_v2(), placed here (not in
+checks/nginx_hardening.py) specifically so nginx_hardening.py never needs
+to know how NginxConfigV2 gets built, only that it can ask for one -
+mirroring collect_nginx_config()'s placement in nginx_config.py for the
+same reason.
 
 Parallel to, not a replacement for, the legacy `NginxConfig`
 (nginx_config.py): that module and audit_nginx() (server_security.py) are
@@ -37,6 +42,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .nginx_v2_utils import normalize_listen_address
+from .ssh import SSHExecutor
 
 
 @dataclass(frozen=True)
@@ -533,3 +539,39 @@ def parse_nginx_config_v2(conf: str) -> NginxConfigV2:
                           http_directives=http_directives,
                           http_add_headers=http_add_headers,
                           servers=servers)
+
+
+def collect_nginx_config_v2(ssh: SSHExecutor) -> NginxConfigV2:
+    """Run `nginx -T` over the given (already-connected) SSH session and
+    parse the output into a NginxConfigV2. Mirrors
+    nginx_config.py/collect_nginx_config() deliberately - same `which
+    nginx` install check, same `ssh.sudo()` (not `ssh.run()`) for the
+    same reason documented there (server{}/location{} source files often
+    aren't world-readable), same installed/readable state handling.
+
+    This is a SEPARATE `nginx -T` invocation from
+    collect_nginx_config()'s - two SSH round-trips per full
+    nginx_hardening audit run instead of one. This is a known, accepted
+    v1 tradeoff (docs/checks/nginx_hardening.md section 7's Tier-2
+    planning: "Два nginx -T... Принимаем как известный временный
+    trade-off v1... Оптимизацию shared collection не смешиваем с
+    текущей задачей"), not an oversight - a shared-collection refactor
+    (parsing both NginxConfig and NginxConfigV2 from one captured
+    `nginx -T` output) is explicitly deferred, so this function does not
+    attempt it.
+
+    `ssh.sudo()`'s passwordless-sudo check is cached after the first
+    call (see ssh.py's SSHExecutor.sudo()), so calling this after
+    collect_nginx_config() on the same SSHExecutor does not repeat that
+    particular sub-cost, even though the `nginx -T` command itself still
+    runs twice.
+    """
+    out, _ = ssh.run('which nginx || echo NONE')
+    if 'NONE' in out:
+        return NginxConfigV2(installed=False)
+
+    conf, _ = ssh.sudo('nginx -T 2>/dev/null')
+    if not conf:
+        return NginxConfigV2(installed=True, readable=False)
+
+    return parse_nginx_config_v2(conf)

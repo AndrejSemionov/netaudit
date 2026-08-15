@@ -31,14 +31,27 @@ def _cfg(**kwargs) -> NginxConfig:
 
 
 NGINX_T_HARDENED = """\
-server {
-    listen 443 ssl;
-    ssl_certificate /etc/ssl/certs/example.pem;
-    ssl_protocols TLSv1.3;
-    server_tokens off;
+http {
     add_header Strict-Transport-Security "max-age=31536000" always;
     add_header X-Frame-Options "DENY" always;
     add_header X-Content-Type-Options "nosniff" always;
+    add_header Content-Security-Policy "default-src 'self'";
+    add_header Referrer-Policy no-referrer;
+    add_header Permissions-Policy "geolocation=()";
+    server {
+        listen 443 ssl;
+        ssl_certificate /etc/ssl/certs/example.pem;
+        ssl_protocols TLSv1.3;
+        ssl_ciphers ALL:@SECLEVEL=2;
+        client_max_body_size 10m;
+        server_tokens off;
+        server_name example.com;
+    }
+    server {
+        listen 80;
+        server_name example.com;
+        return 301 https://$host$request_uri;
+    }
 }
 """
 
@@ -153,7 +166,7 @@ def test_audit_nginx_hardening_full_result_hardened(fake_ssh):
     assert result['installed'] is True
     assert result['hardening']['score'] == 100
     assert result['hardening']['max'] == 100
-    assert len(result['hardening']['components']) == 9
+    assert len(result['hardening']['components']) == 16
     assert result['findings'] == []
 
 
@@ -181,13 +194,19 @@ def test_audit_nginx_hardening_does_not_call_audit_nginx_findings(fake_ssh):
     assert 'autoindex on' not in titles
 
 
-def test_audit_nginx_hardening_single_ssh_session(fake_ssh):
-    # collect_nginx_config() should be the only SSH round-trip - confirms
-    # audit_nginx_hardening() doesn't open a second session or re-run nginx -T.
+def test_audit_nginx_hardening_two_nginx_t_calls_for_tier1_and_tier2(fake_ssh):
+    # Known, accepted v1 tradeoff (see collect_nginx_config_v2()'s
+    # docstring in nginx_config_v2.py, and docs/checks/nginx_hardening.md
+    # section 7's Tier-2 planning): audit_nginx_hardening() runs `nginx -T`
+    # twice over the same SSH session - once for the legacy NginxConfig
+    # (Tier-1), once for NginxConfigV2 (Tier-2). This is NOT a bug; a
+    # shared-collection refactor is explicitly deferred. This test exists
+    # to make the tradeoff visible in the test suite, not to enforce a
+    # single call.
     fake_ssh.responses = _ssh_responses(NGINX_T_HARDENED)
     audit_nginx_hardening(fake_ssh)
     nginx_t_calls = [c for c in fake_ssh.calls if 'nginx -T' in c]
-    assert len(nginx_t_calls) == 1
+    assert len(nginx_t_calls) == 2
 
 
 # ===========================================================================

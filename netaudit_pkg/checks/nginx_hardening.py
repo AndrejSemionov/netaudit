@@ -34,7 +34,7 @@ from ..findings import finding as _finding
 from ..scoring import Component, weighted_score
 from ..ssh import SSHExecutor, HostKeyMismatchError
 from ..nginx_config import NginxConfig, collect_nginx_config
-from ..nginx_config_v2 import NginxConfigV2, ServerBlock
+from ..nginx_config_v2 import NginxConfigV2, ServerBlock, collect_nginx_config_v2
 from ..nginx_v2_resolvers import (
     find_effective_header,
     find_https_pair,
@@ -69,24 +69,26 @@ except ImportError:
 
 
 def _c_tls_legacy_disabled(cfg: NginxConfig) -> Component:
-    # NGX-TLS-001 - Legacy protocols disabled, weight 0.20, severity high
+    # NGX-TLS-001 - Legacy protocols disabled, weight 0.16 (trimmed from
+    # 0.20 to make room for NGX-TLS-004, see section 8.3), severity high
     if not cfg.ssl_protocols:
-        return Component(name='tls_legacy_disabled', weight=0.20, score=0, max=100,
+        return Component(name='tls_legacy_disabled', weight=0.16, score=0, max=100,
                           applicable=False, reason='ssl_protocols not configured — no TLS to evaluate',
                           finding_id='NGX-TLS-001')
     legacy_present = 'TLSv1' in cfg.ssl_protocols or 'TLSv1.1' in cfg.ssl_protocols
     score = 0 if legacy_present else 100
-    return Component(name='tls_legacy_disabled', weight=0.20, score=score, max=100,
+    return Component(name='tls_legacy_disabled', weight=0.16, score=score, max=100,
                       finding_id='NGX-TLS-001' if legacy_present else None)
 
 
 def _c_tls_modern_protocol(cfg: NginxConfig) -> Component:
-    # NGX-TLS-002 - Modern protocol level, weight 0.10, severity low.
+    # NGX-TLS-002 - Modern protocol level, weight 0.07 (trimmed
+    # proportionally from 0.10, section 8.3), severity low.
     # Three-state: PASS=100 (TLSv1.3), WARN=80 (TLSv1.2 only), FAIL=0
     # (neither), N/A when ssl_protocols is empty. No audit_nginx()
     # counterpart exists for this control - see _f_tls_modern_protocol().
     if not cfg.ssl_protocols:
-        return Component(name='tls_modern_protocol', weight=0.10, score=0, max=100,
+        return Component(name='tls_modern_protocol', weight=0.07, score=0, max=100,
                           applicable=False, reason='ssl_protocols not configured — no TLS to evaluate',
                           finding_id='NGX-TLS-002')
     if 'TLSv1.3' in cfg.ssl_protocols:
@@ -95,24 +97,25 @@ def _c_tls_modern_protocol(cfg: NginxConfig) -> Component:
         score = 80
     else:
         score = 0
-    return Component(name='tls_modern_protocol', weight=0.10, score=score, max=100,
+    return Component(name='tls_modern_protocol', weight=0.07, score=score, max=100,
                       finding_id='NGX-TLS-002' if score < 100 else None)
 
 
 def _c_tls_protocols_explicit(cfg: NginxConfig) -> Component:
-    # NGX-TLS-003 - ssl_protocols explicitly configured, weight 0.10, severity low.
+    # NGX-TLS-003 - ssl_protocols explicitly configured, weight 0.05
+    # (trimmed proportionally from 0.10, section 8.3), severity low.
     # N/A when there's no TLS vhost at all (no cert) - distinct from
     # NGX-TLS-001/002's N/A trigger (empty ssl_protocols), per the 6.0
     # status matrix: this control's FAIL case IS "ssl_protocols empty" (a
     # cert exists but the protocol list wasn't set), so N/A has to be a
     # different condition or FAIL could never fire.
     if not cfg.has_ssl_certificate:
-        return Component(name='tls_protocols_explicit', weight=0.10, score=0, max=100,
+        return Component(name='tls_protocols_explicit', weight=0.05, score=0, max=100,
                           applicable=False, reason='no ssl_certificate configured — no TLS vhost to evaluate',
                           finding_id='NGX-TLS-003')
     explicit = bool(cfg.ssl_protocols)
     score = 100 if explicit else 0
-    return Component(name='tls_protocols_explicit', weight=0.10, score=score, max=100,
+    return Component(name='tls_protocols_explicit', weight=0.05, score=score, max=100,
                       finding_id=None if explicit else 'NGX-TLS-003')
 
 
@@ -128,51 +131,59 @@ def _c_header(cfg: NginxConfig, *, name: str, header_key: str, weight: float,
 
 
 def _c_hsts(cfg: NginxConfig) -> Component:
-    # NGX-HDR-001 - Strict-Transport-Security, weight 0.10, severity medium
+    # NGX-HDR-001 - Strict-Transport-Security, weight 0.055 (trimmed from
+    # 0.10, weighted equal to NGX-HDR-004/CSP as the group's two
+    # highest-impact controls - section 8.3), severity medium
     return _c_header(cfg, name='hsts', header_key='strict-transport-security',
-                      weight=0.10, finding_id='NGX-HDR-001')
+                      weight=0.055, finding_id='NGX-HDR-001')
 
 
 def _c_x_frame_options(cfg: NginxConfig) -> Component:
-    # NGX-HDR-002 - X-Frame-Options, weight 0.05, severity low
+    # NGX-HDR-002 - X-Frame-Options, weight 0.025 (trimmed proportionally
+    # from 0.05, section 8.3), severity low
     return _c_header(cfg, name='x_frame_options', header_key='x-frame-options',
-                      weight=0.05, finding_id='NGX-HDR-002')
+                      weight=0.025, finding_id='NGX-HDR-002')
 
 
 def _c_x_content_type_options(cfg: NginxConfig) -> Component:
-    # NGX-HDR-003 - X-Content-Type-Options, weight 0.05, severity low
+    # NGX-HDR-003 - X-Content-Type-Options, weight 0.025 (trimmed
+    # proportionally from 0.05, section 8.3), severity low
     return _c_header(cfg, name='x_content_type_options', header_key='x-content-type-options',
-                      weight=0.05, finding_id='NGX-HDR-003')
+                      weight=0.025, finding_id='NGX-HDR-003')
 
 
 def _c_server_tokens(cfg: NginxConfig) -> Component:
-    # NGX-CONF-001 - server_tokens, weight 0.08, severity medium.
+    # NGX-CONF-001 - server_tokens, weight 0.06 (trimmed proportionally
+    # from 0.08, section 8.3), severity medium.
     # Never N/A (section 4): None means "on" is nginx's documented default,
     # a determinate FAIL, not an unknown.
     off = cfg.server_tokens == 'off'
     score = 100 if off else 0
-    return Component(name='server_tokens', weight=0.08, score=score, max=100,
+    return Component(name='server_tokens', weight=0.06, score=score, max=100,
                       finding_id=None if off else 'NGX-CONF-001')
 
 
 def _c_autoindex(cfg: NginxConfig) -> Component:
-    # NGX-CONF-002 - autoindex disabled, weight 0.12, severity medium
+    # NGX-CONF-002 - autoindex disabled, weight 0.09 (trimmed
+    # proportionally from 0.12, section 8.3), severity medium
     disabled = not cfg.autoindex_on
     score = 100 if disabled else 0
-    return Component(name='autoindex_disabled', weight=0.12, score=score, max=100,
+    return Component(name='autoindex_disabled', weight=0.09, score=score, max=100,
                       finding_id=None if disabled else 'NGX-CONF-002')
 
 
 def _c_tls_available(cfg: NginxConfig) -> Component:
-    # NGX-EXP-001 - TLS available, weight 0.20, severity high. Never N/A -
-    # this is the one control that stays applicable even with no TLS at
-    # all, deliberately (section 8.1's "No TLS" finding: this is what keeps
-    # a no-TLS server's score honestly low instead of the TLS group's
-    # weight vanishing via N/A redistribution). No audit_nginx() counterpart
-    # exists for this control - see _f_tls_available().
+    # NGX-EXP-001 - TLS available, weight 0.10 (trimmed from 0.20, but
+    # kept the largest single weight in its group - this control is a
+    # logical prerequisite for NGX-EXP-002, section 8.3), severity high.
+    # Never N/A - this is the one control that stays applicable even with
+    # no TLS at all, deliberately (section 8.1's "No TLS" finding: this is
+    # what keeps a no-TLS server's score honestly low instead of the TLS
+    # group's weight vanishing via N/A redistribution). No audit_nginx()
+    # counterpart exists for this control - see _f_tls_available().
     has_tls = cfg.has_ssl_certificate
     score = 100 if has_tls else 0
-    return Component(name='tls_available', weight=0.20, score=score, max=100,
+    return Component(name='tls_available', weight=0.10, score=score, max=100,
                       finding_id=None if has_tls else 'NGX-EXP-001')
 
 
@@ -880,6 +891,27 @@ def audit_nginx_hardening(ssh: SSHExecutor) -> dict:
     consumers of collect_nginx_config(cfg); the link between them is
     Component.finding_id referencing audit_nginx()'s finding ids, not a
     function call (docs/checks/nginx_hardening.md section 5).
+
+    Runs the Tier-1 (legacy NginxConfig) and Tier-2 (NginxConfigV2)
+    collectors as two separate `nginx -T` calls over the same SSH session -
+    a known, accepted v1 tradeoff, not an oversight (see
+    collect_nginx_config_v2()'s docstring in nginx_config_v2.py). Both sets
+    of Component objects feed the SAME weighted_score() call, producing one
+    `nginx_hardening` score (16 components), per section 8.3's variant-b
+    integration decision - there is no separate Tier-2 score or report
+    section.
+
+    There is deliberately NO fallback to a legacy-only (9-component) score
+    if Tier-2's collector can't read the config. Section 8.3 rebalanced the
+    9 legacy weights as parts of the single 16-component model - they no
+    longer sum to 1.0 on their own (0.635, not 1.0), so they cannot
+    validly stand alone as a score. Producing one anyway would silently
+    swap in a different, unvalidated scoring model exactly when data is
+    missing, and the resulting number would not be comparable to a normal
+    16-component run even though both would look like an ordinary
+    'hardening.score' integer. This mirrors the existing `not cfg.readable`
+    policy just below: missing required data means no score at all, not a
+    score computed from whatever happened to be available.
     """
     cfg = collect_nginx_config(ssh)
     if not cfg.installed:
@@ -893,7 +925,20 @@ def audit_nginx_hardening(ssh: SSHExecutor) -> dict:
         return {'installed': True, 'version': cfg.version,
                 'error': 'nginx -T requires root — no read access to the config'}
 
-    hardening = weighted_score(_build_components(cfg))
+    cfg_v2 = collect_nginx_config_v2(ssh)
+    if not cfg_v2.readable:
+        # See this function's docstring: no legacy-only fallback score.
+        # In practice this should be unreachable whenever cfg.readable was
+        # True above (both collectors share the same ssh.sudo() root
+        # requirement), so reaching this branch signals the two
+        # collectors disagreed, not routine no-root - still handled
+        # explicitly rather than assumed impossible.
+        return {'installed': True, 'version': cfg.version,
+                'error': 'nginx -T (Tier-2 collection) requires root — no read access to the config; '
+                         'the 16-component hardening score needs both legacy and Tier-2 data'}
+
+    components = _build_components(cfg) + _build_tier2_components(cfg_v2)
+    hardening = weighted_score(components)
     findings = _build_findings(cfg)
 
     return {
@@ -919,7 +964,8 @@ def audit_nginx_hardening(ssh: SSHExecutor) -> dict:
     ],
     required_tools=[],
     description='Scores nginx TLS, security headers, configuration and exposure against '
-                'docs/checks/nginx_hardening.md (9 controls, 0-100 hardening score). Read-only.',
+                'docs/checks/nginx_hardening.md (16 controls: 9 Tier-1 + 7 Tier-2, '
+                '0-100 hardening score). Read-only.',
 )
 def check_nginx_hardening(host='', user='root', port=22, key_path='', password='') -> dict:
     """Public registry entrypoint - opens its own SSH session when run

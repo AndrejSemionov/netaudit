@@ -17,6 +17,7 @@ from netaudit_pkg.nginx_config_v2 import parse_nginx_config_v2
 from netaudit_pkg.nginx_v2_resolvers import resolve_listen_groups
 from netaudit_pkg.checks.nginx_hardening import (
     _aggregate_server_verdicts,
+    _build_tier2_components,
     _c_conf_003_body_size,
     _c_exp_002_https_redirect,
     _c_exp_003_default_server,
@@ -1480,3 +1481,94 @@ def test_build_tier2_components_returns_all_seven():
     }
     weights = sorted(c.weight for c in components)
     assert weights == sorted([0.12, 0.055, 0.02, 0.02, 0.05, 0.06, 0.04])
+
+
+# ===========================================================================
+# Full integration: audit_nginx_hardening() — 9 legacy + 7 Tier-2 = 16
+# components in one weighted_score() call (section 8.3, variant b)
+# ===========================================================================
+
+def test_legacy_and_tier2_weights_sum_to_one():
+    from netaudit_pkg.nginx_config import NginxConfig
+    from netaudit_pkg.checks.nginx_hardening import _build_components
+
+    cfg = NginxConfig(installed=True, readable=True, ssl_protocols='TLSv1.2 TLSv1.3',
+                       server_tokens='off', autoindex_on=False, has_ssl_certificate=True,
+                       headers_present=set())
+    legacy = _build_components(cfg)
+    assert len(legacy) == 9
+
+    cfg_v2 = parse_nginx_config_v2('http { server { listen 80; } }')
+    tier2 = _build_tier2_components(cfg_v2)
+    assert len(tier2) == 7
+
+    total = sum(c.weight for c in legacy) + sum(c.weight for c in tier2)
+    assert abs(total - 1.0) < 1e-9
+
+
+def test_audit_nginx_hardening_end_to_end_16_components():
+    from unittest.mock import MagicMock
+    from netaudit_pkg.checks.nginx_hardening import audit_nginx_hardening
+
+    ssh = MagicMock()
+
+    def run_side_effect(cmd, *args, **kwargs):
+        if 'which nginx' in cmd:
+            return ('/usr/sbin/nginx', '')
+        if 'nginx -v' in cmd:
+            return ('nginx version: nginx/1.28.3', '')
+        return ('', '')
+
+    def sudo_side_effect(cmd, *args, **kwargs):
+        if 'nginx -T' in cmd:
+            return (VM_BASELINE_CONF, '')
+        return ('', '')
+
+    ssh.run.side_effect = run_side_effect
+    ssh.sudo.side_effect = sudo_side_effect
+
+    result = audit_nginx_hardening(ssh)
+    assert result['installed'] is True
+    assert 'hardening' in result
+    assert len(result['hardening']['components']) == 16
+    assert isinstance(result['hardening']['score'], int)
+    assert 0 <= result['hardening']['score'] <= 100
+
+
+def test_hardening_score_unavailable_when_tier2_unreadable():
+    # Section 8.3's weights are only valid as a single 16-component
+    # model - the 9 legacy weights alone sum to 0.635, not 1.0, so they
+    # cannot stand in as a fallback score. If Tier-2 can't be read, the
+    # hardening score must be entirely absent, not a different
+    # (unvalidated, non-comparable) 9-component number.
+    from unittest.mock import MagicMock
+    from netaudit_pkg.checks.nginx_hardening import audit_nginx_hardening
+
+    ssh = MagicMock()
+    call_count = {'sudo': 0}
+
+    def run_side_effect(cmd, *args, **kwargs):
+        if 'which nginx' in cmd:
+            return ('/usr/sbin/nginx', '')
+        if 'nginx -v' in cmd:
+            return ('nginx version: nginx/1.28.3', '')
+        return ('', '')
+
+    def sudo_side_effect(cmd, *args, **kwargs):
+        call_count['sudo'] += 1
+        if 'nginx -T' in cmd:
+            # First call (legacy collector) succeeds; second (V2)
+            # returns empty, simulating the two collectors disagreeing.
+            if call_count['sudo'] == 1:
+                return (VM_BASELINE_CONF, '')
+            return ('', '')
+        return ('', '')
+
+    ssh.run.side_effect = run_side_effect
+    ssh.sudo.side_effect = sudo_side_effect
+
+    result = audit_nginx_hardening(ssh)
+    assert result['installed'] is True
+    assert 'hardening' not in result
+    assert 'error' in result
+    assert 'Tier-2' in result['error']
