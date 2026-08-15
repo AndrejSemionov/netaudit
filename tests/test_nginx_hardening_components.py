@@ -365,8 +365,8 @@ _TIER2_BAD = '''http {
     ), _TIER2_GOOD, 77),
     ('D_no_headers', dict(
         server_tokens='off', ssl_protocols=['TLSv1.3'], has_ssl_certificate=True,
-        headers_present=set(), autoindex_on=False,
-    ), _TIER2_GOOD, 90),
+        headers_present={'x-frame-options'}, autoindex_on=False,
+    ), _TIER2_GOOD, 92),
     ('E_bad_config_bad_tls', dict(
         server_tokens='on', ssl_protocols=['TLSv1', 'TLSv1.1'], has_ssl_certificate=True,
         headers_present={'x-frame-options', 'x-content-type-options'}, autoindex_on=True,
