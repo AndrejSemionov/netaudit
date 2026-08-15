@@ -27,11 +27,15 @@ full rationale (synthetic validation, why Exposure is 20% not 10%, etc.).
 
 from __future__ import annotations
 
+from typing import Literal
+
 from ..registry import register
 from ..findings import finding as _finding
 from ..scoring import Component, weighted_score
 from ..ssh import SSHExecutor, HostKeyMismatchError
 from ..nginx_config import NginxConfig, collect_nginx_config
+from ..nginx_config_v2 import NginxConfigV2, ServerBlock
+from ..nginx_v2_resolvers import resolve_cascading_value
 
 try:
     import paramiko
@@ -228,6 +232,159 @@ def _build_components(cfg: NginxConfig) -> list[Component]:
         _c_server_tokens(cfg),
         _c_autoindex(cfg),
         _c_tls_available(cfg),
+    ]
+
+
+# ===========================================================================
+# Tier-2 component builders (docs/checks/nginx_hardening.md section 7 +
+# section 8.3's weight model). Each control's per-ServerBlock verdict
+# function returns one of PASS/FAIL/UNKNOWN/N/A plus a short evidence
+# string; _aggregate_server_verdicts() then combines however many
+# ServerBlocks NginxConfigV2 has into the single Component
+# _build_tier2_components() needs (weighted_score() takes one Component
+# per control, not one per server).
+# ===========================================================================
+
+Verdict = Literal['PASS', 'FAIL', 'UNKNOWN', 'N/A']
+
+
+def _aggregate_server_verdicts(verdicts: list[tuple[Verdict, str]]) -> tuple[Verdict, str]:
+    """The single place worst-case multi-vhost aggregation is decided for
+    every Tier-2 control (see this session's multi-vhost aggregation
+    decision, recorded here rather than in a separate doc since it's
+    purely an implementation-layer rule, not a control semantics
+    decision docs/checks/nginx_hardening.md section 7 needs to state).
+
+    N/A entries are excluded entirely before aggregation - they don't
+    participate in the FAIL > UNKNOWN > PASS priority at all, they're
+    simply not counted. Only if EVERY server is N/A does the aggregate
+    become N/A. Among the remaining (non-N/A) verdicts: any FAIL makes
+    the whole control FAIL; else any UNKNOWN makes it UNKNOWN; else it's
+    PASS. This is deliberately the most conservative aggregation
+    available - a single provably-bad vhost cannot be outvoted by
+    several good ones, matching this project's asymmetric-proof stance
+    (a control can't claim safety it hasn't demonstrated everywhere it
+    applies).
+
+    Evidence is concatenated (one line per contributing server, `; `
+    joined) so a report reader can see which server(s) drove the
+    aggregate result, not just the final verdict - this is why each
+    per-server verdict function returns its own evidence string rather
+    than aggregation reconstructing it after the fact.
+    """
+    applicable = [(v, e) for v, e in verdicts if v != 'N/A']
+    if not applicable:
+        return 'N/A', 'no applicable server block'
+
+    for target in ('FAIL', 'UNKNOWN', 'PASS'):
+        matching = [e for v, e in applicable if v == target]
+        if matching:
+            return target, '; '.join(matching)
+
+    # unreachable - every element of `applicable` is PASS/FAIL/UNKNOWN,
+    # so one of the three loop iterations above always matches
+    raise AssertionError('unreachable: no verdict matched PASS/FAIL/UNKNOWN')
+
+
+def _server_label(server: ServerBlock) -> str:
+    """Short, human-readable identifier for a ServerBlock in Tier-2
+    evidence text - the primary server_name if one is set (nginx.org:
+    "The first name becomes the primary server name"), else a
+    listen-based fallback for anonymous/catch-all server blocks (no
+    server_name at all is valid nginx config - the empty server_name
+    default per nginx.org's `server_name` directive).
+    """
+    if server.server_names:
+        return server.server_names[0]
+    if server.listens:
+        le = server.listens[0]
+        return f'{le.address}:{le.port}' if le.port is not None else le.address
+    return f'server#{server.order}'
+
+
+def _verdict_tls_004_ciphers(server: ServerBlock, http_directives: dict[str, list[str]]) -> tuple[Verdict, str]:
+    """NGX-TLS-004 - weak cipher policy, per docs/checks/nginx_hardening.md
+    section 7's finalized semantics for a single ServerBlock:
+
+    N/A: server has no `listen ... ssl` endpoint at all - nothing to
+    evaluate.
+    FAIL: effective ssl_ciphers string provably includes a forbidden
+    class without a preceding `!`/`-` exclusion (eNULL/NULL, aNULL,
+    EXPORT, RC4, DES/3DES, MD5, kRSA).
+    PASS: either `@SECLEVEL=n` (n>=2, last occurrence wins) with no
+    later explicit inclusion of a forbidden class, or a value containing
+    an nginx variable is never PASS (see UNKNOWN below).
+    UNKNOWN: bare aliases (HIGH/DEFAULT/ALL/MEDIUM) without SECLEVEL or
+    explicit exclusions, unresolvable +/- constructs, the directive
+    absent entirely (nginx's own compiled-in default HIGH:!aNULL:!MD5
+    contains a bare HIGH alias - not automatically PASS, per the spec's
+    explicit ruling on this exact case), or a value containing an nginx
+    variable.
+    """
+    if not any(le.ssl for le in server.listens):
+        return 'N/A', 'no ssl listen endpoint'
+
+    label = _server_label(server)
+    ev = resolve_cascading_value(
+        'ssl_ciphers', 'HIGH:!aNULL:!MD5',
+        http_directives=http_directives, server_directives=server.directives,
+    )
+    if ev.value is None:
+        return 'UNKNOWN', f'{label}: ssl_ciphers effective value could not be determined'
+    if ev.has_variable:
+        return 'UNKNOWN', f'{label}: ssl_ciphers "{ev.value}" contains an nginx variable'
+
+    tokens = ev.value.split(':')
+
+    forbidden = {'enull', 'null', 'anull', 'export', 'rc4', 'des', '3des', 'md5', 'krsa'}
+    for tok in tokens:
+        raw = tok.strip()
+        if not raw or raw[0] in '!-':
+            continue
+        if raw.lower() in forbidden:
+            return 'FAIL', f'{label}: ssl_ciphers "{ev.value}" explicitly includes forbidden class {raw!r}'
+
+    seclevel = None
+    for tok in tokens:
+        raw = tok.strip()
+        if raw.upper().startswith('@SECLEVEL='):
+            try:
+                seclevel = int(raw.split('=', 1)[1])
+            except ValueError:
+                seclevel = None
+    if seclevel is not None and seclevel >= 2:
+        return 'PASS', f'{label}: ssl_ciphers "{ev.value}" sets @SECLEVEL={seclevel} with no later forbidden inclusion'
+
+    return 'UNKNOWN', f'{label}: ssl_ciphers "{ev.value}" (source={ev.source}) is not a recognized-safe profile'
+
+
+def _c_tls_004_ciphers(cfg_v2: NginxConfigV2) -> Component:
+    # NGX-TLS-004 - weak cipher policy, weight 0.12 (section 8.3)
+    verdicts = [_verdict_tls_004_ciphers(s, cfg_v2.http_directives) for s in cfg_v2.servers]
+    verdict, evidence = _aggregate_server_verdicts(verdicts)
+
+    if verdict == 'N/A':
+        return Component(name='tls_004_ciphers', weight=0.12, score=0, max=100,
+                          applicable=False, reason=evidence, finding_id=None)
+    if verdict == 'UNKNOWN':
+        return Component(name='tls_004_ciphers', weight=0.12, score=0, max=100,
+                          applicable=False, reason=evidence, finding_id=None)
+    score = 100 if verdict == 'PASS' else 0
+    return Component(name='tls_004_ciphers', weight=0.12, score=score, max=100,
+                      finding_id=None if verdict == 'PASS' else 'NGX-TLS-004',
+                      reason=evidence if verdict == 'FAIL' else None)
+
+
+def _build_tier2_components(cfg_v2: NginxConfigV2) -> list[Component]:
+    """The 6 currently-implemented Tier-2 controls (NGX-CONF-004 is
+    BLOCKED, see docs/checks/nginx_hardening.md section 7 - not part of
+    this list). Extended incrementally as each control lands; only
+    NGX-TLS-004 exists as of this commit - see this module's git history
+    / docs/checks/nginx_hardening.md section 9 for the implementation
+    checklist tracking the rest.
+    """
+    return [
+        _c_tls_004_ciphers(cfg_v2),
     ]
 
 
