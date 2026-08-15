@@ -36,7 +36,7 @@ from ..ssh import SSHExecutor, HostKeyMismatchError
 from ..nginx_config import NginxConfig, collect_nginx_config
 from ..nginx_config_v2 import NginxConfigV2, ServerBlock
 from ..nginx_v2_resolvers import find_effective_header, resolve_add_headers, resolve_cascading_value
-from ..nginx_v2_utils import has_nginx_variable
+from ..nginx_v2_utils import has_nginx_variable, parse_nginx_size
 
 try:
     import paramiko
@@ -630,6 +630,62 @@ def _c_hdr_006_permissions_policy(cfg_v2: NginxConfigV2) -> Component:
                       reason=evidence if verdict == 'FAIL' else None)
 
 
+def _verdict_conf_003_body_size(server: ServerBlock, http_directives: dict[str, list[str]]) -> tuple[Verdict, str]:
+    """NGX-CONF-003 - client_max_body_size, per
+    docs/checks/nginx_hardening.md section 7's finalized semantics for a
+    single ServerBlock. Uses resolve_cascading_value() (ordinary
+    http->server cascade), NOT resolve_add_headers() - client_max_body_size
+    is a single-value directive with no special all-or-nothing inheritance
+    rule (nginx.org documents it as Context: http, server, location with
+    no repeatability or special-inheritance note, unlike add_header).
+    v1 evaluates only at server level - no location-level scoping, matching
+    every other Tier-2 control's fundamentals (section 7).
+
+    FAIL: effective value is literally `0` (nginx.org: "Setting size to 0
+    disables checking of client request body size" - an explicit,
+    documented unrestricted state), or the literal cannot be parsed as an
+    nginx size at all (malformed config).
+    UNKNOWN: effective value contains an nginx variable.
+    PASS: any other valid literal size (explicit or nginx's own compiled-
+    in default of 1m) - deliberately no upper-bound policy (section 7's
+    explicit decision: v1 does not judge whether a given limit is "large
+    enough to be risky", only whether the size check is disabled
+    entirely).
+    """
+    label = _server_label(server)
+    ev = resolve_cascading_value(
+        'client_max_body_size', '1m',
+        http_directives=http_directives, server_directives=server.directives,
+    )
+
+    if ev.value is None:
+        return 'UNKNOWN', f'{label}: client_max_body_size effective value could not be determined'
+    if ev.has_variable:
+        return 'UNKNOWN', f'{label}: client_max_body_size "{ev.value}" contains an nginx variable'
+
+    size = parse_nginx_size(ev.value)
+    if size is None:
+        return 'FAIL', f'{label}: client_max_body_size "{ev.value}" is not a valid nginx size literal'
+    if size == 0:
+        return 'FAIL', f'{label}: client_max_body_size is explicitly 0 (unrestricted request body size)'
+
+    return 'PASS', f'{label}: client_max_body_size "{ev.value}" (source={ev.source}) enforces a size limit'
+
+
+def _c_conf_003_body_size(cfg_v2: NginxConfigV2) -> Component:
+    # NGX-CONF-003 - client_max_body_size, weight 0.05 (section 8.3)
+    verdicts = [_verdict_conf_003_body_size(s, cfg_v2.http_directives) for s in cfg_v2.servers]
+    verdict, evidence = _aggregate_server_verdicts(verdicts)
+
+    if verdict in ('N/A', 'UNKNOWN'):
+        return Component(name='conf_003_body_size', weight=0.05, score=0, max=100,
+                          applicable=False, reason=evidence, finding_id=None)
+    score = 100 if verdict == 'PASS' else 0
+    return Component(name='conf_003_body_size', weight=0.05, score=score, max=100,
+                      finding_id=None if verdict == 'PASS' else 'NGX-CONF-003',
+                      reason=evidence if verdict == 'FAIL' else None)
+
+
 def _build_tier2_components(cfg_v2: NginxConfigV2) -> list[Component]:
     """The 6 currently-implemented Tier-2 controls (NGX-CONF-004 is
     BLOCKED, see docs/checks/nginx_hardening.md section 7 - not part of
@@ -642,6 +698,7 @@ def _build_tier2_components(cfg_v2: NginxConfigV2) -> list[Component]:
         _c_hdr_004_csp(cfg_v2),
         _c_hdr_005_referrer_policy(cfg_v2),
         _c_hdr_006_permissions_policy(cfg_v2),
+        _c_conf_003_body_size(cfg_v2),
     ]
 
 

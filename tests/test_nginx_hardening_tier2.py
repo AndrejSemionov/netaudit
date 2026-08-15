@@ -16,12 +16,14 @@ from __future__ import annotations
 from netaudit_pkg.nginx_config_v2 import parse_nginx_config_v2
 from netaudit_pkg.checks.nginx_hardening import (
     _aggregate_server_verdicts,
+    _c_conf_003_body_size,
     _c_hdr_004_csp,
     _c_hdr_005_referrer_policy,
     _c_hdr_006_permissions_policy,
     _c_tls_004_ciphers,
     _is_structurally_trivial_csp,
     _parse_permissions_policy,
+    _verdict_conf_003_body_size,
     _verdict_hdr_004_csp,
     _verdict_hdr_005_referrer_policy,
     _verdict_hdr_006_permissions_policy,
@@ -935,3 +937,172 @@ def test_vm_baseline_hdr006_is_fail_no_permissions_policy_anywhere():
     comp = _c_hdr_006_permissions_policy(cfg)
     assert comp.score == 0
     assert comp.finding_id == 'NGX-HDR-006'
+
+
+# ===========================================================================
+# NGX-CONF-003 (client_max_body_size) — per-server verdict
+# ===========================================================================
+
+def _conf003_verdict_for(value: str) -> tuple[str, str]:
+    conf = f'http {{ server {{ listen 80; client_max_body_size {value}; }} }}'
+    cfg = parse_nginx_config_v2(conf)
+    return _verdict_conf_003_body_size(cfg.servers[0], cfg.http_directives)
+
+
+def test_conf003_explicit_zero_is_fail():
+    # nginx.org: "Setting size to 0 disables checking of client request
+    # body size" — explicit, documented unrestricted state.
+    verdict, evidence = _conf003_verdict_for('0')
+    assert verdict == 'FAIL'
+    assert 'unrestricted' in evidence
+
+
+def test_conf003_small_explicit_value_is_pass():
+    verdict, _ = _conf003_verdict_for('1m')
+    assert verdict == 'PASS'
+
+
+def test_conf003_large_explicit_value_is_still_pass():
+    # v1 deliberately has no upper-bound policy (section 7) — a large
+    # limit is not automatically flagged, only the fully-disabled (0)
+    # case is.
+    verdict, _ = _conf003_verdict_for('500m')
+    assert verdict == 'PASS'
+
+
+def test_conf003_very_large_value_is_pass():
+    verdict, _ = _conf003_verdict_for('1g')
+    assert verdict == 'PASS'
+
+
+def test_conf003_kilobyte_value_is_pass():
+    verdict, _ = _conf003_verdict_for('10k')
+    assert verdict == 'PASS'
+
+
+def test_conf003_absent_resolves_to_nginx_default_1m_and_passes():
+    cfg = parse_nginx_config_v2('http { server { listen 80; } }')
+    verdict, evidence = _verdict_conf_003_body_size(cfg.servers[0], cfg.http_directives)
+    assert verdict == 'PASS'
+    assert 'nginx-default' in evidence
+
+
+def test_conf003_variable_is_unknown():
+    conf = 'http { server { listen 80; client_max_body_size $limit; } }'
+    cfg = parse_nginx_config_v2(conf)
+    verdict, evidence = _verdict_conf_003_body_size(cfg.servers[0], cfg.http_directives)
+    assert verdict == 'UNKNOWN'
+    assert 'variable' in evidence
+
+
+def test_conf003_invalid_literal_is_fail():
+    verdict, evidence = _conf003_verdict_for('not_a_size')
+    assert verdict == 'FAIL'
+    assert 'not a valid nginx size literal' in evidence
+
+
+def test_conf003_applies_without_ssl_listen():
+    verdict, _ = _conf003_verdict_for('50m')
+    assert verdict == 'PASS'
+
+
+# ===========================================================================
+# NGX-CONF-003 — ordinary cascading (http -> server), not all-or-nothing
+# ===========================================================================
+
+def test_conf003_server_explicit_overrides_http():
+    conf = '''
+    http {
+        client_max_body_size 0;
+        server {
+            listen 80;
+            client_max_body_size 50m;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, evidence = _verdict_conf_003_body_size(cfg.servers[0], cfg.http_directives)
+    assert verdict == 'PASS'
+    assert 'source=explicit' in evidence
+
+
+def test_conf003_server_silent_falls_through_to_http():
+    conf = '''
+    http {
+        client_max_body_size 0;
+        server {
+            listen 80;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, _ = _verdict_conf_003_body_size(cfg.servers[0], cfg.http_directives)
+    assert verdict == 'FAIL'  # inherits http's explicit 0
+
+
+# ===========================================================================
+# _c_conf_003_body_size() — Component-level, weight, multi-vhost
+# ===========================================================================
+
+def test_conf003_component_weight_is_005():
+    cfg = parse_nginx_config_v2('http { server { listen 80; } }')
+    comp = _c_conf_003_body_size(cfg)
+    assert comp.weight == 0.05
+
+
+def test_conf003_component_pass_scores_100():
+    conf = 'http { server { listen 80; client_max_body_size 50m; } }'
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_conf_003_body_size(cfg)
+    assert comp.score == 100
+    assert comp.finding_id is None
+
+
+def test_conf003_component_fail_scores_0_with_finding_id():
+    conf = 'http { server { listen 80; client_max_body_size 0; } }'
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_conf_003_body_size(cfg)
+    assert comp.score == 0
+    assert comp.finding_id == 'NGX-CONF-003'
+    assert comp.reason is not None
+
+
+def test_conf003_component_unknown_is_not_applicable_no_finding():
+    conf = 'http { server { listen 80; client_max_body_size $v; } }'
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_conf_003_body_size(cfg)
+    assert comp.applicable is False
+    assert comp.finding_id is None
+
+
+def test_conf003_multivhost_mixed_pass_fail_aggregates_fail():
+    conf = '''
+    http {
+        server {
+            listen 80;
+            server_name good.example.com;
+            client_max_body_size 50m;
+        }
+        server {
+            listen 80;
+            server_name bad.example.com;
+            client_max_body_size 0;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_conf_003_body_size(cfg)
+    assert comp.score == 0
+    assert comp.finding_id == 'NGX-CONF-003'
+    assert 'bad.example.com' in comp.reason
+
+
+def test_vm_baseline_conf003_is_pass_via_nginx_default():
+    # VM never sets client_max_body_size anywhere -> resolves to nginx's
+    # own 1m default, which is a real, finite limit -> PASS. Unlike
+    # NGX-TLS-004's default (a bare HIGH alias, UNKNOWN), nginx's
+    # client_max_body_size default is an unambiguous, finite value.
+    cfg = parse_nginx_config_v2(VM_BASELINE_CONF)
+    comp = _c_conf_003_body_size(cfg)
+    assert comp.score == 100
+    assert comp.finding_id is None
