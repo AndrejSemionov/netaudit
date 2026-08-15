@@ -96,6 +96,25 @@ def fake_ssh():
     return FakeSSHExecutor()
 
 
+def exit_marked(stdout: str, exit_code: int, marker: str = '__NETAUDIT_CVE_AUDIT_EXIT__') -> str:
+    """Builds the stdout a real shell would produce for a command wrapped
+    by cve_audit._run_with_exit_code() - i.e. `{ <cmd>; rc=$?; printf
+    '\\n%s:%s\\n' '<marker>' "$rc"; }`. FakeSSHExecutor doesn't execute a
+    real shell, so tests exercising _run_with_exit_code()-based collectors
+    (_dpkg_version, _get_package_origin) must supply this marker suffix
+    themselves in their canned response, the same way a real remote shell
+    would append it after the wrapped command runs. Omitting it (a bare
+    stdout string with no marker) is itself a valid, deliberate test case:
+    it's exactly what a dropped/truncated SSH command looks like, and
+    should be used to test the collection_ok=False path, not treated as
+    an oversight.
+
+    Default marker matches cve_audit._EXIT_MARKER - if that constant ever
+    changes, update it here too (or import it directly instead of the
+    default, for tests that want to stay in lockstep automatically)."""
+    return f'{stdout}\n{marker}:{exit_code}\n'
+
+
 @pytest.fixture
 def isolated_db(tmp_path, monkeypatch):
     """

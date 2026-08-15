@@ -88,6 +88,52 @@ def _parse_version(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+# Marker used by _run_with_exit_code() to recover a command's exit status.
+# SSHExecutor.run() only returns (stdout, stderr) - no exit code - because
+# it's the shared executor for 9 other check modules and none of the rest
+# need one; changing its signature for this module's sake would be a
+# needlessly wide blast radius for one collector's requirement. This
+# marker recovers the exit code locally, for this module only, without
+# touching that shared contract.
+_EXIT_MARKER = '__NETAUDIT_CVE_AUDIT_EXIT__'
+
+
+def _run_with_exit_code(ssh: SSHExecutor, cmd: str, timeout: int = 20) -> tuple[str, int | None]:
+    """Runs `cmd` and returns (stdout, exit_code).
+
+    exit_code is None if the command's completion could not be confirmed -
+    SSH channel drop, timeout, or truncated output before the marker was
+    written. This is a genuine unknown, distinct from exit_code=1 (or any
+    other nonzero code), which means the command ran to completion and
+    reported failure through the normal exit-status channel (e.g.
+    dpkg-query: package not installed).
+
+    The command is wrapped in a shell group so `$?` is captured
+    immediately after it runs, before anything else (including the
+    `printf` itself) can change it:
+
+        { <cmd>; rc=$?; printf '\\n%s:%s\\n' '<marker>' "$rc"; }
+
+    The marker string is long and namespaced specifically so an
+    arbitrarily-chosen remote command's own stdout is exceedingly
+    unlikely to collide with it by coincidence; if it ever does, the
+    output up to the last marker occurrence is still returned as `out`,
+    a false collection failure (marker misparsed as absent) rather than
+    a false success is the safe failure direction here.
+    """
+    wrapped = f"{{ {cmd}; rc=$?; printf '\\n%s:%s\\n' '{_EXIT_MARKER}' \"$rc\"; }}"
+    out, _ = ssh.run(wrapped, timeout=timeout)
+    if _EXIT_MARKER not in out:
+        return out, None
+    body, _, tail = out.rpartition(_EXIT_MARKER)
+    code_str = tail.lstrip(':').strip()
+    try:
+        code = int(code_str)
+    except ValueError:
+        return body, None
+    return body.rstrip('\n'), code
+
+
 def collect_os_release(ssh: SSHExecutor) -> tuple[str | None, str | None]:
     """Returns (ID, VERSION_ID) from /etc/os-release, e.g. ('debian', '13')
     or ('ubuntu', '24.04'). Either element is None if it couldn't be
@@ -129,11 +175,28 @@ def collect_os_release(ssh: SSHExecutor) -> tuple[str | None, str | None]:
     return os_id, version_id
 
 
-def _dpkg_version(ssh: SSHExecutor, dpkg_name: str) -> str | None:
-    """Returns the installed Debian package version (with revision, e.g.
-    '1.28.3-1~deb13u2') via dpkg-query, or None if the package isn't
-    installed via dpkg (e.g. compiled from source, installed via a
-    third-party repo with a non-dpkg-tracked version, or simply absent).
+def _dpkg_version(ssh: SSHExecutor, dpkg_name: str) -> tuple[str | None, bool]:
+    """Returns (version, collection_ok).
+
+    version is the installed Debian package version (with revision, e.g.
+    '1.28.3-1~deb13u2') via dpkg-query, or None if dpkg-query ran to
+    completion and reported the package isn't installed via dpkg (e.g.
+    compiled from source, installed via a third-party repo with a
+    non-dpkg-tracked version, or simply absent).
+
+    collection_ok is False if dpkg-query's completion could not be
+    confirmed at all (SSH channel drop, timeout - see
+    _run_with_exit_code()) - a genuine unknown, NOT evidence the package
+    is absent. Callers MUST NOT fall back to upstream_version when
+    collection_ok is False - that fallback is only valid for a
+    successfully-confirmed "not installed" (version=None,
+    collection_ok=True), and conflating the two was this exact function's
+    original bug: a dropped SSH command and a genuinely-absent package
+    both produced an empty stdout, so both silently took the same
+    upstream_version fallback path - the same false-PASS shape as the
+    ecosystem-defaulting bug described in this module's top docstring,
+    just one layer lower (which version string to send, rather than
+    which ecosystem to send it to).
 
     This exists because OSV's Debian ecosystem records compare against
     Debian's own package revision, not the upstream version number - e.g.
@@ -148,9 +211,11 @@ def _dpkg_version(ssh: SSHExecutor, dpkg_name: str) -> str | None:
     version number doesn't line up with how Debian's own fixed-version
     ranges are expressed.
     """
-    out, _ = ssh.run(f"dpkg-query -W -f='${{Version}}' {dpkg_name} 2>/dev/null")
+    out, code = _run_with_exit_code(ssh, f"dpkg-query -W -f='${{Version}}' {dpkg_name} 2>/dev/null")
+    if code is None:
+        return None, False
     out = out.strip()
-    return out if out else None
+    return (out if out else None), True
 
 
 def _get_package_origin(ssh: SSHExecutor, dpkg_name: str, version: str) -> str | None:
@@ -158,6 +223,18 @@ def _get_package_origin(ssh: SSHExecutor, dpkg_name: str, version: str) -> str |
     the specific installed version of a package, or None if it can't be
     determined - package not installed via dpkg, no matching cache
     entry, etc.
+
+    NOTE (quality audit, 2026-08-15): this function has the same
+    collection-failure-vs-absence ambiguity _dpkg_version() had before
+    its fix - a dropped SSH command and a genuinely-missing Origin field
+    both produce None here, and collect_packages() currently treats both
+    the same way (third_party_repo=True). Left unfixed in this pass
+    deliberately: the impact is a mislabeled 'third_party_repo' finding
+    (severity-4/non-blocking per the audit triage), not a missed CVE the
+    way _dpkg_version()'s version fallback was - fixing it properly means
+    touching all 4 collect_packages() call sites and adding a third
+    origin-unknown state, which is more scope than this fix batch covers.
+    Tracked as a follow-up, not silently accepted.
 
     Must be queried by exact version (`apt-cache show pkg=version`), not
     by bare package name - `apt-cache show <pkg>` with no version prints
@@ -246,6 +323,17 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
     packages), so the check correctly found zero matches yet the host may
     still be exposed. check_cve_audit() surfaces this as a distinct
     'third_party_repo' finding rather than silently reporting 'ok'.
+
+    `version_collection_ok` (bool) is False when _dpkg_version() could not
+    confirm dpkg-query completed at all (SSH channel drop, timeout - see
+    _run_with_exit_code()) - as opposed to dpkg-query completing and
+    reporting the package genuinely isn't dpkg-installed. In that case
+    `version` still falls back to the upstream version (so the package is
+    still reported on, e.g. for display), but check_cve_audit() must
+    treat this package as a collection failure rather than querying OSV
+    with a version string collection couldn't actually confirm - see this
+    module's quality-audit notes on _dpkg_version() for the false-PASS
+    this prevents.
     """
     packages = []
 
@@ -253,11 +341,12 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
     out, _ = ssh.run('nginx -v 2>&1')
     upstream_ver = _parse_version(out)
     if upstream_ver:
-        dpkg_ver = _dpkg_version(ssh, 'nginx')
+        dpkg_ver, collection_ok = _dpkg_version(ssh, 'nginx')
         origin = _get_package_origin(ssh, 'nginx', dpkg_ver) if dpkg_ver else None
         packages.append({'name': 'nginx', 'version': dpkg_ver or upstream_ver,
                           'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
                           'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(origin),
+                          'version_collection_ok': collection_ok,
                           'raw': out.strip()})
 
     # --- OpenSSH ---
@@ -265,14 +354,19 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
     upstream_ver = _parse_version(out)
     if upstream_ver:
         openssh_dpkg_pkg = 'openssh-client'
-        dpkg_ver = _dpkg_version(ssh, openssh_dpkg_pkg)
-        if not dpkg_ver:
+        dpkg_ver, collection_ok = _dpkg_version(ssh, openssh_dpkg_pkg)
+        if not dpkg_ver and collection_ok:
+            # Only try the -server package name if -client was
+            # successfully confirmed absent - not on a collection
+            # failure, which would just mask the first failure with a
+            # second SSH round-trip's ambiguous result.
             openssh_dpkg_pkg = 'openssh-server'
-            dpkg_ver = _dpkg_version(ssh, openssh_dpkg_pkg)
+            dpkg_ver, collection_ok = _dpkg_version(ssh, openssh_dpkg_pkg)
         origin = _get_package_origin(ssh, openssh_dpkg_pkg, dpkg_ver) if dpkg_ver else None
         packages.append({'name': 'openssh', 'version': dpkg_ver or upstream_ver,
                           'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
                           'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(origin),
+                          'version_collection_ok': collection_ok,
                           'raw': out.strip()})
 
     # --- MySQL / MariaDB ---
@@ -281,11 +375,12 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
     if upstream_ver:
         name = 'mariadb' if 'mariadb' in out.lower() else 'mysql'
         dpkg_pkg = 'mariadb-server' if name == 'mariadb' else 'mysql-server'
-        dpkg_ver = _dpkg_version(ssh, dpkg_pkg)
+        dpkg_ver, collection_ok = _dpkg_version(ssh, dpkg_pkg)
         origin = _get_package_origin(ssh, dpkg_pkg, dpkg_ver) if dpkg_ver else None
         packages.append({'name': name, 'version': dpkg_ver or upstream_ver,
                           'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
                           'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(origin),
+                          'version_collection_ok': collection_ok,
                           'raw': out.strip()})
 
     # --- PHP ---
@@ -299,7 +394,7 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
         # limitation as `linux` below, not a silent omission).
         packages.append({'name': 'php', 'version': upstream_ver,
                           'upstream_version': upstream_ver, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
-                          'third_party_repo': False,
+                          'third_party_repo': False, 'version_collection_ok': True,
                           'raw': out.strip().splitlines()[0] if out.strip() else ''})
 
     # --- kernel ---
@@ -319,11 +414,12 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
     out, _ = ssh.run('uname -r')
     kernel_release = out.strip()
     if kernel_release:
-        dpkg_ver = _dpkg_version(ssh, f'linux-image-{kernel_release}')
+        dpkg_ver, collection_ok = _dpkg_version(ssh, f'linux-image-{kernel_release}')
         origin = _get_package_origin(ssh, f'linux-image-{kernel_release}', dpkg_ver) if dpkg_ver else None
         packages.append({'name': 'linux', 'version': dpkg_ver or kernel_release,
                           'upstream_version': kernel_release, 'ecosystem': _GENERIC_LINUX_ECOSYSTEM,
                           'third_party_repo': bool(dpkg_ver) and not _is_official_distro_source(origin),
+                          'version_collection_ok': collection_ok,
                           'raw': kernel_release})
 
     # --- WordPress (if wp-config.php is found in standard locations) ---
@@ -336,7 +432,8 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
         if ver:
             packages.append({'name': 'wordpress', 'version': ver,
                               'upstream_version': ver, 'ecosystem': 'WordPress',
-                              'third_party_repo': False, 'raw': ver_out.strip()})
+                              'third_party_repo': False, 'version_collection_ok': True,
+                              'raw': ver_out.strip()})
 
     return packages
 
@@ -433,7 +530,8 @@ def collect_composer_packages(ssh: SSHExecutor) -> list[dict]:
             packages.append({
                 'name': name, 'version': clean_version,
                 'upstream_version': version, 'ecosystem': 'Packagist',
-                'third_party_repo': False, 'raw': f'{name} {version}',
+                'third_party_repo': False, 'version_collection_ok': True,
+                'raw': f'{name} {version}',
             })
     return packages
 
@@ -537,13 +635,41 @@ def _resolve_ecosystem(pkg_ecosystem: str, os_id: str | None,
 
 
 def query_osv(packages: list[dict], os_id: str | None = None,
-              version_id: str | None = None) -> dict[str, list | None]:
-    """Returns {pkg_name: [vuln_ids...] | None}, with caching. A value of
-    None (not an empty list) means this package's ecosystem couldn't be
-    resolved for this host's distro (see _resolve_ecosystem()) - it was
-    never sent to OSV at all, and the caller must not report it as "no
-    known CVEs found", which would misrepresent an unchecked package as a
-    checked-and-clean one.
+              version_id: str | None = None) -> tuple[dict[str, list | None], set[str]]:
+    """Returns ({pkg_name: [vuln_ids...] | None}, collection_errors), with
+    caching.
+
+    In the result dict: a value of None (not an empty list) means this
+    package's ecosystem couldn't be resolved for this host's distro (see
+    _resolve_ecosystem()) - it was never sent to OSV at all. An empty
+    list means OSV was successfully queried and reported no known vulns.
+
+    collection_errors is the set of package names that SHOULD have gotten
+    an OSV answer but didn't, because OSV's own response contained fewer
+    entries than were queried (see below) - this is a distinct third
+    state from both of the above, and deliberately not folded into the
+    result dict as another None: None there already means "ecosystem
+    unresolved", a different fact (we chose not to ask) from "we asked
+    but didn't get an answer for this one". Reusing None for both would
+    let a genuine collection failure silently read as an ordinary
+    ecosystem-not-supported case at every call site that just checks
+    `is None`. Callers must check collection_errors FIRST, before reading
+    the result dict for a given package.
+
+    OSV's querybatch response ordering is guaranteed to match the request
+    (confirmed against OSV's own API docs: "The response ordering will be
+    guaranteed to match the input" - https://google.github.io/osv.dev/post-v1-querybatch/),
+    so zip()ing queried packages against the response never mismatches
+    package identity. But querybatch's docs also describe per-result
+    pagination via page_token, meaning the API can validly return fewer -
+    or differently-shaped - top-level result entries than were queried
+    under conditions this module doesn't otherwise control for. A
+    response shorter than the request is therefore a real, if rare,
+    possibility - not merely a hypothetical - and packages past the end
+    of a short response must be reported as a collection failure, not
+    silently dropped (which .get()-based lookups downstream would then
+    read as "ecosystem unresolved", a different and misleading claim -
+    see check_cve_audit()).
 
     os_id/version_id (from collect_os_release()) resolve every package
     whose generic ecosystem is '_GENERIC_LINUX_ECOSYSTEM' to the actual
@@ -551,6 +677,7 @@ def query_osv(packages: list[dict], os_id: str | None = None,
     ecosystem (WordPress) are queried as-is, unaffected."""
     to_query = []
     result: dict[str, list | None] = {}
+    collection_errors: set[str] = set()
 
     for p in packages:
         ecosystem = _resolve_ecosystem(p['ecosystem'], os_id, version_id)
@@ -564,7 +691,7 @@ def query_osv(packages: list[dict], os_id: str | None = None,
             to_query.append((p, ecosystem))
 
     if not to_query:
-        return result
+        return result, collection_errors
 
     try:
         resp = httpx.post(
@@ -581,14 +708,24 @@ def query_osv(packages: list[dict], os_id: str | None = None,
         # OSV is unreachable - don't fail the whole check, just skip CVE data for unqueried ones
         for p, _ecosystem in to_query:
             result.setdefault(p['name'], [])
-        return result
+        return result, collection_errors
 
     for (p, ecosystem), r in zip(to_query, batch):
         ids = [v['id'] for v in r.get('vulns', [])]
         result[p['name']] = ids
         _cache_set(p['name'], p['version'], ecosystem, ids)
 
-    return result
+    if len(batch) < len(to_query):
+        # OSV returned fewer results than queried - see docstring above.
+        # These packages were never confirmed clean or vulnerable; do not
+        # cache anything for them (nothing to cache), and do not set
+        # result[name] at all here, so a caller reading collection_errors
+        # first (as required) never even reaches the result dict for
+        # these names.
+        for p, _ecosystem in to_query[len(batch):]:
+            collection_errors.add(p['name'])
+
+    return result, collection_errors
 
 
 def fetch_vuln_details(vuln_id: str) -> dict:
@@ -675,14 +812,56 @@ def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> 
 
     if not packages:
         return {'host': host, 'packages': [], 'findings': [],
-                'summary': {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'ok': 0, 'not_supported': 0, 'third_party_repo': 0}}
+                'summary': {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'ok': 0,
+                            'not_supported': 0, 'third_party_repo': 0, 'collection_error': 0}}
 
-    vuln_ids_by_pkg = query_osv(packages, os_id, version_id)
+    # Packages whose version couldn't be confirmed (version_collection_ok
+    # is False) must never reach OSV at all - the 'version' string on
+    # them is an unconfirmed upstream-version guess, not a fact (see
+    # _dpkg_version()'s docstring), and querying OSV with it would just
+    # push the same false-PASS risk one function further down the call
+    # chain instead of actually closing it.
+    queryable = [p for p in packages if p.get('version_collection_ok', True)]
+    vuln_ids_by_pkg, collection_errors = query_osv(queryable, os_id, version_id)
 
     findings = []
-    counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'ok': 0, 'not_supported': 0, 'third_party_repo': 0}
+    counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'ok': 0,
+              'not_supported': 0, 'third_party_repo': 0, 'collection_error': 0}
 
     for p in packages:
+        if not p.get('version_collection_ok', True):
+            # dpkg-query's completion couldn't be confirmed for this
+            # package (SSH channel drop, timeout - see _dpkg_version()) -
+            # `version` here fell back to the upstream version string,
+            # which is not what was actually installed's dpkg revision.
+            # Querying OSV with it would be querying with an unconfirmed
+            # guess, not a fact - reported as a collection gap, same
+            # 'info' shape as an unresolved-OSV-batch-entry below, never
+            # as 'ok'.
+            findings.append({
+                'package': p['name'], 'version': p['version'],
+                'severity': 'info', 'cve': None,
+                'title': 'CVE matching could not be completed for this package — version '
+                         'collection did not finish (this does NOT mean no CVEs were found)',
+                'requires_manual_verification': True,
+            })
+            counts['collection_error'] += 1
+            continue
+        if p['name'] in collection_errors:
+            # OSV's own batch response came back shorter than the
+            # request (see query_osv()'s docstring) - this package was
+            # queried but no answer was received for it. Same 'info'
+            # shape and same rule: never 'ok', because we have no
+            # evidence either way.
+            findings.append({
+                'package': p['name'], 'version': p['version'],
+                'severity': 'info', 'cve': None,
+                'title': 'CVE matching could not be completed for this package — no answer '
+                         'received from the vulnerability database (this does NOT mean no CVEs were found)',
+                'requires_manual_verification': True,
+            })
+            counts['collection_error'] += 1
+            continue
         ids = vuln_ids_by_pkg.get(p['name'])
         if ids is None:
             # Ecosystem couldn't be resolved for this host's distro (see
