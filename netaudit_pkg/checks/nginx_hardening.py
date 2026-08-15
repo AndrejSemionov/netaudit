@@ -463,6 +463,79 @@ def _c_hdr_004_csp(cfg_v2: NginxConfigV2) -> Component:
                       reason=evidence if verdict == 'FAIL' else None)
 
 
+# W3C Referrer Policy spec (https://www.w3.org/TR/referrer-policy/): the
+# eight defined token values. Deliberately includes 'unsafe-url' as VALID
+# per docs/checks/nginx_hardening.md section 7's explicit decision: this
+# control checks presence + syntactic validity only, with no per-value
+# security grading - a config that sets unsafe-url is doing something
+# this control cannot flag as weaker than strict-origin, by design (see
+# that section's rationale for why NGX-HDR-005 stays presence-only rather
+# than growing an 8-value ranking system beyond its stated scope).
+_VALID_REFERRER_POLICY_VALUES = frozenset({
+    'no-referrer',
+    'no-referrer-when-downgrade',
+    'same-origin',
+    'origin',
+    'strict-origin',
+    'origin-when-cross-origin',
+    'strict-origin-when-cross-origin',
+    'unsafe-url',
+})
+
+
+def _verdict_hdr_005_referrer_policy(server: ServerBlock, cfg_v2: NginxConfigV2) -> tuple[Verdict, str]:
+    """NGX-HDR-005 - Referrer-Policy, per
+    docs/checks/nginx_hardening.md section 7's finalized semantics.
+
+    FAIL: effective value absent after inheritance resolution, or present
+    but not a valid W3C Referrer-Policy token - per the W3C spec's own
+    "unknown policy values will be ignored" rule, an invalid literal is
+    functionally equivalent to absent from the user agent's perspective,
+    so it gets the same FAIL treatment as true absence, not a softer
+    UNKNOWN.
+    UNKNOWN: effective value contains an nginx variable - the actual
+    value sent cannot be determined statically, so this project cannot
+    validate it against the W3C enum at all.
+    PASS: effective value is any of the eight valid W3C tokens,
+    including 'unsafe-url' - no security-strength grading between valid
+    values (deliberate v1 scope limit, matching NGX-HDR-004's "presence,
+    not grading" stance but applied via enum membership here rather than
+    structural triviality, since Referrer-Policy's value space is a
+    closed enum rather than CSP's open directive grammar).
+    """
+    label = _server_label(server)
+    effective = resolve_add_headers(
+        http_add_headers=cfg_v2.http_add_headers,
+        server_add_headers=server.add_headers,
+    )
+    header = find_effective_header('Referrer-Policy', effective)
+
+    if header is None:
+        return 'FAIL', f'{label}: Referrer-Policy absent'
+
+    if has_nginx_variable(header.value):
+        return 'UNKNOWN', f'{label}: Referrer-Policy "{header.value}" contains an nginx variable'
+
+    if header.value not in _VALID_REFERRER_POLICY_VALUES:
+        return 'FAIL', f'{label}: Referrer-Policy "{header.value}" is not a valid W3C token'
+
+    return 'PASS', f'{label}: Referrer-Policy "{header.value}" is a valid W3C token'
+
+
+def _c_hdr_005_referrer_policy(cfg_v2: NginxConfigV2) -> Component:
+    # NGX-HDR-005 - Referrer-Policy, weight 0.02 (section 8.3)
+    verdicts = [_verdict_hdr_005_referrer_policy(s, cfg_v2) for s in cfg_v2.servers]
+    verdict, evidence = _aggregate_server_verdicts(verdicts)
+
+    if verdict in ('N/A', 'UNKNOWN'):
+        return Component(name='hdr_005_referrer_policy', weight=0.02, score=0, max=100,
+                          applicable=False, reason=evidence, finding_id=None)
+    score = 100 if verdict == 'PASS' else 0
+    return Component(name='hdr_005_referrer_policy', weight=0.02, score=score, max=100,
+                      finding_id=None if verdict == 'PASS' else 'NGX-HDR-005',
+                      reason=evidence if verdict == 'FAIL' else None)
+
+
 def _build_tier2_components(cfg_v2: NginxConfigV2) -> list[Component]:
     """The 6 currently-implemented Tier-2 controls (NGX-CONF-004 is
     BLOCKED, see docs/checks/nginx_hardening.md section 7 - not part of
@@ -473,6 +546,7 @@ def _build_tier2_components(cfg_v2: NginxConfigV2) -> list[Component]:
     return [
         _c_tls_004_ciphers(cfg_v2),
         _c_hdr_004_csp(cfg_v2),
+        _c_hdr_005_referrer_policy(cfg_v2),
     ]
 
 

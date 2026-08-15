@@ -17,9 +17,11 @@ from netaudit_pkg.nginx_config_v2 import parse_nginx_config_v2
 from netaudit_pkg.checks.nginx_hardening import (
     _aggregate_server_verdicts,
     _c_hdr_004_csp,
+    _c_hdr_005_referrer_policy,
     _c_tls_004_ciphers,
     _is_structurally_trivial_csp,
     _verdict_hdr_004_csp,
+    _verdict_hdr_005_referrer_policy,
     _verdict_tls_004_ciphers,
 )
 
@@ -532,3 +534,207 @@ def test_vm_baseline_hdr004_is_fail_no_csp_anywhere():
     comp = _c_hdr_004_csp(cfg)
     assert comp.score == 0
     assert comp.finding_id == 'NGX-HDR-004'
+
+
+# ===========================================================================
+# NGX-HDR-005 (Referrer-Policy) — all 8 W3C enum values, per-server verdict
+# ===========================================================================
+
+_VALID_REFERRER_VALUES = [
+    'no-referrer',
+    'no-referrer-when-downgrade',
+    'same-origin',
+    'origin',
+    'strict-origin',
+    'origin-when-cross-origin',
+    'strict-origin-when-cross-origin',
+    'unsafe-url',
+]
+
+
+def _hdr005_verdict_for(value: str) -> tuple[str, str]:
+    conf = f'http {{ server {{ listen 80; add_header Referrer-Policy {value}; }} }}'
+    cfg = parse_nginx_config_v2(conf)
+    return _verdict_hdr_005_referrer_policy(cfg.servers[0], cfg)
+
+
+def test_hdr005_no_referrer_is_pass():
+    verdict, _ = _hdr005_verdict_for('no-referrer')
+    assert verdict == 'PASS'
+
+
+def test_hdr005_no_referrer_when_downgrade_is_pass():
+    verdict, _ = _hdr005_verdict_for('no-referrer-when-downgrade')
+    assert verdict == 'PASS'
+
+
+def test_hdr005_same_origin_is_pass():
+    verdict, _ = _hdr005_verdict_for('same-origin')
+    assert verdict == 'PASS'
+
+
+def test_hdr005_origin_is_pass():
+    verdict, _ = _hdr005_verdict_for('origin')
+    assert verdict == 'PASS'
+
+
+def test_hdr005_strict_origin_is_pass():
+    verdict, _ = _hdr005_verdict_for('strict-origin')
+    assert verdict == 'PASS'
+
+
+def test_hdr005_origin_when_cross_origin_is_pass():
+    verdict, _ = _hdr005_verdict_for('origin-when-cross-origin')
+    assert verdict == 'PASS'
+
+
+def test_hdr005_strict_origin_when_cross_origin_is_pass():
+    verdict, _ = _hdr005_verdict_for('strict-origin-when-cross-origin')
+    assert verdict == 'PASS'
+
+
+def test_hdr005_unsafe_url_is_pass_no_security_grading():
+    # Deliberate: docs/checks/nginx_hardening.md section 7 explicitly
+    # decided NGX-HDR-005 does not grade security strength between valid
+    # W3C tokens. unsafe-url is weaker than strict-origin in practice,
+    # but this control only checks presence + syntactic validity.
+    verdict, _ = _hdr005_verdict_for('unsafe-url')
+    assert verdict == 'PASS'
+
+
+def test_hdr005_all_eight_valid_values_are_exhaustively_covered():
+    assert len(_VALID_REFERRER_VALUES) == 8
+    for value in _VALID_REFERRER_VALUES:
+        verdict, _ = _hdr005_verdict_for(value)
+        assert verdict == 'PASS', f'{value} should be PASS'
+
+
+def test_hdr005_absent_is_fail():
+    cfg = parse_nginx_config_v2('http { server { listen 80; } }')
+    verdict, evidence = _verdict_hdr_005_referrer_policy(cfg.servers[0], cfg)
+    assert verdict == 'FAIL'
+    assert 'absent' in evidence
+
+
+def test_hdr005_typo_invalid_literal_is_fail():
+    # Per W3C: "unknown policy values will be ignored" — a typo is
+    # functionally equivalent to absence, so it gets FAIL, not UNKNOWN.
+    verdict, evidence = _hdr005_verdict_for('strict-orgin')
+    assert verdict == 'FAIL'
+    assert 'not a valid W3C token' in evidence
+
+
+def test_hdr005_arbitrary_garbage_is_fail():
+    verdict, _ = _hdr005_verdict_for('some-made-up-policy')
+    assert verdict == 'FAIL'
+
+
+def test_hdr005_variable_is_unknown():
+    conf = 'http { server { listen 80; add_header Referrer-Policy $policy_var; } }'
+    cfg = parse_nginx_config_v2(conf)
+    verdict, evidence = _verdict_hdr_005_referrer_policy(cfg.servers[0], cfg)
+    assert verdict == 'UNKNOWN'
+    assert 'variable' in evidence
+
+
+def test_hdr005_applies_without_ssl_listen():
+    conf = 'http { server { listen 80; add_header Referrer-Policy no-referrer; } }'
+    cfg = parse_nginx_config_v2(conf)
+    verdict, _ = _verdict_hdr_005_referrer_policy(cfg.servers[0], cfg)
+    assert verdict == 'PASS'
+
+
+# ===========================================================================
+# NGX-HDR-005 — all-or-nothing inheritance
+# ===========================================================================
+
+def test_hdr005_server_own_add_header_blocks_http_inheritance():
+    conf = '''
+    http {
+        add_header Referrer-Policy no-referrer;
+        server {
+            listen 80;
+            add_header X-Custom test;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, evidence = _verdict_hdr_005_referrer_policy(cfg.servers[0], cfg)
+    assert verdict == 'FAIL'
+    assert 'absent' in evidence
+
+
+def test_hdr005_server_silent_inherits_http_value():
+    conf = '''
+    http {
+        add_header Referrer-Policy no-referrer;
+        server {
+            listen 80;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, _ = _verdict_hdr_005_referrer_policy(cfg.servers[0], cfg)
+    assert verdict == 'PASS'
+
+
+# ===========================================================================
+# _c_hdr_005_referrer_policy() — Component-level, weight, multi-vhost
+# ===========================================================================
+
+def test_hdr005_component_weight_is_002():
+    cfg = parse_nginx_config_v2('http { server { listen 80; } }')
+    comp = _c_hdr_005_referrer_policy(cfg)
+    assert comp.weight == 0.02
+
+
+def test_hdr005_component_pass_scores_100():
+    conf = 'http { server { listen 80; add_header Referrer-Policy no-referrer; } }'
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_hdr_005_referrer_policy(cfg)
+    assert comp.score == 100
+    assert comp.finding_id is None
+
+
+def test_hdr005_component_fail_scores_0_with_finding_id():
+    cfg = parse_nginx_config_v2('http { server { listen 80; } }')
+    comp = _c_hdr_005_referrer_policy(cfg)
+    assert comp.score == 0
+    assert comp.finding_id == 'NGX-HDR-005'
+    assert comp.reason is not None
+
+
+def test_hdr005_component_unknown_is_not_applicable_no_finding():
+    conf = 'http { server { listen 80; add_header Referrer-Policy $v; } }'
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_hdr_005_referrer_policy(cfg)
+    assert comp.applicable is False
+    assert comp.finding_id is None
+
+
+def test_hdr005_multivhost_mixed_pass_fail_aggregates_fail():
+    conf = '''
+    http {
+        server {
+            listen 80;
+            server_name good.example.com;
+            add_header Referrer-Policy no-referrer;
+        }
+        server {
+            listen 80;
+            server_name bad.example.com;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_hdr_005_referrer_policy(cfg)
+    assert comp.score == 0
+    assert comp.finding_id == 'NGX-HDR-005'
+    assert 'bad.example.com' in comp.reason
+
+
+def test_vm_baseline_hdr005_is_fail_no_referrer_policy_anywhere():
+    cfg = parse_nginx_config_v2(VM_BASELINE_CONF)
+    comp = _c_hdr_005_referrer_policy(cfg)
+    assert comp.score == 0
+    assert comp.finding_id == 'NGX-HDR-005'
