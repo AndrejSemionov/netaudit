@@ -18,10 +18,13 @@ from netaudit_pkg.checks.nginx_hardening import (
     _aggregate_server_verdicts,
     _c_hdr_004_csp,
     _c_hdr_005_referrer_policy,
+    _c_hdr_006_permissions_policy,
     _c_tls_004_ciphers,
     _is_structurally_trivial_csp,
+    _parse_permissions_policy,
     _verdict_hdr_004_csp,
     _verdict_hdr_005_referrer_policy,
+    _verdict_hdr_006_permissions_policy,
     _verdict_tls_004_ciphers,
 )
 
@@ -738,3 +741,197 @@ def test_vm_baseline_hdr005_is_fail_no_referrer_policy_anywhere():
     comp = _c_hdr_005_referrer_policy(cfg)
     assert comp.score == 0
     assert comp.finding_id == 'NGX-HDR-005'
+
+
+# ===========================================================================
+# NGX-HDR-006 (Permissions-Policy) — feature=allowlist parsing
+# ===========================================================================
+
+def test_pp_parse_empty_allowlist():
+    assert _parse_permissions_policy('geolocation=()') == {'geolocation': '()'}
+
+
+def test_pp_parse_self_allowlist():
+    assert _parse_permissions_policy('geolocation=(self)') == {'geolocation': '(self)'}
+
+
+def test_pp_parse_bare_wildcard():
+    assert _parse_permissions_policy('geolocation=*') == {'geolocation': '*'}
+
+
+def test_pp_parse_multiple_features():
+    result = _parse_permissions_policy('geolocation=(self), camera=()')
+    assert result == {'geolocation': '(self)', 'camera': '()'}
+
+
+def test_pp_parse_invalid_syntax_returns_none():
+    assert _parse_permissions_policy('garbage no equals sign') is None
+
+
+def test_pp_parse_empty_string_returns_none():
+    assert _parse_permissions_policy('') is None
+
+
+def test_pp_parse_origin_list():
+    result = _parse_permissions_policy('geolocation=(self "https://example.com")')
+    assert result == {'geolocation': '(self "https://example.com")'}
+
+
+# ===========================================================================
+# NGX-HDR-006 — per-server verdict
+# ===========================================================================
+
+def _hdr006_verdict_for(value: str) -> tuple[str, str]:
+    conf = f'http {{ server {{ listen 80; add_header Permissions-Policy "{value}"; }} }}'
+    cfg = parse_nginx_config_v2(conf)
+    return _verdict_hdr_006_permissions_policy(cfg.servers[0], cfg)
+
+
+def test_hdr006_absent_is_fail():
+    cfg = parse_nginx_config_v2('http { server { listen 80; } }')
+    verdict, evidence = _verdict_hdr_006_permissions_policy(cfg.servers[0], cfg)
+    assert verdict == 'FAIL'
+    assert 'absent' in evidence
+
+
+def test_hdr006_invalid_syntax_is_fail():
+    verdict, evidence = _hdr006_verdict_for('not valid syntax at all')
+    assert verdict == 'FAIL'
+    assert 'not valid feature=allowlist syntax' in evidence
+
+
+def test_hdr006_empty_allowlist_is_pass():
+    # geolocation=() — explicit deny-all is a non-wildcard, constraining
+    # allowlist per section 7's semantics.
+    verdict, _ = _hdr006_verdict_for('geolocation=()')
+    assert verdict == 'PASS'
+
+
+def test_hdr006_self_allowlist_is_pass():
+    verdict, _ = _hdr006_verdict_for('geolocation=(self)')
+    assert verdict == 'PASS'
+
+
+def test_hdr006_bare_wildcard_is_unknown():
+    # Valid syntax, but this project cannot prove * constrains anything —
+    # per section 7's explicit ruling, this does NOT earn PASS.
+    verdict, evidence = _hdr006_verdict_for('geolocation=*')
+    assert verdict == 'UNKNOWN'
+    assert 'wildcard' in evidence
+
+
+def test_hdr006_mixed_wildcard_and_restricted_is_pass():
+    # geolocation=*, camera=() — credit is given for the restricted
+    # feature even though another feature is unrestricted, per section
+    # 7's decision not to build a per-feature required-list.
+    verdict, _ = _hdr006_verdict_for('geolocation=*, camera=()')
+    assert verdict == 'PASS'
+
+
+def test_hdr006_variable_is_unknown():
+    conf = 'http { server { listen 80; add_header Permissions-Policy $pp_value; } }'
+    cfg = parse_nginx_config_v2(conf)
+    verdict, evidence = _verdict_hdr_006_permissions_policy(cfg.servers[0], cfg)
+    assert verdict == 'UNKNOWN'
+    assert 'variable' in evidence
+
+
+def test_hdr006_applies_without_ssl_listen():
+    verdict, _ = _hdr006_verdict_for('geolocation=()')
+    assert verdict == 'PASS'
+
+
+# ===========================================================================
+# NGX-HDR-006 — all-or-nothing inheritance
+# ===========================================================================
+
+def test_hdr006_server_own_add_header_blocks_http_inheritance():
+    conf = '''
+    http {
+        add_header Permissions-Policy "geolocation=()";
+        server {
+            listen 80;
+            add_header X-Custom test;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, evidence = _verdict_hdr_006_permissions_policy(cfg.servers[0], cfg)
+    assert verdict == 'FAIL'
+    assert 'absent' in evidence
+
+
+def test_hdr006_server_silent_inherits_http_value():
+    conf = '''
+    http {
+        add_header Permissions-Policy "geolocation=()";
+        server {
+            listen 80;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, _ = _verdict_hdr_006_permissions_policy(cfg.servers[0], cfg)
+    assert verdict == 'PASS'
+
+
+# ===========================================================================
+# _c_hdr_006_permissions_policy() — Component-level, weight, multi-vhost
+# ===========================================================================
+
+def test_hdr006_component_weight_is_002():
+    cfg = parse_nginx_config_v2('http { server { listen 80; } }')
+    comp = _c_hdr_006_permissions_policy(cfg)
+    assert comp.weight == 0.02
+
+
+def test_hdr006_component_pass_scores_100():
+    conf = 'http { server { listen 80; add_header Permissions-Policy "geolocation=()"; } }'
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_hdr_006_permissions_policy(cfg)
+    assert comp.score == 100
+    assert comp.finding_id is None
+
+
+def test_hdr006_component_fail_scores_0_with_finding_id():
+    cfg = parse_nginx_config_v2('http { server { listen 80; } }')
+    comp = _c_hdr_006_permissions_policy(cfg)
+    assert comp.score == 0
+    assert comp.finding_id == 'NGX-HDR-006'
+    assert comp.reason is not None
+
+
+def test_hdr006_component_unknown_is_not_applicable_no_finding():
+    conf = 'http { server { listen 80; add_header Permissions-Policy "geolocation=*"; } }'
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_hdr_006_permissions_policy(cfg)
+    assert comp.applicable is False
+    assert comp.finding_id is None
+
+
+def test_hdr006_multivhost_mixed_pass_fail_aggregates_fail():
+    conf = '''
+    http {
+        server {
+            listen 80;
+            server_name good.example.com;
+            add_header Permissions-Policy "geolocation=()";
+        }
+        server {
+            listen 80;
+            server_name bad.example.com;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_hdr_006_permissions_policy(cfg)
+    assert comp.score == 0
+    assert comp.finding_id == 'NGX-HDR-006'
+    assert 'bad.example.com' in comp.reason
+
+
+def test_vm_baseline_hdr006_is_fail_no_permissions_policy_anywhere():
+    cfg = parse_nginx_config_v2(VM_BASELINE_CONF)
+    comp = _c_hdr_006_permissions_policy(cfg)
+    assert comp.score == 0
+    assert comp.finding_id == 'NGX-HDR-006'

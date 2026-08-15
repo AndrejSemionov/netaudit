@@ -536,6 +536,100 @@ def _c_hdr_005_referrer_policy(cfg_v2: NginxConfigV2) -> Component:
                       reason=evidence if verdict == 'FAIL' else None)
 
 
+def _parse_permissions_policy(value: str) -> dict[str, str] | None:
+    """Parse a Permissions-Policy header value into {feature: allowlist}
+    pairs, per the W3C Permissions Policy syntax
+    (feature=allowlist[, feature=allowlist]...) - each allowlist is
+    either a bare token (`*`, `self`, `none` - parenthesization is
+    optional for a single-item list per the spec's own structured-field
+    shorthand) or a parenthesized, possibly multi-item list
+    (`(self "https://example.com")`). This is a structural split only -
+    it does not validate that a `feature` name is one a real browser
+    recognizes, matching this project's stance (section 7) against
+    building a features allowlist/denylist.
+
+    Returns None if `value` doesn't parse as at least one well-formed
+    `feature=allowlist` pair - the caller treats that as FAIL (invalid
+    syntax), distinct from an empty dict which can't actually occur from
+    a non-empty, comma-separated value that fails to split into any
+    pairs (both paths return None here for simplicity, since neither
+    "valid but zero features" nor "unparseable" should be treated as a
+    passing signal).
+    """
+    pairs: dict[str, str] = {}
+    for chunk in value.split(','):
+        chunk = chunk.strip()
+        if not chunk or '=' not in chunk:
+            return None
+        feature, _, allowlist = chunk.partition('=')
+        feature = feature.strip()
+        allowlist = allowlist.strip()
+        if not feature or not allowlist:
+            return None
+        pairs[feature] = allowlist
+    return pairs if pairs else None
+
+
+def _verdict_hdr_006_permissions_policy(server: ServerBlock, cfg_v2: NginxConfigV2) -> tuple[Verdict, str]:
+    """NGX-HDR-006 - Permissions-Policy, per
+    docs/checks/nginx_hardening.md section 7's finalized semantics.
+
+    FAIL: effective value absent after inheritance resolution, or
+    present but not syntactically parseable as feature=allowlist pairs.
+    UNKNOWN: effective value contains an nginx variable; or every parsed
+    feature's allowlist is the bare `*` wildcard - valid syntax, but this
+    project cannot prove it constrains anything (a feature explicitly set
+    to `*` is the same permissiveness as not restricting it at all), so
+    it does not earn PASS. A config using both a `*` feature and an
+    explicitly restricted one (e.g. `geolocation=*, camera=()`) still
+    gets the credit for the restricted one - see PASS below.
+    PASS: at least one feature has an explicit, non-`*` allowlist
+    (`()` empty/deny-all, `(self)`, concrete origins, or a bare `self`/
+    `none` token). No per-feature "which features matter" list
+    (deliberate v1 scope limit, section 7) - this only checks that the
+    policy does *something* explicit somewhere.
+    """
+    label = _server_label(server)
+    effective = resolve_add_headers(
+        http_add_headers=cfg_v2.http_add_headers,
+        server_add_headers=server.add_headers,
+    )
+    header = find_effective_header('Permissions-Policy', effective)
+
+    if header is None:
+        return 'FAIL', f'{label}: Permissions-Policy absent'
+
+    if has_nginx_variable(header.value):
+        return 'UNKNOWN', f'{label}: Permissions-Policy "{header.value}" contains an nginx variable'
+
+    pairs = _parse_permissions_policy(header.value)
+    if pairs is None:
+        return 'FAIL', f'{label}: Permissions-Policy "{header.value}" is not valid feature=allowlist syntax'
+
+    def _is_bare_wildcard(allowlist: str) -> bool:
+        stripped = allowlist.strip('()').strip()
+        return stripped == '*'
+
+    if any(not _is_bare_wildcard(v) for v in pairs.values()):
+        return 'PASS', f'{label}: Permissions-Policy "{header.value}" has at least one non-wildcard allowlist'
+
+    return 'UNKNOWN', f'{label}: Permissions-Policy "{header.value}" only sets wildcard (*) allowlists'
+
+
+def _c_hdr_006_permissions_policy(cfg_v2: NginxConfigV2) -> Component:
+    # NGX-HDR-006 - Permissions-Policy, weight 0.02 (section 8.3)
+    verdicts = [_verdict_hdr_006_permissions_policy(s, cfg_v2) for s in cfg_v2.servers]
+    verdict, evidence = _aggregate_server_verdicts(verdicts)
+
+    if verdict in ('N/A', 'UNKNOWN'):
+        return Component(name='hdr_006_permissions_policy', weight=0.02, score=0, max=100,
+                          applicable=False, reason=evidence, finding_id=None)
+    score = 100 if verdict == 'PASS' else 0
+    return Component(name='hdr_006_permissions_policy', weight=0.02, score=score, max=100,
+                      finding_id=None if verdict == 'PASS' else 'NGX-HDR-006',
+                      reason=evidence if verdict == 'FAIL' else None)
+
+
 def _build_tier2_components(cfg_v2: NginxConfigV2) -> list[Component]:
     """The 6 currently-implemented Tier-2 controls (NGX-CONF-004 is
     BLOCKED, see docs/checks/nginx_hardening.md section 7 - not part of
@@ -547,6 +641,7 @@ def _build_tier2_components(cfg_v2: NginxConfigV2) -> list[Component]:
         _c_tls_004_ciphers(cfg_v2),
         _c_hdr_004_csp(cfg_v2),
         _c_hdr_005_referrer_policy(cfg_v2),
+        _c_hdr_006_permissions_policy(cfg_v2),
     ]
 
 
