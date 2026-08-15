@@ -331,13 +331,27 @@ def test_macs_pass_when_all_strong():
 
 @pytest.mark.parametrize('weak_mac', ['hmac-md5', 'hmac-md5-96', 'hmac-sha1', 'hmac-sha1-96',
                                        'hmac-sha1-etm@openssh.com', 'hmac-ripemd160',
-                                       'hmac-sha2-256-96'])
+                                       'hmac-sha2-256-96', 'umac-64@openssh.com',
+                                       'umac-64-etm@openssh.com'])
 def test_macs_fail_on_weak_mac_family(weak_mac):
     # explicitly includes the -etm@openssh.com variant (VM-realistic value
     # this catalogue's synthetic validation specifically checked) to confirm
-    # the ETM wrapper doesn't exempt an otherwise-weak hash from matching
+    # the ETM wrapper doesn't exempt an otherwise-weak hash from matching.
+    # umac-64 variants added during a post-freeze quality audit (section
+    # 6.4.1 of the spec): found missing from the original deny-list despite
+    # being the same class of truncated-tag weakness the -96 rule already
+    # targets, just at a bit-length this document hadn't separately named.
     c = _by_name(_build_components(_cfg(macs=['hmac-sha2-256-etm@openssh.com', weak_mac])), 'macs')
     assert c.score == 0 and c.finding_id == 'SSH-CRYPTO-002'
+
+
+def test_macs_pass_umac_128_not_caught_by_umac_64_substring():
+    # umac-128/umac-128-etm@openssh.com are the strong variant and must NOT
+    # match the new 'umac-64' deny-list entry - confirms the substring is
+    # specific enough not to over-match.
+    c = _by_name(_build_components(_cfg(
+        macs=['umac-128@openssh.com', 'umac-128-etm@openssh.com'])), 'macs')
+    assert c.score == 100 and c.finding_id is None
 
 
 def test_macs_na_when_empty():

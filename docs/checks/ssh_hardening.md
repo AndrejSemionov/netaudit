@@ -10,10 +10,14 @@ NetAudit already collects, it does not go into v1.
 This document follows the same methodology `docs/checks/nginx_hardening.md`
 established, with one important divergence forced by a live VM verification pass
 done *before* any scoring code was written (see section 2): unlike nginx, sshd
-already resolves its own effective configuration, so this module's collector does
-no comment-parsing or Include-precedence logic at all — that entire class of bug
-nginx_hardening had to discover and fix post-hoc simply doesn't apply here, by
-construction.
+already resolves `Include` precedence and directive-repetition order in its own
+effective configuration, so this module's collector does no comment-parsing or
+Include-precedence logic at all — that specific class of bug nginx_hardening had
+to discover and fix post-hoc simply doesn't apply here, by construction. A
+related but distinct limitation — `sshd -T`'s effective config is for the
+*global*/no-specific-connection context only, not any per-user/per-group/
+per-host `Match` block override — still applies here exactly as `NginxConfigV2`'s
+server-vs-location distinction applies to nginx; see section 4.5.
 
 ## 1. Scope
 
@@ -54,6 +58,27 @@ server first.
 | Does `sshd -T` solve this correctly? | **Yes.** `sshd -T` prints the fully-resolved effective value for `passwordauthentication` — one line, no ambiguity, no precedence logic for this module to reimplement. | Confirmed: `sshd -T`'s `passwordauthentication yes` matches the Include file's value, not the commented-out main-file default, because sshd resolved it correctly server-side. |
 | Does `sshd -T` need comment-stripping, like `nginx_config.py` had to add? | **No — not applicable.** `sshd -T` output has no comments, no braces, no Include markers; it's already `key value` per line for every effective directive. | Directly observed in the 103-line real output — no `#` characters, no blank explanatory lines. |
 | Are `AllowUsers`/`AllowGroups`/etc. printed when unset? | **No** — confirmed via `sshd -T -o AllowUsers=testuser`, which produced an `allowusers testuser` line that is otherwise completely absent from the baseline output. Absence in the output is a real fact ("no restriction configured"), not a parser gap. | Controlled `-o` override test against the live VM, not inferred. |
+| Does `sshd -T` (no `-C`) reflect a `Match User`/`Match Group`/`Match Host`/`Match Address` block's overrides? | **No — this is a real, currently-uncovered limitation, found during a post-freeze quality audit, not verified against the live VM at the time this document was first written.** `sshd -T` without `-C <criteria>` prints the effective configuration for the *global*, no-specific-connection case only; any directive this catalogue scores (e.g. `PasswordAuthentication`) that a `Match` block overrides for a specific user/group/host is invisible to this collector. A config with `PasswordAuthentication no` globally but `Match User admin — PasswordAuthentication yes` would score SSH-AUTH-002 as PASS while the `admin` account is actually exempt. | Confirmed via independent third-party documentation of `sshd -T` vs `sshd -T -C user=<x>` behavior (a controlled connection-specific query returning a *different* effective value than the bare `sshd -T` call for the same directive) — not yet reproduced against this project's own VM, which currently has no `Match` blocks in `sshd_config`/`sshd_config.d/` (confirmed via `grep -RniE '^\s*Match\s'`, empty result, 2026-08-15). See the note below for what this means in practice today vs. what it would take to close. |
+
+**What the `Match`-block limitation means in practice today:** on infrastructure
+with no `Match` blocks at all (this project's own VM, confirmed above), this
+limitation has zero practical effect — global and per-connection effective
+config are identical when there's nothing conditional to diverge. On
+infrastructure that *does* use `Match` (a real and common pattern — restricting
+forwarding for a specific group, or, more security-relevant, loosening auth for
+an admin/service account), this module's score is potentially describing a
+connection context that doesn't correspond to any real user's actual
+experience connecting to the server. This is architecturally the same shape as
+`docs/checks/nginx_hardening.md` section 7.1's location-level scope limitation
+— a real, deliberate, currently-uncovered gap between "what this module can see"
+and "the full space of configuration this server could apply," not a bug in
+the collector's `sshd -T` call itself. **Closing it properly is not simply
+"run `sshd -T -C` too"** — a single arbitrary `-C user=X` doesn't answer the
+question either; it would require deciding *which* connection contexts are
+worth auditing (all local shell users? sudoers? a configured list?), which is
+a policy decision this document doesn't have grounds to make unilaterally and
+is deferred as a Tier-2 candidate (section 7) if and when `Match` usage is
+confirmed on infrastructure this tool is actually used against.
 
 **Consequence for this module's architecture:** `ssh_config.py`'s `_parse_sshd_t()`
 is a single generic `key, value = line.split(None, 1)` loop — no per-directive
@@ -406,6 +431,19 @@ changes encrypt/MAC ordering, not the underlying hash's collision resistance):**
 - Anything containing `ripemd`.
 - Anything containing `-96` (truncated-MAC variants, flagged weak by F5/RHEL
   regardless of underlying hash).
+- Anything containing `umac-64` (covers `umac-64@openssh.com` and its
+  `-etm@openssh.com` variant, not `umac-128`/`umac-128-etm@openssh.com` —
+  found missing from the deny-list during a post-freeze quality audit of
+  this module: `umac-64`'s 64-bit authentication tag is the same class of
+  weakness the `-96` rule already targets (a short, truncated tag with
+  more practical collision resistance than a full-length MAC), just at a
+  different bit-length this document hadn't separately named. Confirmed
+  weak by multiple independent, cross-referenced sources (ManageEngine's
+  misconfiguration catalogue, Trend Micro/IMSVA's vulnerability-scan
+  guidance, a macOS/Jamf hardening writeup noting `umac-64@openssh.com`
+  ships enabled by default on macOS's sshd, and the `ssh-audit` tool's own
+  weak-algorithm classification) — the same majority-source bar this
+  section already applies to every other entry on this list.
 
 **KEX — FAIL if any of these appears in `kex_algorithms` (substring match):**
 - Anything containing `group1-sha1` (`diffie-hellman-group1-sha1` — 1024-bit

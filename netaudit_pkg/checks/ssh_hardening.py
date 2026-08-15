@@ -69,7 +69,7 @@ except ImportError:
 # IBM, kifarunix cross-referenced) behind each substring below.
 
 _WEAK_CIPHER_SUBSTRINGS = ('-cbc', 'arcfour')
-_WEAK_MAC_SUBSTRINGS = ('md5', 'sha1', 'ripemd', '-96')
+_WEAK_MAC_SUBSTRINGS = ('md5', 'sha1', 'ripemd', '-96', 'umac-64')
 _WEAK_KEX_SUBSTRINGS = ('group1-sha1', 'group14-sha1', 'group-exchange-sha1')
 
 
