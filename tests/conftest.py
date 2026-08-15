@@ -24,6 +24,8 @@ string matches, which would make tests brittle against minor wording changes.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 
@@ -96,22 +98,82 @@ def fake_ssh():
     return FakeSSHExecutor()
 
 
-def exit_marked(stdout: str, exit_code: int, marker: str = '__NETAUDIT_CVE_AUDIT_EXIT__') -> str:
-    """Builds the stdout a real shell would produce for a command wrapped
-    by cve_audit._run_with_exit_code() - i.e. `{ <cmd>; rc=$?; printf
-    '\\n%s:%s\\n' '<marker>' "$rc"; }`. FakeSSHExecutor doesn't execute a
-    real shell, so tests exercising _run_with_exit_code()-based collectors
-    (_dpkg_version, _get_package_origin) must supply this marker suffix
-    themselves in their canned response, the same way a real remote shell
-    would append it after the wrapped command runs. Omitting it (a bare
-    stdout string with no marker) is itself a valid, deliberate test case:
-    it's exactly what a dropped/truncated SSH command looks like, and
-    should be used to test the collection_ok=False path, not treated as
-    an oversight.
+_RC_MARKER_RE = re.compile(r"printf '\\n%s:%s\\n' '(__NETAUDIT_RC_[0-9a-f]+__)'")
 
-    Default marker matches cve_audit._EXIT_MARKER - if that constant ever
-    changes, update it here too (or import it directly instead of the
-    default, for tests that want to stay in lockstep automatically)."""
+
+class ExitCodeFakeSSHExecutor(FakeSSHExecutor):
+    """A FakeSSHExecutor for collectors built on
+    netaudit_pkg.ssh_utils.run_command_with_exit_code(), which wraps every
+    command in a shell group with a FRESH RANDOM (uuid4) completion
+    marker per call - see ssh_utils.py's docstring for why it's random
+    rather than a fixed string. Because the marker can't be known in
+    advance, a plain substring-keyed `responses` dict (as ordinary
+    FakeSSHExecutor uses) can't pre-bake the right marker into its canned
+    stdout.
+
+    This subclass keeps the same substring-matching `responses` dict.
+    Each value may be either a plain stdout string (for a command NOT
+    wrapped by run_command_with_exit_code(), e.g. `nginx -v`) or a
+    (stdout, stderr) tuple (same shape ordinary FakeSSHExecutor uses) -
+    both are accepted so existing non-exit-code fixtures don't need
+    reshaping. A parallel `exit_codes` dict (same substring-matching
+    keys) gives the exit code to report for commands that DO go through
+    run_command_with_exit_code() (e.g. `dpkg-query ...`) - only commands
+    present in both `responses` AND `exit_codes` get the completion
+    marker appended; others are returned as-is, unmarked (correct for
+    plain ssh.run() calls, which never look for a marker anyway).
+
+    A command with no matching key in `responses` (or a key present in
+    `responses` but absent from `exit_codes`, when the command IS a
+    run_command_with_exit_code() call) gets NO marker at all in its
+    response - the same as a real dropped/truncated SSH command - which
+    is the correct way to test the collection_ok=False / exit_code=None
+    path: simply don't register an exit code for it.
+    """
+
+    def __init__(self, *args, responses: dict[str, object] | None = None,
+                 exit_codes: dict[str, int] | None = None, **kwargs):
+        super().__init__(*args, responses={}, **kwargs)
+        self._raw_responses = responses or {}
+        self._exit_codes = exit_codes or {}
+
+    def run(self, cmd: str, timeout: int = 20) -> tuple[str, str]:
+        self.calls.append(cmd)
+        m = _RC_MARKER_RE.search(cmd)
+        marker = m.group(1) if m else None
+
+        stdout = ''
+        exit_code = None
+        matched_substr = None
+        for substr, response in self._raw_responses.items():
+            if substr in cmd:
+                stdout = response[0] if isinstance(response, tuple) else response
+                matched_substr = substr
+                break
+        if matched_substr is not None:
+            exit_code = self._exit_codes.get(matched_substr)
+
+        if marker is None or exit_code is None:
+            # No marker in the wrapped command (shouldn't happen for a
+            # run_command_with_exit_code() caller) or no exit code
+            # registered for this command - simulate a collection
+            # failure: raw stdout with no completion marker at all,
+            # exactly like a dropped/truncated SSH command.
+            return stdout, ''
+        return f'{stdout}\n{marker}:{exit_code}\n', ''
+
+
+def exit_marked(stdout: str, exit_code: int, marker: str = '__NETAUDIT_CVE_AUDIT_EXIT__') -> str:
+    """DEPRECATED - kept only for reference/history. This built a
+    response for a FIXED marker string, which matched cve_audit's
+    original local _run_with_exit_code() before it was generalized into
+    ssh_utils.run_command_with_exit_code() (which uses a fresh random
+    marker per call instead - see that module's docstring for why).
+    Tests exercising run_command_with_exit_code()-based collectors should
+    use ExitCodeFakeSSHExecutor instead, which handles the random marker
+    correctly. Not removed outright in case any in-flight branch still
+    references it, but nothing in the current test suite should call
+    this anymore."""
     return f'{stdout}\n{marker}:{exit_code}\n'
 
 

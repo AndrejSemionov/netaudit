@@ -58,6 +58,7 @@ import httpx
 from ..registry import register
 from .. import storage
 from ..ssh import SSHExecutor, HostKeyMismatchError
+from ..ssh_utils import run_command_with_exit_code
 
 try:
     import paramiko
@@ -86,52 +87,6 @@ _GENERIC_LINUX_ECOSYSTEM = 'Linux'
 def _parse_version(text: str) -> str | None:
     m = re.search(r'(\d+\.\d+(?:\.\d+)?)', text)
     return m.group(1) if m else None
-
-
-# Marker used by _run_with_exit_code() to recover a command's exit status.
-# SSHExecutor.run() only returns (stdout, stderr) - no exit code - because
-# it's the shared executor for 9 other check modules and none of the rest
-# need one; changing its signature for this module's sake would be a
-# needlessly wide blast radius for one collector's requirement. This
-# marker recovers the exit code locally, for this module only, without
-# touching that shared contract.
-_EXIT_MARKER = '__NETAUDIT_CVE_AUDIT_EXIT__'
-
-
-def _run_with_exit_code(ssh: SSHExecutor, cmd: str, timeout: int = 20) -> tuple[str, int | None]:
-    """Runs `cmd` and returns (stdout, exit_code).
-
-    exit_code is None if the command's completion could not be confirmed -
-    SSH channel drop, timeout, or truncated output before the marker was
-    written. This is a genuine unknown, distinct from exit_code=1 (or any
-    other nonzero code), which means the command ran to completion and
-    reported failure through the normal exit-status channel (e.g.
-    dpkg-query: package not installed).
-
-    The command is wrapped in a shell group so `$?` is captured
-    immediately after it runs, before anything else (including the
-    `printf` itself) can change it:
-
-        { <cmd>; rc=$?; printf '\\n%s:%s\\n' '<marker>' "$rc"; }
-
-    The marker string is long and namespaced specifically so an
-    arbitrarily-chosen remote command's own stdout is exceedingly
-    unlikely to collide with it by coincidence; if it ever does, the
-    output up to the last marker occurrence is still returned as `out`,
-    a false collection failure (marker misparsed as absent) rather than
-    a false success is the safe failure direction here.
-    """
-    wrapped = f"{{ {cmd}; rc=$?; printf '\\n%s:%s\\n' '{_EXIT_MARKER}' \"$rc\"; }}"
-    out, _ = ssh.run(wrapped, timeout=timeout)
-    if _EXIT_MARKER not in out:
-        return out, None
-    body, _, tail = out.rpartition(_EXIT_MARKER)
-    code_str = tail.lstrip(':').strip()
-    try:
-        code = int(code_str)
-    except ValueError:
-        return body, None
-    return body.rstrip('\n'), code
 
 
 def collect_os_release(ssh: SSHExecutor) -> tuple[str | None, str | None]:
@@ -186,7 +141,7 @@ def _dpkg_version(ssh: SSHExecutor, dpkg_name: str) -> tuple[str | None, bool]:
 
     collection_ok is False if dpkg-query's completion could not be
     confirmed at all (SSH channel drop, timeout - see
-    _run_with_exit_code()) - a genuine unknown, NOT evidence the package
+    run_command_with_exit_code()) - a genuine unknown, NOT evidence the package
     is absent. Callers MUST NOT fall back to upstream_version when
     collection_ok is False - that fallback is only valid for a
     successfully-confirmed "not installed" (version=None,
@@ -211,7 +166,7 @@ def _dpkg_version(ssh: SSHExecutor, dpkg_name: str) -> tuple[str | None, bool]:
     version number doesn't line up with how Debian's own fixed-version
     ranges are expressed.
     """
-    out, code = _run_with_exit_code(ssh, f"dpkg-query -W -f='${{Version}}' {dpkg_name} 2>/dev/null")
+    out, code = run_command_with_exit_code(ssh, f"dpkg-query -W -f='${{Version}}' {dpkg_name} 2>/dev/null")
     if code is None:
         return None, False
     out = out.strip()
@@ -326,7 +281,7 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
 
     `version_collection_ok` (bool) is False when _dpkg_version() could not
     confirm dpkg-query completed at all (SSH channel drop, timeout - see
-    _run_with_exit_code()) - as opposed to dpkg-query completing and
+    run_command_with_exit_code()) - as opposed to dpkg-query completing and
     reporting the package genuinely isn't dpkg-installed. In that case
     `version` still falls back to the upstream version (so the package is
     still reported on, e.g. for display), but check_cve_audit() must

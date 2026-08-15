@@ -13,9 +13,9 @@ import pytest
 from netaudit_pkg.checks.cve_audit import (
     _parse_version, _resolve_ecosystem, collect_packages, collect_composer_packages,
     collect_os_release, query_osv, fetch_vuln_details, check_cve_audit, _dpkg_version,
-    _get_package_origin, _run_with_exit_code, _EXIT_MARKER,
+    _get_package_origin,
 )
-from tests.conftest import FakeSSHExecutor, exit_marked
+from tests.conftest import FakeSSHExecutor, ExitCodeFakeSSHExecutor
 
 
 # ===========================================================================
@@ -38,11 +38,16 @@ def test_parse_version(text, expected):
 # ===========================================================================
 
 def test_collect_packages_finds_nginx():
-    fake = FakeSSHExecutor(responses={
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '1.24.0-2',
         'nginx -v': ('nginx version: nginx/1.24.0', ''),
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('1.24.0-2', 0), ''),
-        'apt-cache show nginx': (_APT_SHOW_NGINX_NATIVE_DEBIAN, ''),
-    })
+        'apt-cache show nginx': (_APT_SHOW_NGINX_NATIVE_DEBIAN, '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 0,
+        },
+    )
     packages = collect_packages(fake)
     nginx = next(p for p in packages if p['name'] == 'nginx')
     assert nginx['version'] == '1.24.0-2'
@@ -57,10 +62,15 @@ def test_collect_packages_nginx_falls_back_to_upstream_without_dpkg():
     isn't dpkg-installed - version falls back to the upstream number
     rather than being left empty, and this is a confirmed absence
     (version_collection_ok stays True), not a collection failure."""
-    fake = FakeSSHExecutor(responses={
-        'nginx -v': ('nginx version: nginx/1.24.0', ''),
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('', 1), ''),
-    })
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '',
+        'nginx -v': ('nginx version: nginx/1.24.0', '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 1,
+        },
+    )
     packages = collect_packages(fake)
     nginx = next(p for p in packages if p['name'] == 'nginx')
     assert nginx['version'] == '1.24.0'
@@ -115,33 +125,48 @@ def test_collect_packages_flags_nginx_org_ppa_as_third_party():
     (a legitimate, nginx-recommended install method) is flagged because
     the actual repository URL (from `apt-cache policy`, not a guess from
     the version string) is nginx.org, not archive.ubuntu.com."""
-    fake = FakeSSHExecutor(responses={
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '1.30.2-1~noble',
         'nginx -v': ('nginx version: nginx/1.30.2', ''),
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('1.30.2-1~noble', 0), ''),
-        'apt-cache show nginx': (_APT_SHOW_NGINX_PPA, ''),
-    })
+        'apt-cache show nginx': (_APT_SHOW_NGINX_PPA, '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 0,
+        },
+    )
     packages = collect_packages(fake)
     nginx = next(p for p in packages if p['name'] == 'nginx')
     assert nginx['third_party_repo'] is True
 
 
 def test_collect_packages_does_not_flag_native_ubuntu_nginx():
-    fake = FakeSSHExecutor(responses={
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '1.24.0-2ubuntu7.15',
         'nginx -v': ('nginx version: nginx/1.24.0', ''),
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('1.24.0-2ubuntu7.15', 0), ''),
-        'apt-cache show nginx': (_APT_SHOW_NGINX_NATIVE_UBUNTU, ''),
-    })
+        'apt-cache show nginx': (_APT_SHOW_NGINX_NATIVE_UBUNTU, '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 0,
+        },
+    )
     packages = collect_packages(fake)
     nginx = next(p for p in packages if p['name'] == 'nginx')
     assert nginx['third_party_repo'] is False
 
 
 def test_collect_packages_does_not_flag_native_debian_nginx():
-    fake = FakeSSHExecutor(responses={
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '1.26.3-3+deb13u6',
         'nginx -v': ('nginx version: nginx/1.26.3', ''),
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('1.26.3-3+deb13u6', 0), ''),
-        'apt-cache show nginx': (_APT_SHOW_NGINX_NATIVE_DEBIAN, ''),
-    })
+        'apt-cache show nginx': (_APT_SHOW_NGINX_NATIVE_DEBIAN, '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 0,
+        },
+    )
     packages = collect_packages(fake)
     nginx = next(p for p in packages if p['name'] == 'nginx')
     assert nginx['third_party_repo'] is False
@@ -152,10 +177,15 @@ def test_collect_packages_third_party_flag_false_without_dpkg_version():
     dpkg-installed at all, third_party_repo must be False, not an
     accidental True from an empty apt-cache policy lookup - there's no
     dpkg package to check the source of in the first place."""
-    fake = FakeSSHExecutor(responses={
-        'nginx -v': ('nginx version: nginx/1.24.0', ''),
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('', 1), ''),
-    })
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '',
+        'nginx -v': ('nginx version: nginx/1.24.0', '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 1,
+        },
+    )
     packages = collect_packages(fake)
     nginx = next(p for p in packages if p['name'] == 'nginx')
     assert nginx['third_party_repo'] is False
@@ -173,11 +203,16 @@ def test_collect_packages_distinguishes_mariadb_from_mysql():
 
 
 def test_collect_packages_uses_dpkg_version_for_mariadb_when_available():
-    fake = FakeSSHExecutor(responses={
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' mariadb-server": '1:10.11.6-0+deb12u1',
         'mysql --version': ('mysql  Ver 15.1 Distrib 10.11.6-MariaDB', ''),
-        "dpkg-query -W -f='${Version}' mariadb-server": (exit_marked('1:10.11.6-0+deb12u1', 0), ''),
-        'apt-cache show mariadb-server': ('Package: mariadb-server\nOrigin: Debian\n', ''),
-    })
+        'apt-cache show mariadb-server': ('Package: mariadb-server\nOrigin: Debian\n', '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' mariadb-server": 0,
+        },
+    )
     packages = collect_packages(fake)
     db_pkg = next(p for p in packages if p['name'] == 'mariadb')
     assert db_pkg['version'] == '1:10.11.6-0+deb12u1'
@@ -198,13 +233,17 @@ def test_collect_packages_uses_dpkg_version_for_kernel_when_available():
     is *not* the kernel version but the ABI name used'). The dpkg version
     of linux-image-<uname -r> is what OSV's Ubuntu/Debian ecosystem
     records actually compare against."""
-    fake = FakeSSHExecutor(responses={
-        'uname -r': ('6.8.0-124-generic\n', ''),
-        "dpkg-query -W -f='${Version}' linux-image-6.8.0-124-generic": (
-            exit_marked('6.8.0-124.124', 0), ''),
-        'apt-cache show linux-image-6.8.0-124-generic=6.8.0-124.124': (
-            'Package: linux-image-6.8.0-124-generic\nOrigin: Ubuntu\n', ''),
-    })
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+            'uname -r': ('6.8.0-124-generic\n', ''),
+            "dpkg-query -W -f='${Version}' linux-image-6.8.0-124-generic": '6.8.0-124.124',
+            'apt-cache show linux-image-6.8.0-124-generic=6.8.0-124.124': (
+                'Package: linux-image-6.8.0-124-generic\nOrigin: Ubuntu\n', ''),
+        },
+        exit_codes={
+            "dpkg-query -W -f='${Version}' linux-image-6.8.0-124-generic": 0,
+        },
+    )
     packages = collect_packages(fake)
     kernel = next(p for p in packages if p['name'] == 'linux')
     assert kernel['version'] == '6.8.0-124.124'
@@ -219,10 +258,15 @@ def test_collect_packages_kernel_falls_back_to_uname_without_dpkg():
     OSV matching, same fallback shape every other Debian-family package
     in this module already has - a less precise match beats no match at
     all, and this is a confirmed absence, not a collection failure."""
-    fake = FakeSSHExecutor(responses={
-        'uname -r': ('6.8.0-124-generic\n', ''),
-        "dpkg-query -W -f='${Version}' linux-image-6.8.0-124-generic": (exit_marked('', 1), ''),
-    })
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' linux-image-6.8.0-124-generic": '',
+        'uname -r': ('6.8.0-124-generic\n', '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' linux-image-6.8.0-124-generic": 1,
+        },
+    )
     packages = collect_packages(fake)
     kernel = next(p for p in packages if p['name'] == 'linux')
     assert kernel['version'] == '6.8.0-124-generic'
@@ -441,9 +485,10 @@ def test_collect_composer_packages_skips_entries_missing_name_or_version():
 # ===========================================================================
 
 def test_dpkg_version_returns_full_revision():
-    fake = FakeSSHExecutor(responses={
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('1.28.3-1~deb13u2', 0), ''),
-    })
+    fake = ExitCodeFakeSSHExecutor(
+        responses={"dpkg-query -W -f='${Version}' nginx": '1.28.3-1~deb13u2'},
+        exit_codes={"dpkg-query -W -f='${Version}' nginx": 0},
+    )
     assert _dpkg_version(fake, 'nginx') == ('1.28.3-1~deb13u2', True)
 
 
@@ -451,9 +496,10 @@ def test_dpkg_version_returns_none_true_when_not_dpkg_installed():
     """dpkg-query runs to completion (confirmed via the exit marker) and
     reports exit 1 / empty stdout - package genuinely not installed via
     dpkg. This is a confirmed absence: (None, True), collection_ok=True."""
-    fake = FakeSSHExecutor(responses={
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('', 1), ''),
-    })
+    fake = ExitCodeFakeSSHExecutor(
+        responses={"dpkg-query -W -f='${Version}' nginx": ''},
+        exit_codes={"dpkg-query -W -f='${Version}' nginx": 1},
+    )
     assert _dpkg_version(fake, 'nginx') == (None, True)
 
 
@@ -464,7 +510,7 @@ def test_dpkg_version_returns_none_false_on_collection_failure():
     (None, False), collection_ok=False. This is the exact false-PASS
     class this fix closes - see this function's own docstring in
     cve_audit.py for the full reasoning."""
-    fake = FakeSSHExecutor(responses={})  # no marker anywhere in the default ('', '')
+    fake = ExitCodeFakeSSHExecutor()  # no responses/exit_codes registered at all
     assert _dpkg_version(fake, 'nginx') == (None, False)
 
 
@@ -479,61 +525,11 @@ def test_dpkg_version_collection_failure_on_nonzero_non_one_exit():
     reasonable simplification since either way there's no dpkg version to
     report - the exit code itself isn't surfaced further up the call
     chain at this time."""
-    fake = FakeSSHExecutor(responses={
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('', 2), ''),
-    })
+    fake = ExitCodeFakeSSHExecutor(
+        responses={"dpkg-query -W -f='${Version}' nginx": ''},
+        exit_codes={"dpkg-query -W -f='${Version}' nginx": 2},
+    )
     assert _dpkg_version(fake, 'nginx') == (None, True)
-
-
-# ===========================================================================
-# _run_with_exit_code — the shared exit-code-recovery helper
-# ===========================================================================
-
-def test_run_with_exit_code_parses_marker_and_strips_it_from_stdout():
-    fake = FakeSSHExecutor(responses={
-        'whoami': (exit_marked('netaudit', 0), ''),
-    })
-    out, code = _run_with_exit_code(fake, 'whoami')
-    assert out == 'netaudit'
-    assert code == 0
-
-
-def test_run_with_exit_code_nonzero_exit_still_parsed():
-    fake = FakeSSHExecutor(responses={
-        'false': (exit_marked('', 1), ''),
-    })
-    _, code = _run_with_exit_code(fake, 'false')
-    assert code == 1
-
-
-def test_run_with_exit_code_returns_none_when_marker_absent():
-    """No marker anywhere in stdout - the command's completion could not
-    be confirmed (dropped channel, timeout, truncated output)."""
-    fake = FakeSSHExecutor(responses={
-        'whoami': ('some output with no marker', ''),
-    })
-    _, code = _run_with_exit_code(fake, 'whoami')
-    assert code is None
-
-
-def test_run_with_exit_code_returns_none_on_malformed_exit_value():
-    """Marker present but what follows isn't a parseable integer - treated
-    the same as marker-absent (a genuine unknown), not as a crash and not
-    as a guessed exit code."""
-    fake = FakeSSHExecutor(responses={
-        'whoami': (f'output\n{_EXIT_MARKER}:not-a-number\n', ''),
-    })
-    _, code = _run_with_exit_code(fake, 'whoami')
-    assert code is None
-
-
-def test_run_with_exit_code_preserves_multiline_stdout_before_marker():
-    fake = FakeSSHExecutor(responses={
-        'cat somefile': (exit_marked('line1\nline2\nline3', 0), ''),
-    })
-    out, code = _run_with_exit_code(fake, 'cat somefile')
-    assert out == 'line1\nline2\nline3'
-    assert code == 0
 
 
 # ===========================================================================
@@ -1148,11 +1144,16 @@ def test_full_flow_no_packages_found(monkeypatch, isolated_db):
 
 
 def test_full_flow_package_with_no_cves(monkeypatch, isolated_db):
-    fake = FakeSSHExecutor(responses={
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '',
         'nginx -v': ('nginx version: nginx/1.24.0', ''),
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('', 1), ''),
-        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', ''),
-    })
+        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 1,
+        },
+    )
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
 
     def fake_post(url, json, timeout):
@@ -1172,11 +1173,16 @@ def test_full_flow_reads_os_release_and_narrows_debian_ecosystem(monkeypatch, is
     same SSH session and pass the resulting distro id + release id all
     the way through to the actual OSV request - the fix's full round
     trip, not just the individual pieces in isolation."""
-    fake = FakeSSHExecutor(responses={
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '',
         'nginx -v': ('nginx version: nginx/1.28.3', ''),
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('', 1), ''),
-        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', ''),
-    })
+        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 1,
+        },
+    )
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
 
     captured = {}
@@ -1205,11 +1211,16 @@ def test_full_flow_uses_dpkg_revision_not_bare_upstream_version(monkeypatch, iso
     DSA-6326-1's '1.26.3-3+deb13u6', not upstream version numbers). This
     test locks in that the dpkg revision - not the upstream number - is
     what actually goes out on the wire to OSV."""
-    fake = FakeSSHExecutor(responses={
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '1.28.3-1~deb13u2',
         'nginx -v': ('nginx version: nginx/1.28.3', ''),
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('1.28.3-1~deb13u2', 0), ''),
-        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', ''),
-    })
+        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 0,
+        },
+    )
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
 
     captured = {}
@@ -1245,13 +1256,19 @@ def test_full_flow_ubuntu_host_uses_ubuntu_ecosystem_not_debian(monkeypatch, iso
     the full round trip: an Ubuntu host's ID=ubuntu/VERSION_ID=24.04 must
     produce 'Ubuntu:24.04:LTS' on the actual wire request, for every
     Debian-placeholder package in the batch."""
-    fake = FakeSSHExecutor(responses={
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '1.30.2-1~noble',
+        "dpkg-query -W -f='${Version}' openssh-client": '1:9.6p1-3ubuntu13.18',
         'nginx -v': ('nginx version: nginx/1.30.2', ''),
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('1.30.2-1~noble', 0), ''),
         'ssh -V': ('OpenSSH_9.6p1 Ubuntu-3ubuntu13.18', ''),
-        "dpkg-query -W -f='${Version}' openssh-client": (exit_marked('1:9.6p1-3ubuntu13.18', 0), ''),
-        "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="24.04"\n', ''),
-    })
+        "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="24.04"\n', '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 0,
+        "dpkg-query -W -f='${Version}' openssh-client": 0,
+        },
+    )
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
 
     captured = {}
@@ -1279,11 +1296,16 @@ def test_full_flow_unrecognized_distro_reports_not_supported_not_ok(monkeypatch,
     actually-checked-and-clean result. It must show up as
     'not_supported' instead, with no OSV request made for that package at
     all."""
-    fake = FakeSSHExecutor(responses={
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '',
         'nginx -v': ('nginx version: nginx/1.24.0', ''),
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('', 1), ''),
-        "grep -E '^(ID|VERSION_ID)='": ('ID=rhel\nVERSION_ID="9"\n', ''),
-    })
+        "grep -E '^(ID|VERSION_ID)='": ('ID=rhel\nVERSION_ID="9"\n', '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 1,
+        },
+    )
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
 
     def fail_if_called(*a, **kw):
@@ -1307,12 +1329,17 @@ def test_full_flow_third_party_repo_not_reported_as_ok(monkeypatch, isolated_db)
     team doesn't track nginx.org's packages at all) - but this must show
     up as 'third_party_repo', not 'ok', since an empty OSV result here
     means 'no data' rather than 'verified clean'."""
-    fake = FakeSSHExecutor(responses={
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '1.30.2-1~noble',
         'nginx -v': ('nginx version: nginx/1.30.2', ''),
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('1.30.2-1~noble', 0), ''),
         'apt-cache show nginx': (_APT_SHOW_NGINX_PPA, ''),
-        "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="24.04"\n', ''),
-    })
+        "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="24.04"\n', '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 0,
+        },
+    )
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
 
     def fake_post(url, json, timeout):
@@ -1337,12 +1364,17 @@ def test_full_flow_third_party_repo_with_actual_cve_still_reported(monkeypatch, 
     range) must still surface the real finding - the third_party_repo
     flag only changes behavior for the EMPTY-result case, it never
     suppresses an actual match."""
-    fake = FakeSSHExecutor(responses={
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '1.30.2-1~noble',
         'nginx -v': ('nginx version: nginx/1.30.2', ''),
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('1.30.2-1~noble', 0), ''),
         'apt-cache show nginx': (_APT_SHOW_NGINX_PPA, ''),
-        "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="24.04"\n', ''),
-    })
+        "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="24.04"\n', '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 0,
+        },
+    )
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
 
     def fake_post(url, json, timeout):
@@ -1367,11 +1399,16 @@ def test_full_flow_third_party_repo_with_actual_cve_still_reported(monkeypatch, 
     (None, 'medium'),  # unknown score is not downplayed to low
 ])
 def test_full_flow_severity_mapping(monkeypatch, isolated_db, score, expected_severity):
-    fake = FakeSSHExecutor(responses={
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '',
         'nginx -v': ('nginx version: nginx/1.24.0', ''),
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('', 1), ''),
-        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', ''),
-    })
+        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 1,
+        },
+    )
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
 
     def fake_post(url, json, timeout):
@@ -1406,11 +1443,16 @@ def test_full_flow_ubuntu_vendor_priority_used_when_present(
     """Vendor priority (Ubuntu/Debian) takes precedence over CVSS when
     both are present - per Canonical's own published guidance, the
     vendor's own assessment for their own distro is more accurate."""
-    fake = FakeSSHExecutor(responses={
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '',
         'nginx -v': ('nginx version: nginx/1.24.0', ''),
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('', 1), ''),
-        "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="24.04"\n', ''),
-    })
+        "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="24.04"\n', '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 1,
+        },
+    )
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
 
     def fake_post(url, json, timeout):
@@ -1454,12 +1496,16 @@ def test_full_flow_regression_ubuntu_2012_4542_shaped_finding(monkeypatch, isola
     of Ubuntu's own already-triaged-as-low-priority historical noise. This
     test locks in that the real API response shape for this exact CVE
     resolves to 'low', not 'medium'."""
-    fake = FakeSSHExecutor(responses={
-        'uname -r': ('7.0.0-29-generic\n', ''),
-        "dpkg-query -W -f='${Version}' linux-image-7.0.0-29-generic": (
-            exit_marked('7.0.0-29.29', 0), ''),
-        "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="26.04"\n', ''),
-    })
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+            'uname -r': ('7.0.0-29-generic\n', ''),
+            "dpkg-query -W -f='${Version}' linux-image-7.0.0-29-generic": '7.0.0-29.29',
+            "grep -E '^(ID|VERSION_ID)='": ('ID=ubuntu\nVERSION_ID="26.04"\n', ''),
+        },
+        exit_codes={
+            "dpkg-query -W -f='${Version}' linux-image-7.0.0-29-generic": 0,
+        },
+    )
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
 
     def fake_post(url, json, timeout):
@@ -1585,15 +1631,21 @@ def test_full_flow_osv_short_batch_reports_collection_error_not_ok(monkeypatch, 
     comes back shorter than the request - this package must still be
     reported as a collection failure, never as 'ok', since no answer was
     actually received for it."""
-    fake = FakeSSHExecutor(responses={
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '1.28.3-1~deb13u2',
+        "dpkg-query -W -f='${Version}' openssh-client": '1:9.6p1-3',
         'nginx -v': ('nginx version: nginx/1.28.3', ''),
-        "dpkg-query -W -f='${Version}' nginx": (exit_marked('1.28.3-1~deb13u2', 0), ''),
         'apt-cache show nginx=1.28.3-1~deb13u2': ('Package: nginx\nOrigin: Debian\n', ''),
         'ssh -V': ('OpenSSH_9.6p1 Debian-3', ''),
-        "dpkg-query -W -f='${Version}' openssh-client": (exit_marked('1:9.6p1-3', 0), ''),
         'apt-cache show openssh-client=1:9.6p1-3': ('Package: openssh-client\nOrigin: Debian\n', ''),
-        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', ''),
-    })
+        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 0,
+        "dpkg-query -W -f='${Version}' openssh-client": 0,
+        },
+    )
     monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
 
     def fake_post(url, json, timeout):
