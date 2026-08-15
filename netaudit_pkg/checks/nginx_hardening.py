@@ -35,7 +35,8 @@ from ..scoring import Component, weighted_score
 from ..ssh import SSHExecutor, HostKeyMismatchError
 from ..nginx_config import NginxConfig, collect_nginx_config
 from ..nginx_config_v2 import NginxConfigV2, ServerBlock
-from ..nginx_v2_resolvers import resolve_cascading_value
+from ..nginx_v2_resolvers import find_effective_header, resolve_add_headers, resolve_cascading_value
+from ..nginx_v2_utils import has_nginx_variable
 
 try:
     import paramiko
@@ -375,16 +376,103 @@ def _c_tls_004_ciphers(cfg_v2: NginxConfigV2) -> Component:
                       reason=evidence if verdict == 'FAIL' else None)
 
 
+def _is_structurally_trivial_csp(value: str) -> bool:
+    """True if a CSP value has no fetch-directive that actually
+    constrains anything, per docs/checks/nginx_hardening.md section 7's
+    finalized NGX-HDR-004 semantics: "PASS = at least one fetch-directive
+    with a non-empty, not-bare-`*` value." This function implements the
+    negation (trivial = fails that bar) since the caller needs to know
+    "nothing useful is here" as the FAIL condition.
+
+    A directive counts as non-trivial if it has at least one value token
+    that isn't a bare `*` - CSP's `Content-Security-Policy` header syntax
+    (W3C) allows `*` as a special source-list value meaning "any origin",
+    which is the one explicitly-called-out trivial case (section 7); any
+    other token (`'self'`, `'none'`, a scheme, a host, a nonce/hash) is
+    treated as non-trivial without this project attempting to judge
+    whether it's a *good* restriction - that's the explicit "no CSP
+    security grading in v1" boundary this control stays inside.
+
+    Deliberately NOT CSP-directive-aware beyond splitting on `;` and
+    whitespace - this is a structural triviality check, not a CSP
+    parser. A value consisting only of whitespace/semicolons (no
+    directives at all) is trivial.
+    """
+    for directive in value.split(';'):
+        tokens = directive.split()
+        if not tokens:
+            continue
+        # tokens[0] is the directive name (default-src, script-src, ...);
+        # anything after it is the source list.
+        source_tokens = tokens[1:]
+        if any(tok != '*' for tok in source_tokens):
+            return False
+    return True
+
+
+def _verdict_hdr_004_csp(server: ServerBlock, cfg_v2: NginxConfigV2) -> tuple[Verdict, str]:
+    """NGX-HDR-004 - Content-Security-Policy, per
+    docs/checks/nginx_hardening.md section 7's finalized semantics for a
+    single ServerBlock. Applies to every server (not gated on `ssl`, per
+    the agreed HDR-004/005/006 fundamentals - security headers are
+    relevant to HTTP responses regardless of TLS status).
+
+    FAIL: effective CSP absent after inheritance resolution, or present
+    but structurally trivial (see _is_structurally_trivial_csp()).
+    UNKNOWN: effective value contains an nginx variable - cannot prove
+    what will actually be sent.
+    PASS: at least one fetch-directive with a non-empty, not-bare-`*`
+    value. No grading of *how* restrictive the policy is (explicit v1
+    scope limit).
+    """
+    label = _server_label(server)
+
+    # No location-level scoping in v1 (see docs/checks/nginx_hardening.md
+    # section 7's HDR-004/005/006 fundamentals) - server-level effective
+    # add_headers is the evaluation unit, matching every other Tier-2
+    # header control.
+    effective = resolve_add_headers(
+        http_add_headers=cfg_v2.http_add_headers,
+        server_add_headers=server.add_headers,
+    )
+    header = find_effective_header('Content-Security-Policy', effective)
+
+    if header is None:
+        return 'FAIL', f'{label}: Content-Security-Policy absent'
+
+    if has_nginx_variable(header.value):
+        return 'UNKNOWN', f'{label}: Content-Security-Policy "{header.value}" contains an nginx variable'
+
+    if _is_structurally_trivial_csp(header.value):
+        return 'FAIL', f'{label}: Content-Security-Policy "{header.value}" is structurally trivial (no constraining fetch-directive)'
+
+    return 'PASS', f'{label}: Content-Security-Policy "{header.value}" has at least one constraining fetch-directive'
+
+
+def _c_hdr_004_csp(cfg_v2: NginxConfigV2) -> Component:
+    # NGX-HDR-004 - Content-Security-Policy, weight 0.055 (section 8.3)
+    verdicts = [_verdict_hdr_004_csp(s, cfg_v2) for s in cfg_v2.servers]
+    verdict, evidence = _aggregate_server_verdicts(verdicts)
+
+    if verdict in ('N/A', 'UNKNOWN'):
+        return Component(name='hdr_004_csp', weight=0.055, score=0, max=100,
+                          applicable=False, reason=evidence, finding_id=None)
+    score = 100 if verdict == 'PASS' else 0
+    return Component(name='hdr_004_csp', weight=0.055, score=score, max=100,
+                      finding_id=None if verdict == 'PASS' else 'NGX-HDR-004',
+                      reason=evidence if verdict == 'FAIL' else None)
+
+
 def _build_tier2_components(cfg_v2: NginxConfigV2) -> list[Component]:
     """The 6 currently-implemented Tier-2 controls (NGX-CONF-004 is
     BLOCKED, see docs/checks/nginx_hardening.md section 7 - not part of
-    this list). Extended incrementally as each control lands; only
-    NGX-TLS-004 exists as of this commit - see this module's git history
-    / docs/checks/nginx_hardening.md section 9 for the implementation
+    this list). Extended incrementally as each control lands - see
+    docs/checks/nginx_hardening.md section 9 for the implementation
     checklist tracking the rest.
     """
     return [
         _c_tls_004_ciphers(cfg_v2),
+        _c_hdr_004_csp(cfg_v2),
     ]
 
 

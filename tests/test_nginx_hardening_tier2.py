@@ -16,7 +16,10 @@ from __future__ import annotations
 from netaudit_pkg.nginx_config_v2 import parse_nginx_config_v2
 from netaudit_pkg.checks.nginx_hardening import (
     _aggregate_server_verdicts,
+    _c_hdr_004_csp,
     _c_tls_004_ciphers,
+    _is_structurally_trivial_csp,
+    _verdict_hdr_004_csp,
     _verdict_tls_004_ciphers,
 )
 
@@ -325,3 +328,207 @@ def test_vm_baseline_tls004_is_na_no_tls_at_all():
     comp = _c_tls_004_ciphers(cfg)
     assert comp.applicable is False
     assert comp.score == 0
+
+
+# ===========================================================================
+# NGX-HDR-004 (Content-Security-Policy) — structural triviality helper
+# ===========================================================================
+
+def test_csp_empty_value_is_trivial():
+    assert _is_structurally_trivial_csp('') is True
+
+
+def test_csp_bare_star_is_trivial():
+    assert _is_structurally_trivial_csp('default-src *') is True
+
+
+def test_csp_self_is_not_trivial():
+    assert _is_structurally_trivial_csp("default-src 'self'") is False
+
+
+def test_csp_multiple_directives_all_star_is_trivial():
+    assert _is_structurally_trivial_csp('default-src *; script-src *') is True
+
+
+def test_csp_one_constraining_directive_among_trivial_ones_is_not_trivial():
+    assert _is_structurally_trivial_csp("default-src *; script-src 'self'") is False
+
+
+def test_csp_whitespace_only_is_trivial():
+    assert _is_structurally_trivial_csp('   ;  ;  ') is True
+
+
+# ===========================================================================
+# NGX-HDR-004 — per-server verdict
+# ===========================================================================
+
+def test_hdr004_absent_is_fail():
+    cfg = parse_nginx_config_v2('http { server { listen 80; } }')
+    verdict, evidence = _verdict_hdr_004_csp(cfg.servers[0], cfg)
+    assert verdict == 'FAIL'
+    assert 'absent' in evidence
+
+
+def test_hdr004_trivial_star_is_fail():
+    conf = 'http { server { listen 80; add_header Content-Security-Policy "default-src *"; } }'
+    cfg = parse_nginx_config_v2(conf)
+    verdict, _ = _verdict_hdr_004_csp(cfg.servers[0], cfg)
+    assert verdict == 'FAIL'
+
+
+def test_hdr004_non_trivial_is_pass():
+    conf = '''http { server { listen 80; add_header Content-Security-Policy "default-src 'self'"; } }'''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, _ = _verdict_hdr_004_csp(cfg.servers[0], cfg)
+    assert verdict == 'PASS'
+
+
+def test_hdr004_variable_is_unknown():
+    conf = 'http { server { listen 80; add_header Content-Security-Policy $csp_value; } }'
+    cfg = parse_nginx_config_v2(conf)
+    verdict, evidence = _verdict_hdr_004_csp(cfg.servers[0], cfg)
+    assert verdict == 'UNKNOWN'
+    assert 'variable' in evidence
+
+
+def test_hdr004_applies_without_ssl_listen():
+    # Security headers apply regardless of TLS status — this control is
+    # not gated on `ssl`, unlike NGX-TLS-004.
+    conf = '''http { server { listen 80; add_header Content-Security-Policy "default-src 'self'"; } }'''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, _ = _verdict_hdr_004_csp(cfg.servers[0], cfg)
+    assert verdict == 'PASS'
+
+
+# ===========================================================================
+# NGX-HDR-004 — all-or-nothing inheritance (shared model, resolvers.py)
+# ===========================================================================
+
+def test_hdr004_server_own_add_header_blocks_http_csp_inheritance():
+    # server defines an add_header (for a DIFFERENT header) — per the
+    # all-or-nothing rule, http's CSP must NOT be inherited.
+    conf = '''
+    http {
+        add_header Content-Security-Policy "default-src 'self'";
+        server {
+            listen 80;
+            add_header X-Custom test;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, evidence = _verdict_hdr_004_csp(cfg.servers[0], cfg)
+    assert verdict == 'FAIL'
+    assert 'absent' in evidence
+
+
+def test_hdr004_server_silent_inherits_http_csp():
+    conf = '''
+    http {
+        add_header Content-Security-Policy "default-src 'self'";
+        server {
+            listen 80;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, _ = _verdict_hdr_004_csp(cfg.servers[0], cfg)
+    assert verdict == 'PASS'
+
+
+def test_hdr004_multiple_add_header_same_level_last_wins():
+    conf = '''
+    http {
+        server {
+            listen 80;
+            add_header Content-Security-Policy "default-src *";
+            add_header Content-Security-Policy "default-src 'self'";
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    verdict, _ = _verdict_hdr_004_csp(cfg.servers[0], cfg)
+    assert verdict == 'PASS'  # last (non-trivial) one wins
+
+
+# ===========================================================================
+# _c_hdr_004_csp() — Component-level, weight, and multi-vhost aggregation
+# ===========================================================================
+
+def test_hdr004_component_weight_is_0055():
+    cfg = parse_nginx_config_v2('http { server { listen 80; } }')
+    comp = _c_hdr_004_csp(cfg)
+    assert comp.weight == 0.055
+
+
+def test_hdr004_component_pass_scores_100():
+    conf = '''http { server { listen 80; add_header Content-Security-Policy "default-src 'self'"; } }'''
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_hdr_004_csp(cfg)
+    assert comp.score == 100
+    assert comp.finding_id is None
+
+
+def test_hdr004_component_fail_scores_0_with_finding_id():
+    cfg = parse_nginx_config_v2('http { server { listen 80; } }')
+    comp = _c_hdr_004_csp(cfg)
+    assert comp.score == 0
+    assert comp.finding_id == 'NGX-HDR-004'
+    assert comp.reason is not None
+
+
+def test_hdr004_component_unknown_is_not_applicable_no_finding():
+    conf = 'http { server { listen 80; add_header Content-Security-Policy $csp_value; } }'
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_hdr_004_csp(cfg)
+    assert comp.applicable is False
+    assert comp.finding_id is None
+
+
+def test_hdr004_multivhost_mixed_pass_fail_aggregates_fail():
+    conf = '''
+    http {
+        server {
+            listen 80;
+            server_name good.example.com;
+            add_header Content-Security-Policy "default-src 'self'";
+        }
+        server {
+            listen 80;
+            server_name bad.example.com;
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_hdr_004_csp(cfg)
+    assert comp.score == 0
+    assert comp.finding_id == 'NGX-HDR-004'
+    assert 'bad.example.com' in comp.reason
+
+
+def test_hdr004_multivhost_all_pass_aggregates_pass():
+    conf = '''
+    http {
+        server {
+            listen 80;
+            server_name a.example.com;
+            add_header Content-Security-Policy "default-src 'self'";
+        }
+        server {
+            listen 443 ssl;
+            server_name b.example.com;
+            add_header Content-Security-Policy "default-src 'self'";
+        }
+    }
+    '''
+    cfg = parse_nginx_config_v2(conf)
+    comp = _c_hdr_004_csp(cfg)
+    assert comp.score == 100
+    assert comp.finding_id is None
+
+
+def test_vm_baseline_hdr004_is_fail_no_csp_anywhere():
+    cfg = parse_nginx_config_v2(VM_BASELINE_CONF)
+    comp = _c_hdr_004_csp(cfg)
+    assert comp.score == 0
+    assert comp.finding_id == 'NGX-HDR-004'
