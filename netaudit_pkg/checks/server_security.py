@@ -108,42 +108,261 @@ def audit_nginx(ssh: SSHExecutor) -> dict:
 # fail2ban
 # ===========================================================================
 
+def _fail2ban_binary_verdict(evidence) -> tuple[str, dict]:
+    """Returns (verdict, context) for fail2ban-client's presence on PATH.
+
+    verdict is one of:
+      'PRESENT'     - confirmed on PATH (exit_code == 0).
+      'NOT_PRESENT' - confirmed absent (exit_code == 127 exactly - this
+                      is `command -v`'s own documented "not found"
+                      convention, NOT "any nonzero exit code"; a
+                      different nonzero code is UNKNOWN, not
+                      NOT_PRESENT - see fail2ban_config.binary_verdict()
+                      for the same rule at the evidence layer).
+      'UNKNOWN'     - collection did not complete, or a confirmed exit
+                      code that's neither 0 nor 127.
+    """
+    from ..fail2ban_config import binary_verdict as _binary_verdict
+
+    v = _binary_verdict(evidence.binary_check)
+    if v == 'UNKNOWN':
+        bc = evidence.binary_check
+        if not bc.completed:
+            reason = 'command -v fail2ban-client did not complete'
+        else:
+            reason = f'command -v fail2ban-client returned an unexpected exit code ({bc.exit_code})'
+        return 'UNKNOWN', {'reason': reason}
+    return v, {}
+
+
+def _fail2ban_status_verdict(evidence) -> tuple[str, dict]:
+    """Returns (verdict, context) for the authoritative fail2ban status
+    (status_sudo). status_unpriv is NEVER used to drive this verdict -
+    see fail2ban_config.py's docstring, "Privilege model": unprivileged
+    `fail2ban-client status` was empirically confirmed (46.62.147.41) to
+    report exit_code==0 even when its own stdout says permission was
+    denied, so exit_code alone from the unpriv call cannot be trusted.
+    status_unpriv is only ever surfaced in a finding's detail text as
+    supplementary diagnostic evidence.
+
+    verdict is one of:
+      'SUCCESS'        - status_sudo completed, exit_code==0, and a
+                          'Jail list:' line was found (parseable) -
+                          regardless of whether that list is empty.
+      'PARSE_FAILURE'  - status_sudo completed, exit_code==0, but NO
+                          'Jail list:' line was found at all. Distinct
+                          from SUCCESS-with-empty-list: this means the
+                          output couldn't be understood, not that zero
+                          jails were confirmed.
+      'ACCESS_DENIED'  - status_sudo completed with a nonzero exit code,
+                          and stdout contains a recognizable permission-
+                          denied signal (best-effort text match - this
+                          is a semantic-layer judgment on already-
+                          confirmed evidence, not a guess about
+                          collection success).
+      'COMMAND_ERROR'  - status_sudo completed with a nonzero exit code,
+                          but no permission-denied signal was found -
+                          some other confirmed failure (daemon down,
+                          socket issue, etc.).
+      'UNKNOWN'        - status_sudo is None (should not happen unless
+                          binary is NOT_PRESENT - see audit_fail2ban()),
+                          or status_sudo.completed is False.
+    """
+    from ..fail2ban_config import _parse_jail_list
+
+    status = evidence.status_sudo
+    if status is None:
+        return 'UNKNOWN', {'reason': 'sudo status was never attempted'}
+    if not status.completed:
+        return 'UNKNOWN', {'reason': 'sudo fail2ban-client status did not complete'}
+
+    if status.exit_code == 0:
+        jail_names = _parse_jail_list(status.stdout)
+        if jail_names is None:
+            return 'PARSE_FAILURE', {'raw_snippet': status.stdout[:200]}
+        return 'SUCCESS', {'jail_names': jail_names}
+
+    # Confirmed nonzero exit - distinguish ACCESS_DENIED from a generic
+    # COMMAND_ERROR using the same text-signal fail2ban-client itself
+    # produces (empirically observed: "ERROR ... Permission denied to
+    # socket ... (you must be root)"). This is interpretation of already-
+    # CONFIRMED evidence (exit_code != 0), not a guess about whether the
+    # command ran - see this function's docstring.
+    combined = status.stdout
+    denied = 'permission denied' in combined.lower() or 'you must be root' in combined.lower()
+    ctx = {'exit_code': status.exit_code, 'raw_snippet': combined[:200]}
+    if evidence.status_unpriv.completed and evidence.status_unpriv.exit_code == 0:
+        unpriv_lower = evidence.status_unpriv.stdout.lower()
+        if 'permission denied' in unpriv_lower or 'you must be root' in unpriv_lower:
+            ctx['unpriv_also_denied'] = True
+    if denied:
+        return 'ACCESS_DENIED', ctx
+    return 'COMMAND_ERROR', ctx
+
+
+def _fail2ban_jail_verdict(jail_evidence) -> tuple[str, dict]:
+    """Returns (verdict, context) for one jail's own status query.
+
+    verdict is one of:
+      'CONFIRMED' - completed, exit_code==0. currently_banned/
+                    total_banned in context are ints ONLY if their
+                    respective regex matched; a regex that did NOT match
+                    yields None, never a silently-substituted 0 - a
+                    jail whose ban counts couldn't be parsed out of an
+                    otherwise-successful query must not be reported as
+                    "0 bans" (see this module's session notes on the
+                    original FB-5 bug this replaces).
+      'UNKNOWN'   - did not complete, or completed with a nonzero exit
+                    code (this collector does not further split jail-
+                    level nonzero exits into ACCESS_DENIED/COMMAND_ERROR
+                    - a single jail failing is always treated as
+                    contributing to partial-collection UNKNOWN, since
+                    the top-level status_sudo verdict already carries
+                    that distinction for the service as a whole).
+    """
+    status = jail_evidence.status
+    if not status.completed or status.exit_code != 0:
+        return 'UNKNOWN', {}
+
+    banned_m = re.search(r'Currently banned:\s*(\d+)', status.stdout)
+    total_m = re.search(r'Total banned:\s*(\d+)', status.stdout)
+    currently_banned = int(banned_m.group(1)) if banned_m else None
+    total_banned = int(total_m.group(1)) if total_m else None
+    return 'CONFIRMED', {'currently_banned': currently_banned, 'total_banned': total_banned}
+
+
 def audit_fail2ban(ssh: SSHExecutor) -> dict:
-    out, _ = ssh.run('which fail2ban-client || echo NONE')
-    if 'NONE' in out:
+    """Findings-producing fail2ban audit. Thin wrapper over
+    fail2ban_config.collect_fail2ban_config() (raw evidence collection)
+    and the verdict functions above - the same collector/semantic-layer
+    split firewall_config.py/audit_firewall() and sql_config.py/
+    audit_sql() established.
+
+    UNKNOWN is never reported as 'ok', and a jail whose ban counts
+    couldn't be confirmed is never silently counted as zero. This is
+    the direct fix for FB-1 (which-collapse of collection failure into
+    "not installed"), FB-2/FB-3 (text-sniffing an unprivileged status
+    call whose exit_code==0 does not actually mean success - empirically
+    confirmed on 46.62.147.41 - and no sudo ever being attempted),
+    FB-4/FB-6 (a jail-list parse failure silently read as "confirmed
+    zero jails"), and FB-5 (a per-jail query failure silently
+    contributing 0 to the total-bans count instead of being surfaced as
+    partial collection). See fail2ban_config.py's own docstring for the
+    full background.
+
+    Return shape is unchanged from the pre-existing function
+    ({'installed': bool, 'jails': [...], 'findings': [...]}) so existing
+    consumers of this dict (the web UI/report renderer) don't need
+    updating - only the CONTENT of jails/findings changes to reflect
+    the corrected evidence handling.
+    """
+    from ..fail2ban_config import collect_fail2ban_config
+
+    evidence = collect_fail2ban_config(ssh)
+    findings = []
+
+    binary_verdict, binary_ctx = _fail2ban_binary_verdict(evidence)
+    if binary_verdict == 'NOT_PRESENT':
+        # Confirmed absent - not a collection failure. Deliberately NOT
+        # folded into an 'ok'/'low' finding path: this mirrors
+        # audit_sql()'s NOT_PRESENT handling (see that function's
+        # docstring) - a host with no fail2ban simply has nothing for
+        # this audit to evaluate beyond the one informational finding
+        # below, which is unchanged from the pre-existing behavior.
         return {'installed': False,
                 'findings': [_finding('medium', 'fail2ban is not installed',
                                       'no brute-force protection for SSH/web — recommended to install')]}
+    if binary_verdict == 'UNKNOWN':
+        findings.append(_finding('low', 'could not determine whether fail2ban is installed',
+                                 binary_ctx['reason'], requires_manual_verification=True))
+        # Deliberately falls through to still attempt the status/jail
+        # checks below - collect_fail2ban_config() still attempts
+        # status_sudo whenever binary_check isn't confirmed NOT_PRESENT
+        # (see that function's docstring), so a real status result may
+        # still be available even though presence itself is unconfirmed.
 
-    status, err = ssh.run('fail2ban-client status 2>&1')
-    if 'Failed' in status or 'ERROR' in status or err.strip():
-        return {'installed': True,
-                'findings': [_finding('low', 'no access to fail2ban status', 'requires root')]}
+    status_verdict, status_ctx = _fail2ban_status_verdict(evidence)
 
-    jail_m = re.search(r'Jail list:\s*(.+)', status)
-    jails = [j.strip() for j in jail_m.group(1).split(',')] if jail_m else []
-    findings = []
+    if status_verdict == 'UNKNOWN':
+        findings.append(_finding('low', 'could not determine fail2ban status',
+                                 status_ctx['reason'], requires_manual_verification=True))
+        return {'installed': True, 'jails': [], 'findings': findings}
+
+    if status_verdict == 'PARSE_FAILURE':
+        findings.append(_finding(
+            'low', 'fail2ban status returned but could not be parsed',
+            f"unrecognized output (no 'Jail list:' line found): {status_ctx['raw_snippet']!r}",
+            requires_manual_verification=True,
+        ))
+        return {'installed': True, 'jails': [], 'findings': findings}
+
+    if status_verdict in ('ACCESS_DENIED', 'COMMAND_ERROR'):
+        detail = f"sudo fail2ban-client status failed (exit {status_ctx['exit_code']}): {status_ctx['raw_snippet']!r}"
+        if status_ctx.get('unpriv_also_denied'):
+            detail += ' (unprivileged access was also denied)'
+        title = ('fail2ban is installed, but status could not be confirmed even with sudo'
+                 if status_verdict == 'ACCESS_DENIED' else
+                 'fail2ban status command failed')
+        findings.append(_finding('low', title, detail, requires_manual_verification=True))
+        return {'installed': True, 'jails': [], 'findings': findings}
+
+    # status_verdict == 'SUCCESS' from here on.
+    jail_names = status_ctx['jail_names']
+    if not jail_names:
+        # Confirmed empty jail list - fail2ban is running and its status
+        # parsed cleanly, but zero jails are actually configured. This
+        # is deliberately NOT the 'medium: no active jails' finding
+        # (that finding means "we asked and jails is empty" without
+        # distinguishing confirmed-empty from unparseable - the whole
+        # point of the PARSE_FAILURE branch above is to no longer
+        # collapse those two cases). A genuinely idle-but-installed
+        # fail2ban with zero jails is left with NO finding here,
+        # matching audit_sql()'s NOT_LISTENING precedent (confirmed
+        # non-problem states produce no finding at all, only confirmed
+        # problems and confirmed unknowns do).
+        return {'installed': True, 'jails': [], 'findings': findings}
+
+    jail_results = []
+    confirmed_count = 0
+    unknown_jails = []
     total_banned = 0
-    jail_info = []
-    for jail in jails:
-        if not jail:
-            continue
-        jstatus, _ = ssh.run(f'fail2ban-client status {jail} 2>/dev/null')
-        banned_m = re.search(r'Currently banned:\s*(\d+)', jstatus)
-        total_m = re.search(r'Total banned:\s*(\d+)', jstatus)
-        banned = int(banned_m.group(1)) if banned_m else 0
-        total = int(total_m.group(1)) if total_m else 0
-        total_banned += total
-        jail_info.append({'jail': jail, 'currently_banned': banned, 'total_banned': total})
+    for je in evidence.jails:
+        jv, jctx = _fail2ban_jail_verdict(je)
+        if jv == 'CONFIRMED':
+            confirmed_count += 1
+            currently_banned = jctx['currently_banned']
+            jail_total = jctx['total_banned']
+            if jail_total is not None:
+                total_banned += jail_total
+            jail_results.append({'jail': je.name, 'currently_banned': currently_banned,
+                                 'total_banned': jail_total})
+        else:
+            unknown_jails.append(je.name)
+            jail_results.append({'jail': je.name, 'currently_banned': None, 'total_banned': None})
 
-    if not jails or jails == ['']:
-        findings.append(_finding('medium', 'no active jails', 'fail2ban is running, but isn\'t protecting any services'))
+    if not any('ssh' in j.lower() for j in jail_names):
+        findings.append(_finding('medium', 'no jail for SSH', "SSH isn't protected against brute-force"))
+
+    if unknown_jails:
+        # Partial per-jail collection - never reported as 'ok', even
+        # though some jails DID confirm successfully. This is the direct
+        # fix for FB-5: a jail whose query failed must not silently
+        # contribute a 0 to total_banned, and the finding must make the
+        # partial nature explicit rather than presenting an
+        # apparently-complete total. Per session decision: LOW, not ok,
+        # regardless of how many jails did confirm.
+        findings.append(_finding(
+            'low',
+            'could not fully determine fail2ban jail status',
+            f'{confirmed_count} of {len(jail_names)} jails confirmed '
+            f'(could not query: {", ".join(unknown_jails)}); '
+            f'total confirmed bans: {total_banned}',
+            requires_manual_verification=True,
+        ))
     else:
-        if not any('ssh' in j.lower() for j in jails):
-            findings.append(_finding('medium', 'no jail for SSH', 'SSH isn\'t protected against brute-force'))
-        findings.append(_finding('ok', f'active jails: {len(jails)}', f'total bans: {total_banned}'))
+        findings.append(_finding('ok', f'active jails: {len(jail_names)}', f'total bans: {total_banned}'))
 
-    return {'installed': True, 'jails': jail_info, 'findings': findings}
+    return {'installed': True, 'jails': jail_results, 'findings': findings}
 
 # ===========================================================================
 # firewall

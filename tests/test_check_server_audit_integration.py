@@ -34,7 +34,7 @@ def _baseline_responses():
                      'add_header X-Frame-Options DENY always;\n'
                      'add_header X-Content-Type-Options nosniff always;'),
         # fail2ban
-        'which fail2ban-client': 'NONE',
+        'command -v fail2ban-client': '',
         # firewall
         'command -v ufw': '',
         'nft list ruleset': 'table inet filter {\n  chain input {\n  }\n}',
@@ -52,6 +52,7 @@ def _baseline_responses():
 
 def _baseline_exit_codes():
     return {
+        'command -v fail2ban-client': 127,
         'command -v ufw': 127,
         'nft list ruleset': 0,
         'iptables -S': 0,
@@ -288,3 +289,155 @@ def test_check_server_audit_result_shape_is_compatible():
             assert 'severity' in f
             assert 'title' in f
             assert f['severity'] in result['summary']  # every severity used is a known summary key
+
+
+# ===========================================================================
+# audit_fail2ban() integration into check_server_audit() - post-collector-
+# rewrite regression suite. See test_audit_fail2ban.py for the dedicated
+# unit/verdict-level suite; these three tests exist specifically to prove
+# the fail2ban rewrite is correctly WIRED into the top-level orchestration
+# layer (summary counting, requires_manual_verification propagation,
+# other sections left untouched) - the same integration-level guarantee
+# already established above for the firewall rewrite.
+# ===========================================================================
+
+def test_check_server_audit_fail2ban_not_present_other_sections_unaffected():
+    """Fail2ban confirmed NOT_PRESENT (the corrected baseline fixture -
+    exit_code=127, not an unregistered/UNKNOWN command) must produce
+    exactly the pre-existing 'medium: not installed' finding, and must
+    not perturb nginx/firewall/sql/ssh sections at all."""
+    fake = ExitCodeFakeSSHExecutor(
+        responses=_baseline_responses(),
+        exit_codes=_baseline_exit_codes(),
+    )
+    import netaudit_pkg.checks.server_security as ss
+    orig_executor = ss.SSHExecutor
+    ss.SSHExecutor = lambda *a, **kw: fake
+    try:
+        result = check_server_audit(host='1.2.3.4')
+    finally:
+        ss.SSHExecutor = orig_executor
+
+    assert 'fail2ban' in result['sections']
+    f2b = result['sections']['fail2ban']
+    assert f2b['installed'] is False
+    assert len(f2b['findings']) == 1
+    assert f2b['findings'][0]['severity'] == 'medium'
+    assert 'not installed' in f2b['findings'][0]['title']
+    assert result['summary']['medium'] >= 1
+
+    # other sections unaffected - same assertions as the pre-existing
+    # nginx/ssh unaffected test, reused here to prove the fail2ban
+    # baseline fixture fix (which/command -v swap) didn't perturb them
+    nginx_findings = result['sections']['nginx']['findings']
+    assert len(nginx_findings) == 1
+    assert nginx_findings[0]['severity'] == 'ok'
+    ssh_findings = result['sections']['ssh']['findings']
+    assert len(ssh_findings) == 1
+    assert ssh_findings[0]['severity'] == 'ok'
+    fw_findings = result['sections']['firewall']['findings']
+    assert len(fw_findings) == 2
+    assert all(f['severity'] == 'ok' for f in fw_findings)
+
+
+def test_check_server_audit_fail2ban_unknown_binary_reaches_summary_as_low():
+    """Fail2ban binary check collection failure (FB-1 fix): the summary
+    must count this as 'low', requires_manual_verification=True must
+    survive to the final result, and this must NEVER be silently folded
+    into a confident 'not installed' (medium) or dropped entirely - the
+    exact regression check_server_audit_integration.py already
+    established for firewall's UNKNOWN case, applied to fail2ban."""
+    responses = _baseline_responses()
+    exit_codes = _baseline_exit_codes()
+    # remove the fail2ban binary check entirely -> no completion marker
+    # -> genuine collection failure, distinct from a confirmed exit 127
+    del responses['command -v fail2ban-client']
+    del exit_codes['command -v fail2ban-client']
+    fake = ExitCodeFakeSSHExecutor(responses=responses, exit_codes=exit_codes)
+
+    import netaudit_pkg.checks.server_security as ss
+    orig_executor = ss.SSHExecutor
+    ss.SSHExecutor = lambda *a, **kw: fake
+    try:
+        result = check_server_audit(host='1.2.3.4')
+    finally:
+        ss.SSHExecutor = orig_executor
+
+    f2b = result['sections']['fail2ban']
+    assert f2b['installed'] is True  # collection failure != confirmed absence
+    low_findings = [f for f in f2b['findings'] if f['severity'] == 'low']
+    assert len(low_findings) >= 1
+    unknown_finding = next(f for f in f2b['findings']
+                           if 'could not determine whether fail2ban is installed' in f['title'])
+    assert unknown_finding.get('requires_manual_verification') is True
+    assert not any(f['severity'] == 'medium' and 'not installed' in f['title'] for f in f2b['findings']), \
+        'a collection failure must never be reported as confirmed not-installed'
+    assert result['summary']['low'] >= 1
+
+
+def test_check_server_audit_fail2ban_partial_jail_collection_reaches_summary_as_low():
+    """The central aggregation-contract regression at the orchestration
+    layer: 6 jails, 5 confirmed, 1 unconfirmed - the resulting LOW +
+    requires_manual_verification finding must reach check_server_audit()'s
+    top-level result and summary counts intact, and must never be
+    counted as 'ok' anywhere in the summary."""
+    responses = _baseline_responses()
+    exit_codes = _baseline_exit_codes()
+    responses['command -v fail2ban-client'] = '/usr/bin/fail2ban-client'
+    exit_codes['command -v fail2ban-client'] = 0
+    for jail in ('nginx-botsearch', 'nginx-http-auth', 'nginx-limit-req', 'sshd-ddos', 'sshd'):
+        responses[f'status {jail}'] = (
+            f'Status for the jail: {jail}\n`- Currently banned:\t0\n`- Total banned:\t1')
+        exit_codes[f'status {jail}'] = 0
+    status_text = ('Status\n|- Number of jail:\t6\n'
+                   '`- Jail list:\tnginx-botsearch, nginx-http-auth, nginx-limit-req, '
+                   'recidive, sshd, sshd-ddos')
+    responses['fail2ban-client status'] = status_text
+    exit_codes['fail2ban-client status'] = 0
+
+    class OneJailFailsFake(ExitCodeFakeSSHExecutor):
+        """Simulates a genuine per-jail collection failure for
+        'recidive' specifically. Leaving 'status recidive' simply
+        unregistered is NOT sufficient here - ExitCodeFakeSSHExecutor's
+        substring matching would fall through to the shorter, already-
+        registered 'fail2ban-client status' key (needed for the
+        top-level status call), which also matches 'fail2ban-client
+        status recidive' and would give it the full 6-jail status text
+        with an exit code, i.e. a false CONFIRMED instead of the
+        intended collection failure. Overriding sudo() directly for
+        this one jail avoids relying on substring-matching fallthrough
+        to produce the failure shape."""
+        def sudo(self, cmd, timeout=20):
+            self.calls.append(cmd)
+            if 'status recidive' in cmd:
+                return 'dropped mid-command, no completion marker', ''
+            return self._respond(cmd)
+
+    fake = OneJailFailsFake(responses=responses, exit_codes=exit_codes)
+    import netaudit_pkg.checks.server_security as ss
+    orig_executor = ss.SSHExecutor
+    ss.SSHExecutor = lambda *a, **kw: fake
+    try:
+        result = check_server_audit(host='1.2.3.4')
+    finally:
+        ss.SSHExecutor = orig_executor
+
+    f2b = result['sections']['fail2ban']
+    assert f2b['installed'] is True
+    assert len(f2b['jails']) == 6
+    recidive_entry = next(j for j in f2b['jails'] if j['jail'] == 'recidive')
+    assert recidive_entry['currently_banned'] is None
+    assert recidive_entry['total_banned'] is None
+
+    assert not any(f['severity'] == 'ok' for f in f2b['findings']), \
+        'partial jail collection must never surface as ok, even at the top-level report'
+    partial_finding = next(f for f in f2b['findings'] if 'could not fully determine' in f['title'])
+    assert partial_finding['severity'] == 'low'
+    assert partial_finding.get('requires_manual_verification') is True
+    assert '5 of 6 jails confirmed' in partial_finding['detail']
+
+    assert result['summary']['low'] >= 1
+    assert not any(
+        f['severity'] == 'ok' and 'jail' in f.get('title', '').lower()
+        for sec in result['sections'].values() for f in sec.get('findings', [])
+    )
