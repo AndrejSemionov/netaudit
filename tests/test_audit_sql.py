@@ -310,6 +310,33 @@ def test_sql_bind_address_evidence_unknown_on_unexpected_exit():
     assert verdict == 'UNKNOWN'
 
 
+def test_sql_bind_address_evidence_partial_read_still_unknown_but_preserves_stdout():
+    """Regression test for a real case found during VM verification:
+    `grep -r` on /etc/mysql/ can exit 2 (a read error occurred - e.g.
+    Debian/Ubuntu's root-only debian.cnf) while STILL having printed a
+    genuine match from a different, readable file in the same walk.
+    stdout='bind-address = 127.0.0.1', exit=2 - the verdict must remain
+    UNKNOWN (a partial recursive read cannot rule out a different,
+    unreadable file setting bind-address to something less safe
+    elsewhere), but the partial evidence must be preserved in context
+    for the finding text, not silently discarded."""
+    ev = _evidence(bind_address_config=_cr(exit_code=2, stdout='bind-address            = 127.0.0.1'))
+    verdict, ctx = _sql_bind_address_evidence(ev)
+    assert verdict == 'UNKNOWN'
+    assert 'partial_stdout' in ctx
+    assert '127.0.0.1' in ctx['partial_stdout']
+
+
+def test_sql_bind_address_evidence_unexpected_exit_empty_stdout_no_partial_key():
+    """The other side of the above: exit=2 with genuinely empty stdout
+    must NOT have a 'partial_stdout' key at all - nothing was actually
+    captured, so there's nothing to surface."""
+    ev = _evidence(bind_address_config=_cr(exit_code=2, stdout=''))
+    verdict, ctx = _sql_bind_address_evidence(ev)
+    assert verdict == 'UNKNOWN'
+    assert 'partial_stdout' not in ctx
+
+
 def test_sql_bind_address_security_exposed_wildcard():
     assert _sql_bind_address_security(['bind-address = 0.0.0.0']) == 'EXPOSED'
 
@@ -473,6 +500,29 @@ def test_audit_sql_collection_failure_never_becomes_ok_with_no_evidence():
     assert all(f['severity'] == 'low' for f in result['findings'])
     assert all(f.get('requires_manual_verification') for f in result['findings'])
     assert not any(f['severity'] == 'ok' for f in result['findings'])
+
+
+def test_audit_sql_bind_address_partial_read_gives_low_not_high_but_mentions_observed_value():
+    """End-to-end regression test for the exact scenario found during VM
+    verification on a real host: grep -r on /etc/mysql/ hits a
+    permission-denied file (Debian/Ubuntu's root-only debian.cnf) and
+    exits 2, but still captured a genuine 'bind-address = 127.0.0.1'
+    line from a different, readable file. The finding must stay 'low'
+    (never 'high'/'ok' - the read was incomplete, so no security verdict
+    can be safely made), but the observed value must appear in the
+    finding text rather than being silently discarded."""
+    responses, exit_codes = _responses_for(
+        mysql_exit=0, ss_stdout='', ss_exit=0,
+        bind_stdout='bind-address            = 127.0.0.1', bind_exit=2)
+    fake = ExitCodeFakeSSHExecutor(responses=responses, exit_codes=exit_codes)
+    result = audit_sql(fake)
+    bind_findings = [f for f in result['findings'] if 'bind-address' in f['title'].lower()]
+    assert len(bind_findings) == 1
+    assert bind_findings[0]['severity'] == 'low'
+    assert bind_findings[0].get('requires_manual_verification') is True
+    assert '127.0.0.1' in bind_findings[0]['detail']
+    assert not any(f['severity'] in ('high', 'ok') for f in result['findings']
+                   if 'bind-address' in f['title'].lower())
 
 
 def test_audit_sql_presence_unknown_still_checks_listener_and_bind():

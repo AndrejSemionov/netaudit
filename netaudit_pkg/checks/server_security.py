@@ -485,20 +485,48 @@ def _sql_bind_address_evidence(evidence) -> tuple[str, dict]:
     below for that).
 
     verdict is one of:
-      'FOUND_ACTIVE' - at least one non-commented 'bind-address' line
+      'FOUND_ACTIVE' - grep completed cleanly (exit 0) with at least one
+                        non-commented 'bind-address' line
       'NOT_FOUND'    - grep completed with no active lines (either no
                         match at all, or only commented-out ones -
                         regression-critical: '#bind-address = 0.0.0.0'
                         must NOT count as FOUND_ACTIVE)
       'UNKNOWN'      - collection failed, or grep reported an exit code
-                        that isn't 0 (match found) or 1 (no match, grep's
+                        that isn't 0 (clean match) or 1 (no match, grep's
                         own documented convention)
+
+    A specific case worth calling out: `grep -r` on a directory
+    containing files the SSH user can't read (e.g. Debian/Ubuntu's
+    /etc/mysql/debian.cnf, which is root-only 0600 by default) can exit
+    2 while STILL having found and printed a real match from a different,
+    readable file in the same recursive walk - grep's exit code reflects
+    "at least one read error occurred", not "no matches were found".
+    Confirmed on a real host during this quality audit's VM verification.
+
+    This is deliberately still classified UNKNOWN, not FOUND_ACTIVE, even
+    though `cfg.stdout` may contain a genuine bind-address line in that
+    exit=2 case: a partial recursive read cannot rule out a DIFFERENT,
+    unreadable file elsewhere in the directory also setting bind-address
+    to something less safe (e.g. 0.0.0.0) - stdout here is real evidence,
+    but not the whole picture, and a security verdict must not be built
+    on an admittedly incomplete read. The context dict still carries
+    whatever partial evidence was captured (see 'partial_stdout' below),
+    so the resulting finding can mention what was actually seen instead
+    of only saying "we don't know" - callers (audit_sql()) use this to
+    write a more informative message without ever upgrading the verdict
+    itself past UNKNOWN.
     """
     cfg = evidence.bind_address_config
     if not cfg.completed:
         return 'UNKNOWN', {'reason': 'bind-address config read did not complete'}
     if cfg.exit_code not in (0, 1):
-        return 'UNKNOWN', {'reason': f'bind-address config read failed (exit {cfg.exit_code})'}
+        ctx = {'reason': f'bind-address config read failed (exit {cfg.exit_code})'}
+        if cfg.stdout.strip():
+            # Partial evidence: grep found something before/despite the
+            # read error - preserved for the finding text, but does NOT
+            # change the verdict (see docstring above).
+            ctx['partial_stdout'] = cfg.stdout.strip()
+        return 'UNKNOWN', ctx
 
     active_lines = [line for line in cfg.stdout.splitlines() if line.strip() and not line.strip().startswith('#')]
     if active_lines:
@@ -594,7 +622,16 @@ def audit_sql(ssh: SSHExecutor) -> dict:
         # runtime state, which is the more meaningful fact; a second
         # 'ok' for the static config would be redundant.
     elif bind_verdict == 'UNKNOWN':
-        findings.append(_finding('low', 'could not determine MySQL bind-address configuration', bind_ctx['reason'],
+        detail = bind_ctx['reason']
+        if 'partial_stdout' in bind_ctx:
+            # See _sql_bind_address_evidence()'s docstring: grep found a
+            # real match despite an overall nonzero exit (e.g. a
+            # permission-denied file elsewhere in the same recursive
+            # walk) - worth surfacing, without claiming it's the whole
+            # picture or upgrading the verdict past UNKNOWN.
+            detail += (f"; observed (possibly incomplete - other files may not have been readable): "
+                      f"{bind_ctx['partial_stdout']}")
+        findings.append(_finding('low', 'could not fully determine MySQL bind-address configuration', detail,
                                  requires_manual_verification=True))
     # NOT_FOUND produces no finding - see contract notes: absence of the
     # directive is neither SAFE nor EXPOSED on its own.
