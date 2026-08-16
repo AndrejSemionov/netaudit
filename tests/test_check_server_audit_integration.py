@@ -40,8 +40,10 @@ def _baseline_responses():
         'nft list ruleset': 'table inet filter {\n  chain input {\n  }\n}',
         'iptables -S': '-P INPUT DROP',
         # sql
-        'which mysql mariadb': 'NONE',
-        'ss -tlnp': 'NOPORT',
+        'command -v mysql': '',
+        'command -v mariadb': '',
+        'ss -tlnp': '',
+        "grep -rh '^\\s*bind-address' /etc/mysql/": '',
         # ssh
         'sshd -T': 'permitrootlogin prohibit-password\npasswordauthentication no\n'
                    'permitemptypasswords no\nport 22\nmaxauthtries 6',
@@ -53,6 +55,10 @@ def _baseline_exit_codes():
         'command -v ufw': 127,
         'nft list ruleset': 0,
         'iptables -S': 0,
+        'command -v mysql': 127,
+        'command -v mariadb': 127,
+        'ss -tlnp': 0,
+        "grep -rh '^\\s*bind-address' /etc/mysql/": 1,
     }
 
 
@@ -270,14 +276,13 @@ def test_check_server_audit_result_shape_is_compatible():
     assert result['host'] == '1.2.3.4'
     assert set(result['sections'].keys()) == {'nginx', 'fail2ban', 'firewall', 'sql', 'ssh'}
     assert set(result['summary'].keys()) == {'high', 'medium', 'low', 'ok'}
-    # Not every section is guaranteed to have a 'findings' key - e.g.
-    # audit_sql() returns bare {'installed': False} when MySQL/MariaDB
-    # isn't present at all (pre-existing behavior, unrelated to the
-    # firewall refactor - check_server_audit()'s summary-counting loop
-    # already handles this via .get('findings', [])). The firewall
-    # section specifically, which this refactor touched, MUST have
-    # 'findings' in every case this test's fixture produces.
+    # As of the SQL quality-audit fix, audit_sql() always includes a
+    # 'findings' key, even when MySQL/MariaDB is confirmed not installed
+    # (an empty list - N/A, not a security 'ok' - rather than a bare
+    # {'installed': False} with no findings key at all - see the SQL-3
+    # regression this closes).
     assert 'findings' in result['sections']['firewall']
+    assert 'findings' in result['sections']['sql']
     for section in result['sections'].values():
         for f in section.get('findings', []):
             assert 'severity' in f

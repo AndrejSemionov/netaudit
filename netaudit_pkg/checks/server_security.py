@@ -10,6 +10,7 @@ Each finding has a severity (high/medium/low/ok) and an explanation.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import socket
 import ssl
@@ -375,30 +376,228 @@ def audit_firewall(ssh: SSHExecutor) -> dict:
 # SQL (MySQL/MariaDB) — config and exposure, without logging into the DB
 # ===========================================================================
 
-def audit_sql(ssh: SSHExecutor) -> dict:
-    out, _ = ssh.run('which mysql mariadb 2>/dev/null || echo NONE')
-    running, _ = ssh.run('ss -tlnp 2>/dev/null | grep -E ":3306" || echo NOPORT')
-    if 'NONE' in out and 'NOPORT' in running:
-        return {'installed': False}
+def _sql_binary_verdict(result) -> str:
+    """Classifies ONE presence CommandResult (mysql or mariadb) per
+    `command -v`'s own exit-code convention. Returns 'FOUND', 'NOT_FOUND'
+    (confirmed absent, exit 127), or 'UNKNOWN' (collection failure, or
+    any exit code other than 0/127 - not guessed at, see
+    firewall_config.tool_is_present() for the same pattern)."""
+    if not result.completed:
+        return 'UNKNOWN'
+    if result.exit_code == 0:
+        return 'FOUND'
+    if result.exit_code == 127:
+        return 'NOT_FOUND'
+    return 'UNKNOWN'
 
-    findings = []
-    # 3306 exposed externally?
-    if 'NOPORT' not in running:
-        if re.search(r'0\.0\.0\.0:3306|\*:3306|:::3306', running):
-            findings.append(_finding('high', 'MySQL is listening on all interfaces (0.0.0.0:3306)',
-                                     'the DB is reachable externally — should be bind-address=127.0.0.1 unless external access is needed'))
+
+def _sql_presence_verdict(evidence) -> tuple[str, dict]:
+    """Combines mysql_present/mariadb_present into one presence verdict.
+
+    'NOT_PRESENT' requires BOTH to be confirmed NOT_FOUND (exit 127) -
+    a single UNKNOWN never downgrades to NOT_PRESENT. 'PRESENT' requires
+    only one confirmed FOUND (existence, once proven, isn't undone by
+    the other check being inconclusive). Otherwise 'UNKNOWN'.
+    """
+    mysql_v = _sql_binary_verdict(evidence.mysql_present)
+    mariadb_v = _sql_binary_verdict(evidence.mariadb_present)
+    if mysql_v == 'FOUND' or mariadb_v == 'FOUND':
+        return 'PRESENT', {'mysql': mysql_v, 'mariadb': mariadb_v}
+    if mysql_v == 'NOT_FOUND' and mariadb_v == 'NOT_FOUND':
+        return 'NOT_PRESENT', {'mysql': mysql_v, 'mariadb': mariadb_v}
+    return 'UNKNOWN', {'mysql': mysql_v, 'mariadb': mariadb_v}
+
+
+def _classify_listen_address(addr: str) -> bool | None:
+    """Returns True (loopback), False (non-loopback), or None
+    (unparseable - e.g. an unexpected ss output format on some system).
+    Uses ipaddress.ip_address().is_loopback rather than a hand-written
+    regex - covers the entire 127.0.0.0/8 range, not just 127.0.0.1,
+    and IPv6 ::1, correctly and without guessing at edge cases."""
+    try:
+        return ipaddress.ip_address(addr).is_loopback
+    except ValueError:
+        return None
+
+
+def _parse_ss_local_addresses(stdout: str, port: str) -> list[str]:
+    """Extracts the local bind address (without port) from every `ss
+    -tlnp` line whose Local Address:Port column ends in `:port`. Handles
+    both bracketed IPv6 ([::]:port) and plain IPv4 (0.0.0.0:port) forms -
+    the port is always the substring after the LAST colon, except for
+    the bracketed IPv6 form where the address itself contains colons and
+    is delimited by brackets."""
+    addrs = []
+    for line in stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        local = parts[4]
+        m = re.match(r'^\[([^\]]+)\]:(\d+)$', local)
+        if m:
+            addr, p = m.group(1), m.group(2)
+        elif ':' in local:
+            addr, p = local.rsplit(':', 1)
         else:
-            findings.append(_finding('ok', 'MySQL is listening locally'))
+            continue
+        if p == port:
+            addrs.append(addr)
+    return addrs
 
-    # bind-address in the config (ignore commented-out lines — the earlier grep
-    # also matched '#bind-address = 0.0.0.0', giving a false high on the default,
-    # never-activated value from the template config)
-    bind, _ = ssh.run("grep -rh '^\\s*bind-address' /etc/mysql/ 2>/dev/null | head -3")
-    if bind.strip() and '127.0.0.1' not in bind and '0.0.0.0' in bind:
-        findings.append(_finding('high', 'bind-address=0.0.0.0 in the MySQL config', bind.strip()))
 
-    if not findings:
-        findings.append(_finding('ok', 'MySQL/MariaDB: no obvious exposure issues found'))
+def _sql_listener_verdict(evidence, port: str = '3306') -> tuple[str, dict]:
+    """Returns (verdict, context) for whether MySQL/MariaDB's port is
+    listening, and whether the bind address is loopback-only.
+
+    verdict is one of:
+      'LISTENING_LOCAL'    - confirmed: every listener on `port` is loopback
+      'LISTENING_EXTERNAL' - confirmed: at least one listener on `port` is
+                              non-loopback (worst-case wins if there are
+                              multiple simultaneous listeners)
+      'NOT_LISTENING'       - confirmed: ss succeeded, no listener on `port`
+      'UNKNOWN'             - collection failed, ss reported a nonzero
+                              exit, or a `port` line was found but its
+                              address could not be parsed (never silently
+                              treated as NOT_LISTENING or LOCAL)
+    """
+    live = evidence.listener
+    if not live.completed:
+        return 'UNKNOWN', {'reason': 'ss did not complete'}
+    if live.exit_code != 0:
+        return 'UNKNOWN', {'reason': f'ss failed (exit {live.exit_code})'}
+
+    addrs = _parse_ss_local_addresses(live.stdout, port)
+    if not addrs:
+        return 'NOT_LISTENING', {}
+
+    classifications = [_classify_listen_address(a) for a in addrs]
+    if any(c is None for c in classifications):
+        return 'UNKNOWN', {'reason': f'a :{port} listener line could not be parsed',
+                            'addresses': addrs}
+    if any(c is False for c in classifications):  # any non-loopback
+        return 'LISTENING_EXTERNAL', {'addresses': addrs}
+    return 'LISTENING_LOCAL', {'addresses': addrs}
+
+
+def _sql_bind_address_evidence(evidence) -> tuple[str, dict]:
+    """Returns (verdict, context) for the bind-address CONFIG evidence
+    only (not yet a security judgment - see _sql_bind_address_security()
+    below for that).
+
+    verdict is one of:
+      'FOUND_ACTIVE' - at least one non-commented 'bind-address' line
+      'NOT_FOUND'    - grep completed with no active lines (either no
+                        match at all, or only commented-out ones -
+                        regression-critical: '#bind-address = 0.0.0.0'
+                        must NOT count as FOUND_ACTIVE)
+      'UNKNOWN'      - collection failed, or grep reported an exit code
+                        that isn't 0 (match found) or 1 (no match, grep's
+                        own documented convention)
+    """
+    cfg = evidence.bind_address_config
+    if not cfg.completed:
+        return 'UNKNOWN', {'reason': 'bind-address config read did not complete'}
+    if cfg.exit_code not in (0, 1):
+        return 'UNKNOWN', {'reason': f'bind-address config read failed (exit {cfg.exit_code})'}
+
+    active_lines = [line for line in cfg.stdout.splitlines() if line.strip() and not line.strip().startswith('#')]
+    if active_lines:
+        return 'FOUND_ACTIVE', {'lines': active_lines}
+    return 'NOT_FOUND', {}
+
+
+def _sql_bind_address_security(active_lines: list[str]) -> str:
+    """Returns 'SAFE' or 'EXPOSED' for a FOUND_ACTIVE bind-address
+    evidence's active lines. Worst-case wins across multiple lines: any
+    line that isn't confirmed loopback makes the result EXPOSED - a
+    redundant/conflicting config (e.g. one safe line, one exposed line)
+    must not be reported as SAFE just because one line looked fine."""
+    for line in active_lines:
+        m = re.search(r'bind-address\s*=\s*(\S+)', line)
+        addr = m.group(1) if m else None
+        is_loop = _classify_listen_address(addr) if addr else None
+        if is_loop is not True:  # non-loopback, or unparseable - both err toward EXPOSED
+            return 'EXPOSED'
+    return 'SAFE'
+
+
+def audit_sql(ssh: SSHExecutor) -> dict:
+    """Findings-producing MySQL/MariaDB audit. Thin wrapper over
+    sql_config.collect_sql_config() (raw evidence collection) and the
+    verdict functions above - the same collector/semantic-layer split
+    firewall_config.py/audit_firewall() established.
+
+    Presence, listener, and bind-address each produce their own
+    independent finding(s) where relevant - no single aggregate "SQL is
+    secure/exposed" verdict (same multi-evidence-independence principle
+    as audit_firewall()). UNKNOWN is never reported as 'ok' - see the
+    individual verdict functions' docstrings. This is the direct fix for
+    SQL-1 (which-mysql-mariadb collapsing collection failure into
+    absence), SQL-2 (grep's own exit code driving the ss failure/no-match
+    ambiguity), SQL-3 (compound collection failure silently read as
+    'not installed', with no findings key at all), SQL-4 (unreadable
+    bind-address config silently skipping the exposure check), and SQL-5
+    (the resulting empty findings list unconditionally defaulting to
+    'ok' with zero evidence behind it).
+    """
+    from ..sql_config import collect_sql_config
+
+    evidence = collect_sql_config(ssh)
+    findings = []
+
+    presence, presence_ctx = _sql_presence_verdict(evidence)
+    if presence == 'NOT_PRESENT':
+        # Confirmed absent (both mysql and mariadb exit 127) - not a
+        # collection failure, and not a security question either: this
+        # SQL-exposure audit simply doesn't apply to a host with no
+        # MySQL/MariaDB installed. Deliberately NOT an 'ok' finding -
+        # 'ok' means a check ran and confirmed a safe state; N/A means
+        # the check has nothing to evaluate. Conflating the two would
+        # let hosts with no database inflate a Multi-host aggregate's
+        # "checks passed" count for a check that never actually ran.
+        return {'installed': False, 'findings': []}
+    if presence == 'UNKNOWN':
+        findings.append(_finding('low', 'could not determine whether MySQL/MariaDB is installed',
+                                 f"mysql: {presence_ctx['mysql']}, mariadb: {presence_ctx['mariadb']}",
+                                 requires_manual_verification=True))
+        # Deliberately falls through to still check listener/bind-address
+        # below - a :3306 listener or an exposed bind-address is still
+        # worth surfacing even if we can't confirm which binary owns it.
+
+    # --- listener ---
+    listener_verdict, listener_ctx = _sql_listener_verdict(evidence)
+    if listener_verdict == 'LISTENING_LOCAL':
+        findings.append(_finding('ok', 'MySQL is listening locally'))
+    elif listener_verdict == 'LISTENING_EXTERNAL':
+        findings.append(_finding(
+            'high', 'MySQL is listening on a non-loopback address',
+            f"addresses: {', '.join(listener_ctx['addresses'])} — reachable beyond localhost; "
+            'restrict with bind-address unless external access is genuinely needed',
+        ))
+    elif listener_verdict == 'UNKNOWN':
+        findings.append(_finding('low', 'could not determine MySQL listener state', listener_ctx['reason'],
+                                 requires_manual_verification=True))
+    # NOT_LISTENING produces no finding - confirmed not listening on 3306
+    # is neither a problem nor proof of a safe configuration (may be
+    # stopped, or listening on a non-default port) - see quality-audit
+    # session notes on why this is a valid empty-findings case, not SQL-5.
+
+    # --- bind-address ---
+    bind_verdict, bind_ctx = _sql_bind_address_evidence(evidence)
+    if bind_verdict == 'FOUND_ACTIVE':
+        security = _sql_bind_address_security(bind_ctx['lines'])
+        if security == 'EXPOSED':
+            findings.append(_finding('high', 'bind-address in the MySQL config allows non-loopback connections',
+                                     '; '.join(bind_ctx['lines'])))
+        # SAFE bind-address config produces no separate finding here -
+        # the listener check above already reports 'ok' for the actual
+        # runtime state, which is the more meaningful fact; a second
+        # 'ok' for the static config would be redundant.
+    elif bind_verdict == 'UNKNOWN':
+        findings.append(_finding('low', 'could not determine MySQL bind-address configuration', bind_ctx['reason'],
+                                 requires_manual_verification=True))
+    # NOT_FOUND produces no finding - see contract notes: absence of the
+    # directive is neither SAFE nor EXPOSED on its own.
 
     return {'installed': True, 'findings': findings}
 
