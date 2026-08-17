@@ -170,8 +170,7 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='',
         return {'error': f'could not connect: {e}'}
 
     try:
-        which_out, _ = ssh.run('which docker || echo NOTFOUND')
-        if 'NOTFOUND' in which_out:
+        if not ssh.is_tool_installed('docker'):
             return {'error': 'docker is not installed on the server'}
 
         # docker usually requires being in the docker group or root - try without

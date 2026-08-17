@@ -142,12 +142,14 @@ def _container_json(**kwargs):
 
 
 def test_full_flow_no_sudo_needed(monkeypatch):
-    fake = FakeSSHExecutor(responses={
-        'which docker': ('/usr/bin/docker', ''),
-        'docker ps -q': ('abc123\n', ''),
-        'docker inspect': (_container_json(user='nginx', image='nginx:1.27'), ''),
-        'grep -rE': ('', ''),
-    })
+    fake = FakeSSHExecutor(
+        installed_tools={'docker'},
+        responses={
+            'docker ps -q': ('abc123\n', ''),
+            'docker inspect': (_container_json(user='nginx', image='nginx:1.27'), ''),
+            'grep -rE': ('', ''),
+        },
+    )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4', user='deploy')
     assert result['containers_checked'] == 1
@@ -174,10 +176,10 @@ def test_full_flow_falls_back_to_sudo_when_needed(monkeypatch):
                 return (_container_json(user='root', image='app:latest'), '')
             return super().sudo(cmd, timeout)
 
-    fake = SudoFallbackExecutor(responses={
-        'which docker': ('/usr/bin/docker', ''),
-        'grep -rE': ('', ''),
-    })
+    fake = SudoFallbackExecutor(
+        installed_tools={'docker'},
+        responses={'grep -rE': ('', '')},
+    )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4', user='deploy')
     assert result['containers_checked'] == 1
@@ -190,11 +192,13 @@ def test_unprotected_daemon_socket_flagged_even_with_zero_containers(monkeypatch
     return for zero running containers, so a dangerous unprotected daemon
     socket went unreported whenever nothing happened to be running at audit
     time. Found and fixed during development."""
-    fake = FakeSSHExecutor(responses={
-        'which docker': ('/usr/bin/docker', ''),
-        'docker ps -q': ('', ''),  # no running containers
-        'grep -rE': ('/etc/docker/daemon.json:  "hosts": ["tcp://0.0.0.0:2375"]\n', ''),
-    })
+    fake = FakeSSHExecutor(
+        installed_tools={'docker'},
+        responses={
+            'docker ps -q': ('', ''),  # no running containers
+            'grep -rE': ('/etc/docker/daemon.json:  "hosts": ["tcp://0.0.0.0:2375"]\n', ''),
+        },
+    )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4')
     assert result['containers_checked'] == 0
@@ -203,7 +207,7 @@ def test_unprotected_daemon_socket_flagged_even_with_zero_containers(monkeypatch
 
 
 def test_docker_not_installed(monkeypatch):
-    fake = FakeSSHExecutor(responses={'which docker': ('NOTFOUND', '')})
+    fake = FakeSSHExecutor()  # installed_tools defaults to empty set - docker absent
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4')
     assert 'error' in result
@@ -251,9 +255,10 @@ def test_needs_sudo_password_no_longer_blocks_the_check(monkeypatch):
             return super().sudo(cmd, timeout)
 
     fake = SudoFallbackExecutor(
+        installed_tools={'docker'},
         no_password_sudo=False,
         password='',
-        responses={'which docker': ('/usr/bin/docker', ''), 'grep -rE': ('', '')},
+        responses={'grep -rE': ('', '')},
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4')
@@ -281,9 +286,9 @@ def test_sudo_denied_reports_access_error_not_zero_containers(monkeypatch):
             return super().sudo(cmd, timeout)
 
     fake = SudoDeniedExecutor(
+        installed_tools={'docker'},
         no_password_sudo=False,
         password='',
-        responses={'which docker': ('/usr/bin/docker', '')},
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4')
@@ -314,9 +319,10 @@ def test_sudo_succeeds_after_unpriv_denied_with_scoped_sudoers(monkeypatch):
             return super().sudo(cmd, timeout)
 
     fake = ScopedSudoExecutor(
+        installed_tools={'docker'},
         no_password_sudo=False,
         password='',
-        responses={'which docker': ('/usr/bin/docker', ''), 'grep -rE': ('', '')},
+        responses={'grep -rE': ('', '')},
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4')
@@ -332,11 +338,13 @@ def test_genuine_zero_containers_still_reports_ok_when_sudo_not_needed(monkeypat
     genuinely returns zero containers - that must still produce the
     normal 'ok: no running containers found', not a false access
     error."""
-    fake = FakeSSHExecutor(responses={
-        'which docker': ('/usr/bin/docker', ''),
-        'docker ps -q': ('', ''),  # succeeds, genuinely empty - no sudo involved
-        'grep -rE': ('', ''),
-    })
+    fake = FakeSSHExecutor(
+        installed_tools={'docker'},
+        responses={
+            'docker ps -q': ('', ''),  # succeeds, genuinely empty - no sudo involved
+            'grep -rE': ('', ''),
+        },
+    )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4')
     assert 'error' not in result
@@ -361,10 +369,10 @@ def test_docker_inspect_partial_failure_does_not_break_whole_audit(monkeypatch):
                 return ('not valid json', '')
             return super().run(cmd, timeout)
 
-    fake = PartialInspectExecutor(responses={
-        'which docker': ('/usr/bin/docker', ''),
-        'grep -rE': ('', ''),
-    })
+    fake = PartialInspectExecutor(
+        installed_tools={'docker'},
+        responses={'grep -rE': ('', '')},
+    )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4')
     assert 'error' not in result

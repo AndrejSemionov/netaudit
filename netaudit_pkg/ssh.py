@@ -198,9 +198,43 @@ class SSHExecutor:
         return (not self._no_password_sudo) and not self.password
 
     def is_tool_installed(self, tool: str) -> bool:
-        """Checks whether a binary is on PATH on the remote host."""
-        out, _ = self.run(f'which {tool} || echo NOTFOUND')
-        return 'NOTFOUND' not in out
+        """Checks whether a binary is on PATH on the remote host, via
+        `command -v` with its own documented exit-code convention (see
+        fail2ban_config.binary_verdict()/firewall_config.tool_is_present()
+        for the same pattern already established elsewhere in this
+        project): exit 0 means present, exit 127 means confirmed absent,
+        any other exit code or a collection failure (no completion
+        marker recovered at all) means the check itself couldn't be
+        trusted either way.
+
+        Returns a plain bool (not a three-state PRESENT/NOT_PRESENT/
+        UNKNOWN result) to avoid an API-breaking change to every caller
+        of this widely-used method - see project session notes for the
+        quality-audit finding that motivated this fix. The ambiguous/
+        collection-failure case conservatively returns False, same as
+        this method's previous return value in that situation (a failed
+        `which` also produced a falsy result before this fix) - so this
+        change corrects the common, high-value 0-vs-127 distinction
+        without altering behavior in the failure case any caller could
+        already have been relying on.
+
+        Previously used `which tool || echo NOTFOUND` (bash-fallback
+        text-sniffing) - the exact which-collapse bug pattern already
+        found and fixed in firewall_config.py/fail2ban_config.py/
+        sql_config.py/cve_audit.py during this project's broader
+        quality audit: `||` fires on ANY nonzero exit of `which` -
+        including an SSH transport hiccup or `which` itself being
+        unavailable on a minimal image - not just genuine absence of
+        the tool, so a collection failure was silently reported as
+        confirmed-not-installed. This method is used (directly or via
+        ensure_tool_installed()) by lynis_audit.py, aide_check.py, and
+        rootkit_check.py; a false "not installed" here could cause a
+        security check to silently skip running at all.
+        """
+        from .ssh_utils import run_command_with_exit_code
+
+        _out, exit_code = run_command_with_exit_code(self, f'command -v {tool}')
+        return exit_code == 0
 
     def ensure_tool_installed(self, tool: str, timeout: int = 120) -> tuple[bool, str | None]:
         """

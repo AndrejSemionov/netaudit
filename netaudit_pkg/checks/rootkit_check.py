@@ -56,11 +56,20 @@ def _parse_rkhunter(raw: str) -> list[dict]:
     return findings
 
 def _run_rkhunter(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
-    """Returns (findings, error). error is not None if the tool is missing/failed to run."""
-    which_out, _ = ssh.run('which rkhunter || echo NOTFOUND')
-    if 'NOTFOUND' in which_out:
-        return [], 'rkhunter is not installed'
+    """Returns (findings, error). error is not None if the tool
+    failed to run.
 
+    No presence check here - the caller (check_rootkit(), via
+    _ensure_installed()) already confirmed the tool is installed via
+    SSHExecutor.is_tool_installed() before this function is ever
+    called. A second, redundant presence check used to live here
+    (`which rkhunter || echo NOTFOUND`) - removed as part of the same
+    quality-audit fix that corrected is_tool_installed() itself: that
+    old check had the identical which-collapse bug (any nonzero exit
+    of `which`, including a transient SSH hiccup, collapsed into "not
+    installed"), and running it a second time here only gave that bug
+    a second chance to produce a false negative on a tool the caller
+    had already confirmed present."""
     out, _ = ssh.sudo('rkhunter --check --skip-keypress --report-warnings-only --nocolors 2>&1', timeout=300)
 
     if not out.strip():
@@ -92,10 +101,9 @@ def _parse_chkrootkit(raw: str) -> list[dict]:
     return findings
 
 def _run_chkrootkit(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
-    which_out, _ = ssh.run('which chkrootkit || echo NOTFOUND')
-    if 'NOTFOUND' in which_out:
-        return [], 'chkrootkit is not installed'
-
+    """Returns (findings, error). See _run_rkhunter()'s docstring for
+    why there's no presence check here either - same reasoning, same
+    fix."""
     out, _ = ssh.sudo('chkrootkit 2>&1', timeout=300)
 
     if not out.strip():

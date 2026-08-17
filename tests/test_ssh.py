@@ -327,32 +327,123 @@ def test_ensure_tool_installed_rejects_unknown_tool():
 
 def test_ensure_tool_installed_success_path():
     ex = SSHExecutor('host', 'user', 22, '', 'pw')
-    call_count = {'which': 0}
+    call_count = {'command -v lynis': 0}
 
     class ScriptedClient(_FakeParamikoClient):
         def exec_command(self, cmd, timeout=15):
             self.calls.append(cmd)
-            if 'sudo -n true' in cmd:
-                return _FakeStdin(), _FakeStream('OK'), _FakeStream('')
-            if 'which lynis' in cmd:
-                call_count['which'] += 1
-                out = 'NOTFOUND' if call_count['which'] == 1 else '/usr/sbin/lynis'
-                return _FakeStdin(), _FakeStream(out), _FakeStream('')
-            if 'apt-get install' in cmd:
+            if 'sudo -S' in cmd:
                 return _FakeStdin(), _FakeStream('Setting up lynis'), _FakeStream('')
+            if 'command -v lynis' in cmd:
+                call_count['command -v lynis'] += 1
+                # run_command_with_exit_code() wraps the real command in a
+                # shell group with a fresh uuid4 marker each call - extract
+                # it from the command text itself (it's embedded in the
+                # printf) so the fake can echo back a matching completion
+                # line, exactly mirroring what a real shell would produce.
+                import re as _re
+                m = _re.search(r"__NETAUDIT_RC_[0-9a-f]+__", cmd)
+                marker = m.group(0)
+                if call_count['command -v lynis'] == 1:
+                    # not present yet - command -v exits 1 (or 127; either
+                    # nonzero is "not found" for this test's purposes)
+                    return _FakeStdin(), _FakeStream(f'\n{marker}:127\n'), _FakeStream('')
+                # present after the simulated install
+                return _FakeStdin(), _FakeStream(f'/usr/sbin/lynis\n{marker}:0\n'), _FakeStream('')
             return _FakeStdin(), _FakeStream(''), _FakeStream('')
 
     ex.client = ScriptedClient()
     installed, err = ex.ensure_tool_installed('lynis')
     assert installed is True
     assert err is None
-    assert call_count['which'] == 2  # checked before and after install
+    assert call_count['command -v lynis'] == 2  # checked before and after install
 
 
 def test_ensure_tool_installed_skips_when_already_present():
     ex = SSHExecutor('host', 'user', 22, '', 'pw')
-    ex.client = _FakeParamikoClient({'which lynis': '/usr/sbin/lynis'})
-    installed, err = ex.ensure_tool_installed('lynis')
+
+    class AlreadyPresentClient(_FakeParamikoClient):
+        def exec_command(self, cmd, timeout=15):
+            self.calls.append(cmd)
+            if 'command -v lynis' in cmd:
+                import re as _re
+                m = _re.search(r"__NETAUDIT_RC_[0-9a-f]+__", cmd)
+                marker = m.group(0)
+                return _FakeStdin(), _FakeStream(f'/usr/sbin/lynis\n{marker}:0\n'), _FakeStream('')
+            return _FakeStdin(), _FakeStream(''), _FakeStream('')
+
+    ex.client = AlreadyPresentClient()
+    installed, _err = ex.ensure_tool_installed('lynis')
     assert installed is True
     apt_calls = [c for c in ex.client.calls if 'apt-get install' in c]
     assert apt_calls == []
+
+
+# ===========================================================================
+# is_tool_installed() - direct unit tests (previously untested entirely;
+# found during a quality-audit pass over the whole project's error
+# handling after the fail2ban/firewall sudo-capability work). Locks in
+# the fix for the same which-collapse bug class already fixed in
+# fail2ban_config.py/firewall_config.py/sql_config.py/cve_audit.py:
+# `which tool || echo NOTFOUND` collapsed ANY nonzero exit of `which`
+# (including a collection failure) into "not installed" - now replaced
+# with `command -v` and its own documented exit-code convention.
+# ===========================================================================
+
+def _client_for_command_v(exit_code: int, stdout: str = '', completed: bool = True):
+    """Builds a _FakeParamikoClient whose exec_command() responds to any
+    `command -v <tool>` call (wrapped in run_command_with_exit_code()'s
+    shell-group/marker) with the given exit code - or, if completed is
+    False, never emits a completion marker at all, simulating a genuine
+    collection failure (SSH channel drop, timeout)."""
+    class Client(_FakeParamikoClient):
+        def exec_command(self, cmd, timeout=15):
+            self.calls.append(cmd)
+            if 'command -v' in cmd:
+                if not completed:
+                    return _FakeStdin(), _FakeStream('connection reset'), _FakeStream('')
+                import re as _re
+                m = _re.search(r"__NETAUDIT_RC_[0-9a-f]+__", cmd)
+                marker = m.group(0)
+                return _FakeStdin(), _FakeStream(f'{stdout}\n{marker}:{exit_code}\n'), _FakeStream('')
+            return _FakeStdin(), _FakeStream(''), _FakeStream('')
+    return Client()
+
+
+def test_is_tool_installed_true_on_exit_0():
+    ex = SSHExecutor('host', 'user', 22, '', '')
+    ex.client = _client_for_command_v(exit_code=0, stdout='/usr/sbin/lynis')
+    assert ex.is_tool_installed('lynis') is True
+
+
+def test_is_tool_installed_false_on_exit_127_confirmed_absent():
+    """command -v's own documented 'not found' convention - a genuine,
+    confirmed absence, not a collection failure."""
+    ex = SSHExecutor('host', 'user', 22, '', '')
+    ex.client = _client_for_command_v(exit_code=127)
+    assert ex.is_tool_installed('some-tool-not-installed') is False
+
+
+def test_is_tool_installed_false_on_collection_failure():
+    """A genuine collection failure (no completion marker recovered at
+    all) must not be reported as 'installed' - conservatively False,
+    matching this method's pre-fix behavior in this same scenario (a
+    failed `which` also produced a falsy result), so no caller's
+    existing assumption about the failure case changes."""
+    ex = SSHExecutor('host', 'user', 22, '', '')
+    ex.client = _client_for_command_v(exit_code=0, completed=False)
+    assert ex.is_tool_installed('lynis') is False
+
+
+def test_is_tool_installed_uses_command_dash_v_not_which():
+    """Direct regression for the which-collapse fix: the actual command
+    sent must be `command -v <tool>`, never a bare `which <tool>` (with
+    or without a `|| echo NOTFOUND` fallback) - locks in that the fix
+    isn't just a different exit-code interpretation of the same old
+    command, but genuinely uses the exit-code-safe primitive."""
+    ex = SSHExecutor('host', 'user', 22, '', '')
+    ex.client = _client_for_command_v(exit_code=0, stdout='/usr/sbin/lynis')
+    ex.is_tool_installed('lynis')
+    assert any('command -v lynis' in c for c in ex.client.calls)
+    assert not any(c.strip().startswith('which ') for c in ex.client.calls)
+    assert not any('NOTFOUND' in c for c in ex.client.calls)
