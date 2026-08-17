@@ -240,6 +240,40 @@ python3 netaudit.py run server_audit --host 1.2.3.4 --user root --password "$NA_
 unset NA_PASS
 ```
 
+**Fail2Ban status on a key-only connection (no sudo password)** — most servers work fine with
+the default `client` mode:
+
+```bash
+python3 netaudit.py run server_audit --host 1.2.3.4 --user root \
+    --key_path ~/.ssh/id_rsa --fail2ban_mode client
+```
+
+If that server's `sudoers` is scoped to a narrow status-only wrapper instead of the raw
+`fail2ban-client` binary (see "Checks" above for why and an example wrapper script), switch to
+`status-wrapper` — otherwise the fail2ban section of the report comes back as `low: could not
+determine fail2ban status` instead of real jail data:
+
+```bash
+python3 netaudit.py run server_audit --host 1.2.3.4 --user root \
+    --key_path ~/.ssh/id_rsa --fail2ban_mode status-wrapper
+```
+
+To check on the target itself which mode you actually need, before running the audit:
+
+```bash
+# does this user's sudoers allow the raw binary without a password?
+ssh youruser@1.2.3.4 'sudo -n fail2ban-client status; echo "exit=$?"'
+
+# or only the wrapper?
+ssh youruser@1.2.3.4 'sudo -n /usr/local/bin/fail2ban-status-only; echo "exit=$?"'
+```
+
+`exit=0` on the first one → use `client` (the default, no need to pass `--fail2ban_mode` at
+all). `exit=0` only on the second → use `status-wrapper`. If a password is supplied for this
+check (see the password example just above), `fail2ban_mode` doesn't matter at all — both
+produce identical results, since `sudo -S` with a real password doesn't depend on `sudoers`
+scoping the way `sudo -n` does.
+
 **Add AI analysis** (needs an Anthropic API key, see "Getting started" above) — append `--ai`
 to any `run`:
 
@@ -285,6 +319,53 @@ full security audit, Lynis hardening audit, systemd sandboxing audit, kernel sys
 hardening audit, rootkit check, file integrity monitoring, backup verification,
 Docker container audit), traffic capture (tshark, MikroTik) with threat scoring of
 destinations.
+
+**Full server security audit** (`server_audit`, SSH) — a complete security audit of a server
+in one connection:
+- **nginx**: `server_tokens`, outdated TLS 1.0/1.1, security headers in the config, autoindex,
+  version
+- **Fail2Ban**: active jails, SSH coverage, ban counts, or a warning if it's not installed. The
+  `fail2ban_mode` parameter controls which command is used to read the status (needs root, so
+  this matters specifically when connecting **without a sudo password** — key-only auth):
+    - `client` (default) — plain `fail2ban-client status`. Works for most servers, where sudo
+      is either passwordless for everything (`NOPASSWD: ALL`) or a password is supplied in the
+      check's params.
+    - `status-wrapper` — for servers where, for security reasons, sudo isn't granted on the
+      whole `fail2ban-client` binary (it has dangerous subcommands like `unban`/`set`/`stop`),
+      only on a narrow wrapper script that can exclusively read status. Example wrapper and
+      matching `sudoers` rule:
+      ```bash
+      # /usr/local/bin/fail2ban-status-only
+      #!/bin/sh
+      exec /usr/bin/fail2ban-client status "$@"
+      ```
+      ```
+      # /etc/sudoers.d/netaudit-fail2ban
+      your_username ALL=(root) NOPASSWD: /usr/local/bin/fail2ban-status-only
+      ```
+      **Important:** if a password is supplied for this host (the "Password (if not using a
+      key)" field), `fail2ban_mode` doesn't matter — both modes behave identically, because
+      sudo uses the password directly and doesn't depend on how `sudoers` is scoped. The
+      difference between `client` and `status-wrapper` only matters when connecting **by SSH
+      key with no password** — then `sudo -n` is used, and the mode you pick has to match
+      whatever is actually permitted in that server's `sudoers`. See "Common examples" below
+      for exact CLI invocations of both modes, and how to check which one you need on a given
+      server before running the audit.
+- **firewall**: actual parsing of ufw/nftables/iptables, detecting "effectively open" (ACCEPT
+  with no rules)
+- **MySQL/MariaDB**: whether it's listening on 0.0.0.0 (reachable from outside), bind-address
+  in the config
+- **SSH hardening**: `PermitRootLogin`, `PasswordAuthentication`, `PermitEmptyPasswords`, port,
+  `MaxAuthTries`
+
+**External web security audit** (`web_security_external`, no server access needed) — audits a
+site the way an attacker would see it: security headers, server version leaks, outdated TLS
+1.0/1.1 support, and exposure of sensitive paths (`.git/config`, `.env`,
+`wp-config.php.bak`, `server-status`, SQL backups, etc.).
+
+Every finding has a severity (high/medium/low/ok) and an explanation of what to fix. Summary at
+the top, color-coded in the dashboard. AI analysis rolls up every high/medium finding into
+prioritized, concrete recommendations (which directive, where).
 
 **Lynis audit** (`lynis_audit`, SSH) — runs `lynis audit system` on the remote host and parses
 `/var/log/lynis-report.dat`: hardening index (0–100), warnings mapped to `high` severity,

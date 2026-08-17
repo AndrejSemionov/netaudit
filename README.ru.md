@@ -254,6 +254,40 @@ python3 netaudit.py run server_audit --host 1.2.3.4 --user root --password "$NA_
 unset NA_PASS
 ```
 
+**Статус Fail2Ban при подключении только по ключу (без sudo-пароля)** — для большинства
+серверов подходит режим `client` по умолчанию:
+
+```bash
+python3 netaudit.py run server_audit --host 1.2.3.4 --user root \
+    --key_path ~/.ssh/id_rsa --fail2ban_mode client
+```
+
+Если на сервере `sudoers` разрешает не весь `fail2ban-client`, а только узкий скрипт-обёртку
+для чтения статуса (см. раздел «server_audit» выше — почему так делают и пример скрипта),
+переключись на `status-wrapper` — иначе раздел Fail2Ban в отчёте вернётся как `low: не удалось
+определить статус fail2ban` вместо реальных данных по jail:
+
+```bash
+python3 netaudit.py run server_audit --host 1.2.3.4 --user root \
+    --key_path ~/.ssh/id_rsa --fail2ban_mode status-wrapper
+```
+
+Проверить прямо на сервере, какой режим реально нужен, ещё до запуска аудита:
+
+```bash
+# разрешён ли пользователю голый бинарник без пароля?
+ssh пользователь@1.2.3.4 'sudo -n fail2ban-client status; echo "exit=$?"'
+
+# или только обёртка?
+ssh пользователь@1.2.3.4 'sudo -n /usr/local/bin/fail2ban-status-only; echo "exit=$?"'
+```
+
+`exit=0` на первой команде → нужен `client` (по умолчанию, `--fail2ban_mode` можно вообще не
+указывать). `exit=0` только на второй → нужен `status-wrapper`. Если для этой проверки указан
+пароль (см. пример с паролем выше) — `fail2ban_mode` вообще не важен, оба режима дадут
+одинаковый результат, потому что `sudo -S` с реальным паролем не зависит от того, как настроен
+`sudoers`, в отличие от `sudo -n`.
+
 **AI-анализ** (нужен ключ Anthropic API, см. «С чего начать» выше) — добавь `--ai` к любому `run`:
 
 ```bash
@@ -340,7 +374,31 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 **server_audit** (SSH, изнутри) — полный security-аудит сервера в одном подключении:
 - **nginx**: server_tokens, устаревшие TLS 1.0/1.1, security-заголовки в конфиге, autoindex, версия
-- **Fail2Ban**: активные jail, покрытие SSH, количество банов, или предупреждение что не установлен
+- **Fail2Ban**: активные jail, покрытие SSH, количество банов, или предупреждение что не установлен.
+  Параметр `fail2ban_mode` управляет тем, какая команда используется для получения статуса
+  (нужен root, поэтому актуально при работе без sudo-пароля — по SSH-ключу):
+    - `client` (по умолчанию) — обычный `fail2ban-client status`. Подходит для большинства
+      серверов, где sudo либо разрешён без пароля на всё (`NOPASSWD: ALL`), либо пароль
+      передаётся в форме проверки.
+    - `status-wrapper` — для серверов, где по соображениям безопасности sudo разрешён не на
+      весь `fail2ban-client` (у него есть опасные подкоманды типа `unban`/`set`/`stop`), а
+      только на узкий скрипт-обёртку, которая умеет исключительно читать статус. Пример такого
+      скрипта и правила `sudoers`:
+      ```bash
+      # /usr/local/bin/fail2ban-status-only
+      #!/bin/sh
+      exec /usr/bin/fail2ban-client status "$@"
+      ```
+      ```
+      # /etc/sudoers.d/netaudit-fail2ban
+      имя_пользователя ALL=(root) NOPASSWD: /usr/local/bin/fail2ban-status-only
+      ```
+      **Важно:** если для этого сервера в форме проверки указан пароль (поле «Password (if not
+      using a key)»), то `fail2ban_mode` можно не трогать — с паролем оба режима работают
+      одинаково, потому что sudo использует пароль напрямую и не зависит от того, как настроен
+      `sudoers`. Разница между `client` и `status-wrapper` имеет значение только при подключении
+      **по SSH-ключу без пароля** — тогда используется `sudo -n`, и правильный режим должен
+      совпадать с тем, что реально разрешено в `sudoers` на конкретном сервере.
 - **firewall**: реальный разбор ufw/nftables/iptables, детект «фактически открыт» (ACCEPT без правил)
 - **MySQL/MariaDB**: слушает ли на 0.0.0.0 (доступ извне), bind-address в конфиге
 - **SSH hardening**: PermitRootLogin, PasswordAuthentication, PermitEmptyPasswords, порт, MaxAuthTries
