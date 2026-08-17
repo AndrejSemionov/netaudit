@@ -170,18 +170,31 @@ def test_multi_host_final_report_has_by_host_shape(temp_check, isolated_db):
 
 
 def test_multi_host_actually_runs_in_parallel(temp_check, isolated_db):
+    """Uses the actual measured per-instance elapsed time (from check_done
+    events, not the nominal sleep= value) as its own baseline, so this holds
+    regardless of machine speed - see the matching test in test_engine.py
+    for the full rationale (a fixed-seconds threshold proved unreliable
+    under full-suite load on a real VM)."""
     def slow(host=''):
-        time.sleep(0.3)
+        time.sleep(0.2)
         return {'ok': True}
 
     temp_check('__test_st_parallel__', slow)
     start = time.monotonic()
-    _run_and_drain([
+    events = _run_and_drain([
         {'id': '__test_st_parallel__', 'instances': [{'host': 'a'}, {'host': 'b'}]},
     ])
-    elapsed = time.monotonic() - start
-    # sequential would be ~0.6s, parallel ~0.3s - generous margin for CI jitter
-    assert elapsed < 0.5, f'expected ~0.3s parallel execution, took {elapsed:.2f}s'
+    wall_clock = time.monotonic() - start
+
+    dones = [e for e in events if e['type'] == 'check_done' and e['id'] == '__test_st_parallel__']
+    elapsed_values = [d['elapsed'] for d in dones]
+    max_instance = max(elapsed_values)
+    sum_instances = sum(elapsed_values)
+
+    assert wall_clock < (max_instance + sum_instances) / 2, (
+        f'expected wall-clock ({wall_clock:.2f}s) close to the slower instance '
+        f'({max_instance:.2f}s), not the sequential sum ({sum_instances:.2f}s)'
+    )
 
 
 def test_multi_host_one_failing_host_does_not_block_others(temp_check, isolated_db):
@@ -217,6 +230,9 @@ def test_multi_host_duplicate_hosts_get_suffixed_keys(temp_check, isolated_db):
 
 
 def test_multi_host_total_time_uses_max_not_sum(temp_check, isolated_db):
+    """Asserts the SHAPE of the relationship using the actual measured
+    per-instance elapsed times, not a fixed wall-clock threshold - see the
+    matching test in test_engine.py for the full rationale."""
     def check_a(host='', sleep=0.0):
         time.sleep(sleep)
         return {'ok': True}
@@ -228,9 +244,13 @@ def test_multi_host_total_time_uses_max_not_sum(temp_check, isolated_db):
         ]},
     ])
     all_done = next(e for e in events if e['type'] == 'all_done')
-    # max(0.1, 0.3) ~= 0.3, vs the sequential-sum alternative 0.1+0.3=0.4 -
-    # threshold sits with generous margin below that floor for CI jitter
-    assert all_done['report']['total_time'] < 0.37
+
+    timing_entry = all_done['report']['timing']['__test_st_total__']  # {'x': elapsed, 'y': elapsed}
+    expected_total = round(max(timing_entry.values()), 2)
+    sequential_alternative = round(sum(timing_entry.values()), 2)
+
+    assert all_done['report']['total_time'] == expected_total
+    assert all_done['report']['total_time'] < sequential_alternative
 
 
 def test_multi_host_records_timing_via_run_instances(temp_check, isolated_db, monkeypatch):

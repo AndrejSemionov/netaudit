@@ -220,21 +220,43 @@ def test_multi_one_instance_failing_does_not_block_others(temp_check, isolated_d
 
 
 def test_multi_instances_run_in_parallel_not_sequentially(temp_check, isolated_db):
-    """Two 0.3s instances of the same check should take ~0.3s total, not ~0.6s,
-    proving they run concurrently rather than via a plain sequential for-loop."""
+    """Two instances of the same check with the same sleep duration should
+    take close to ONE sleep's worth of wall-clock time, not two - proving
+    they run concurrently rather than via a plain sequential for-loop.
+
+    Uses the actual measured per-instance elapsed time (from the result,
+    not the nominal sleep= value) as its own baseline, so this holds
+    regardless of how fast or slow the machine actually is - a fixed-
+    seconds threshold is fundamentally unreliable under full-suite load
+    (observed on a real VM: an isolated run of a similarly-shaped test
+    clears any reasonable fixed margin, but the same test under full-suite
+    thread/scheduling pressure can occasionally take 3x+ longer in
+    absolute terms while the parallel-vs-sequential RATIO stays correct).
+    """
     def slow_check(host=''):
-        time.sleep(0.3)
+        time.sleep(0.2)
         return {'ok': True}
 
     temp_check('__test_multi_parallel__', slow_check)
     start = time.monotonic()
-    run_checks_multi([
+    result = run_checks_multi([
         {'id': '__test_multi_parallel__', 'instances': [{'host': 'a'}, {'host': 'b'}]},
     ])
-    elapsed = time.monotonic() - start
-    # sequential would be ~0.6s, parallel ~0.3s - threshold sits well below the
-    # sequential floor with generous margin for CI scheduling jitter
-    assert elapsed < 0.5, f'expected ~0.3s parallel execution, took {elapsed:.2f}s'
+    wall_clock = time.monotonic() - start
+
+    per_instance = result['timing']['__test_multi_parallel__']  # {'a': elapsed, 'b': elapsed}
+    max_instance = max(per_instance.values())
+    sum_instances = sum(per_instance.values())
+
+    # parallel wall-clock should sit close to the slower of the two instances,
+    # not anywhere near their sum - "closer to max than to sum" holds under
+    # any machine speed, since both max_instance and sum_instances scale with
+    # however slow the sleeps actually ran
+    assert wall_clock < (max_instance + sum_instances) / 2, (
+        f'expected wall-clock ({wall_clock:.2f}s) close to the slower instance '
+        f'({max_instance:.2f}s), not the sequential sum ({sum_instances:.2f}s) - '
+        f'looks like the two instances ran one after another instead of in parallel'
+    )
 
 
 def test_multi_timing_record_called_once_per_instance(temp_check, isolated_db, monkeypatch):
@@ -255,7 +277,19 @@ def test_multi_timing_record_called_once_per_instance(temp_check, isolated_db, m
 
 def test_multi_total_time_is_max_per_check_summed_across_checks(temp_check, isolated_db):
     """Within one check, instances run in parallel -> total_time contribution is
-    the max elapsed among its instances. Across different checks -> summed."""
+    the max elapsed among its instances. Across different checks -> summed.
+
+    Asserts the SHAPE of the relationship (parallel max, not sequential sum)
+    rather than an absolute wall-clock threshold - a fixed-seconds threshold
+    is fundamentally unreliable under full-suite load (observed on a real VM:
+    an isolated run of this test easily clears any reasonable margin, but the
+    same test under full-suite thread/scheduling pressure can occasionally
+    take 3x+ longer in absolute terms even though the parallel-vs-sequential
+    RATIO stays correct). Comparing against report['timing'] (the actual
+    measured elapsed per instance) rather than the nominal sleep= values
+    keeps this correct even when the underlying sleeps ran much slower than
+    requested.
+    """
     def check_a(host='', sleep=0.0):
         time.sleep(sleep)
         return {'ok': True}
@@ -271,11 +305,20 @@ def test_multi_total_time_is_max_per_check_summed_across_checks(temp_check, isol
             {'host': 'z', 'sleep': 0.1},
         ]},
     ])
-    # expected ~ max(0.1, 0.3) + 0.1 = ~0.4, vs the sequential-sum alternative
-    # 0.1+0.3+0.1 = 0.5 - threshold sits well clear of both, with generous
-    # margin for scheduling jitter on a loaded CI runner (this asserts the
-    # parallel-vs-sequential SHAPE, not exact timing)
-    assert result['total_time'] < 0.47
+
+    timing_a = result['timing']['__test_multi_total_a__']  # {'x': elapsed, 'y': elapsed}
+    timing_b = result['timing']['__test_multi_total_b__']  # flat float (1 instance)
+    expected_total = round(max(timing_a.values()) + timing_b, 2)
+    sequential_alternative = round(sum(timing_a.values()) + timing_b, 2)
+
+    # total_time must match the max-per-check/sum-across-checks formula
+    # exactly (this is the actual logic under test, independent of how slow
+    # the machine happened to be)
+    assert result['total_time'] == expected_total
+    # and it must be meaningfully below the naive sequential-sum alternative,
+    # proving the two instances of check 'a' really ran in parallel rather
+    # than back-to-back (guards against a regression to a plain for-loop)
+    assert result['total_time'] < sequential_alternative
 
 
 # ===========================================================================
