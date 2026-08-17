@@ -355,7 +355,7 @@ _stream_lock = threading.Lock()
 def api_stream_start(req: RunRequest) -> dict:
     if not req.checks:
         raise HTTPException(400, 'no checks selected')
-    selected = [{'id': c.id, 'params': c.params} for c in req.checks]
+    selected = [_to_selected_item(c) for c in req.checks]
     task_id = _uuid.uuid4().hex
     task = streaming.StreamTask(task_id, selected)
     with _stream_lock:

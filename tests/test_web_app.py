@@ -144,6 +144,104 @@ def test_run_legacy_params_only_request_unaffected(client, temp_check, isolated_
 
 
 # ===========================================================================
+# /api/stream/start (the actual endpoint the "Запустить" button uses)
+# ===========================================================================
+
+def test_stream_start_forwards_instances_not_just_flat_params(client, temp_check, isolated_db):
+    """Regression test: /api/stream/start previously built its `selected` list
+    with the old flat {'id', 'params'} shape unconditionally, silently
+    dropping CheckItem.instances. Single-host requests happened to still
+    work (instances is None or has 1 entry -> falls back to params), which
+    is why this wasn't caught by hand-testing one host at a time - adding a
+    SECOND host silently ran the check with an empty params dict instead.
+    """
+    from web.app import _stream_tasks
+
+    temp_check('__test_stream_multi__', lambda host='': {'seen': host})
+    resp = client.post('/api/stream/start', json={
+        'checks': [{'id': '__test_stream_multi__', 'instances': [
+            {'host': '1.1.1.1'}, {'host': '2.2.2.2'},
+        ]}],
+    })
+    assert resp.status_code == 200
+    task_id = resp.json()['task_id']
+
+    task = _stream_tasks.get(task_id)
+    assert task is not None, 'stream task should still be registered right after start'
+    item = task.selected[0]
+    assert 'instances' in item, (
+        "api_stream_start() dropped 'instances' and fell back to flat "
+        "'params' - this is the multi-host-in-the-UI bug"
+    )
+    assert item['instances'] == [{'host': '1.1.1.1'}, {'host': '2.2.2.2'}]
+
+    task.stop()  # don't leave a background thread running past the test
+
+
+def test_stream_start_legacy_single_instance_still_uses_flat_params(client, temp_check, isolated_db):
+    """A single-instance / no-instances request keeps going through the
+    legacy flat 'params' path unchanged, exactly as before."""
+    from web.app import _stream_tasks
+
+    temp_check('__test_stream_single__', lambda host='': {'seen': host})
+    resp = client.post('/api/stream/start', json={
+        'checks': [{'id': '__test_stream_single__', 'params': {'host': 'x'}}],
+    })
+    assert resp.status_code == 200
+    task_id = resp.json()['task_id']
+
+    task = _stream_tasks.get(task_id)
+    assert task is not None
+    item = task.selected[0]
+    assert 'instances' not in item
+    assert item['params'] == {'host': 'x'}
+
+    task.stop()
+
+
+def test_stream_start_actually_runs_multi_host_end_to_end(client, temp_check, isolated_db):
+    """Full round trip: POST /api/stream/start with 2 instances, wait for the
+    task to finish, confirm the task's underlying report really has the
+    _multi_host/by_host shape - not just that 'instances' reached the
+    StreamTask object (belt-and-suspenders on top of the unit-level check
+    above, exercising the real run_stream() thread)."""
+    import time as _time
+    from web.app import _stream_tasks
+
+    temp_check('__test_stream_e2e__', lambda host='': {'seen': host})
+    resp = client.post('/api/stream/start', json={
+        'checks': [{'id': '__test_stream_e2e__', 'instances': [
+            {'host': 'aaa'}, {'host': 'bbb'},
+        ]}],
+    })
+    task_id = resp.json()['task_id']
+
+    task = None
+    for _ in range(50):
+        candidate = _stream_tasks.get(task_id)
+        if candidate is not None and candidate.status != 'running':
+            task = candidate
+            break
+        _time.sleep(0.05)
+    assert task is not None, 'stream task did not finish in time'
+    assert task.status == 'done'
+
+    import queue as _queue
+    report = None
+    while True:
+        try:
+            ev = task.q.get_nowait()
+        except _queue.Empty:
+            break
+        if ev.get('type') == 'all_done':
+            report = ev['report']
+    assert report is not None
+    result = report['results']['__test_stream_e2e__']
+    assert result['_multi_host'] is True
+    assert result['by_host'] == {'aaa': {'seen': 'aaa'}, 'bbb': {'seen': 'bbb'}}
+
+
+# ===========================================================================
 # Presets round-trip instances
 # ===========================================================================
 
