@@ -263,7 +263,13 @@ def _collect_nginx(ssh: SSHExecutor, timeout: int) -> NginxGlobEvidence:
 
 
 def _collect_journal(ssh: SSHExecutor, timeout: int) -> JournalEvidence:
-    disk_usage = _run(ssh, 'journalctl --disk-usage 2>&1', timeout)
+    """`-q` suppresses journalctl's "you are not seeing messages from
+    other users" hint banner — empirically confirmed on 46.62.147.41
+    (project session notes, live VM verification) that without -q this
+    hint is printed to STDOUT (not stderr) ahead of the actual "Archived
+    and active journals take up X in the file system." line, which would
+    otherwise corrupt a naive regex/last-line parse in the consumer."""
+    disk_usage = _run(ssh, 'journalctl --disk-usage -q 2>&1', timeout)
     journald_conf = _run(ssh, "grep -v '^#\\|^$' /etc/systemd/journald.conf 2>&1", timeout)
     return JournalEvidence(disk_usage=disk_usage, journald_conf=journald_conf)
 

@@ -254,32 +254,39 @@ def test_nginx_glob_collection_failure_yields_no_per_file_probes():
 
 
 def test_journal_disk_usage_collected():
+    """-q suppresses journalctl's hint banner — confirmed necessary on
+    live VM verification against 46.62.147.41 (project session notes):
+    without -q, a multi-line hint precedes the actual disk-usage line in
+    stdout. The command construction itself (with -q) is what's under
+    test here; see also the live-output shape asserted below."""
     fake = ExitCodeFakeSSHExecutor(
         responses={
-            'journalctl --disk-usage':
+            'journalctl --disk-usage -q':
                 'Archived and active journals take up 111.8M in the file system.',
         },
-        exit_codes={'journalctl --disk-usage': 0},
+        exit_codes={'journalctl --disk-usage -q': 0},
     )
     evidence = collect_log_discovery(fake)
     assert evidence.journal.disk_usage.completed is True
     assert '111.8M' in evidence.journal.disk_usage.stdout
 
 
-def test_journald_conf_on_defaults_is_valid_evidence_not_a_failure():
-    """writer's real journald.conf (project inventory) has zero active
-    (non-comment, non-blank) settings — grep with no matches exits 1,
-    which must NOT be conflated with a collection failure (completed
-    stays True; exit_code==1 for grep just means 'no matching lines',
-    which is itself the confirmed evidence 'journald is on defaults')."""
+def test_journald_conf_on_defaults_yields_only_section_header():
+    """Corrected per live VM verification against 46.62.147.41 (project
+    session notes): a fully-default journald.conf is NOT empty grep
+    output — `[Journal]` (the section header) is itself a non-comment,
+    non-blank line, so grep confirms exit_code=0 with '[Journal]' as the
+    sole matched line. This is the actual empirical 'on defaults' signal
+    the consumer must recognize — not an empty stdout, which was this
+    test's previous (incorrect, unverified) assumption."""
     fake = ExitCodeFakeSSHExecutor(
-        responses={"grep -v '^#\\|^$' /etc/systemd/journald.conf": ''},
-        exit_codes={"grep -v '^#\\|^$' /etc/systemd/journald.conf": 1},
+        responses={"grep -v '^#\\|^$' /etc/systemd/journald.conf": '[Journal]'},
+        exit_codes={"grep -v '^#\\|^$' /etc/systemd/journald.conf": 0},
     )
     evidence = collect_log_discovery(fake)
     assert evidence.journal.journald_conf.completed is True
-    assert evidence.journal.journald_conf.exit_code == 1
-    assert evidence.journal.journald_conf.stdout == ''
+    assert evidence.journal.journald_conf.exit_code == 0
+    assert evidence.journal.journald_conf.stdout.strip() == '[Journal]'
 
 
 # ===========================================================================
