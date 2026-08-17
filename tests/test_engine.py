@@ -220,10 +220,10 @@ def test_multi_one_instance_failing_does_not_block_others(temp_check, isolated_d
 
 
 def test_multi_instances_run_in_parallel_not_sequentially(temp_check, isolated_db):
-    """Two 0.2s instances of the same check should take ~0.2s total, not ~0.4s,
+    """Two 0.3s instances of the same check should take ~0.3s total, not ~0.6s,
     proving they run concurrently rather than via a plain sequential for-loop."""
     def slow_check(host=''):
-        time.sleep(0.2)
+        time.sleep(0.3)
         return {'ok': True}
 
     temp_check('__test_multi_parallel__', slow_check)
@@ -232,7 +232,9 @@ def test_multi_instances_run_in_parallel_not_sequentially(temp_check, isolated_d
         {'id': '__test_multi_parallel__', 'instances': [{'host': 'a'}, {'host': 'b'}]},
     ])
     elapsed = time.monotonic() - start
-    assert elapsed < 0.35, f'expected ~0.2s parallel execution, took {elapsed:.2f}s'
+    # sequential would be ~0.6s, parallel ~0.3s - threshold sits well below the
+    # sequential floor with generous margin for CI scheduling jitter
+    assert elapsed < 0.5, f'expected ~0.3s parallel execution, took {elapsed:.2f}s'
 
 
 def test_multi_timing_record_called_once_per_instance(temp_check, isolated_db, monkeypatch):
@@ -263,14 +265,17 @@ def test_multi_total_time_is_max_per_check_summed_across_checks(temp_check, isol
 
     result = run_checks_multi([
         {'id': '__test_multi_total_a__', 'instances': [
-            {'host': 'x', 'sleep': 0.05}, {'host': 'y', 'sleep': 0.15},
+            {'host': 'x', 'sleep': 0.1}, {'host': 'y', 'sleep': 0.3},
         ]},
         {'id': '__test_multi_total_b__', 'instances': [
-            {'host': 'z', 'sleep': 0.05},
+            {'host': 'z', 'sleep': 0.1},
         ]},
     ])
-    # expected ~ max(0.05, 0.15) + 0.05 = ~0.20, definitely not 0.05+0.15+0.05=0.25
-    assert result['total_time'] < 0.24
+    # expected ~ max(0.1, 0.3) + 0.1 = ~0.4, vs the sequential-sum alternative
+    # 0.1+0.3+0.1 = 0.5 - threshold sits well clear of both, with generous
+    # margin for scheduling jitter on a loaded CI runner (this asserts the
+    # parallel-vs-sequential SHAPE, not exact timing)
+    assert result['total_time'] < 0.47
 
 
 # ===========================================================================
@@ -370,6 +375,50 @@ def test_run_checks_multi_uses_run_instances_for_multi_case(temp_check, isolated
         {'id': '__test_rcm_delegates__', 'instances': [{'host': 'a'}, {'host': 'b'}]},
     ])
     assert calls == [('__test_rcm_delegates__', 2)]
+
+
+def test_run_instances_callback_exception_does_not_lose_other_instances(temp_check, isolated_db):
+    """If on_instance_done raises for one instance, results/timing for ALL
+    instances (including that one) must still be recorded correctly - a
+    misbehaving callback must not silently drop a worker thread's outcome."""
+    temp_check('__test_ri_cb_raises__', lambda host='': {'ok': True})
+    spec = registry.get('__test_ri_cb_raises__')
+
+    def flaky_callback(key, result, elapsed):
+        if key == 'b':
+            raise RuntimeError('simulated callback failure')
+
+    results, timings = run_instances('__test_ri_cb_raises__', spec, [
+        {'host': 'a'}, {'host': 'b'}, {'host': 'c'},
+    ], on_instance_done=flaky_callback)
+
+    # results/timing must be complete for all 3 instances regardless of the
+    # callback exception on 'b'
+    assert set(results.keys()) == {'a', 'b', 'c'}
+    assert set(timings.keys()) == {'a', 'b', 'c'}
+    assert results['b'] == {'ok': True}
+
+
+def test_run_instances_timing_record_failure_does_not_lose_instance_result(temp_check, isolated_db, monkeypatch):
+    """If timing.record() raises (e.g. a rare SQLite lock under concurrent
+    writes), the instance's own result/timing must still be recorded - this
+    mirrors run_checks()'s and streaming.py's legacy single-host protection,
+    which _run_one_instance() must not silently lose for the multi-host path."""
+    def flaky_record(check_id, params, elapsed):
+        if params.get('host') == 'b':
+            raise RuntimeError('simulated database is locked')
+
+    monkeypatch.setattr('netaudit_pkg.engine.timing.record', flaky_record)
+
+    temp_check('__test_ri_record_fails__', lambda host='': {'ok': True})
+    spec = registry.get('__test_ri_record_fails__')
+    results, timings = run_instances('__test_ri_record_fails__', spec, [
+        {'host': 'a'}, {'host': 'b'}, {'host': 'c'},
+    ])
+
+    assert set(results.keys()) == {'a', 'b', 'c'}
+    assert set(timings.keys()) == {'a', 'b', 'c'}
+    assert results['b'] == {'ok': True}
 
 
 # ===========================================================================

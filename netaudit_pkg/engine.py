@@ -73,7 +73,14 @@ def _run_one_instance(check_id: str, spec, params: dict) -> tuple[dict, float]:
     elapsed = round(time.monotonic() - start, 2)
 
     if not (isinstance(result, dict) and result.get('error')):
-        timing.record(check_id, params, elapsed)
+        try:
+            timing.record(check_id, params, elapsed)
+        except Exception:
+            # Best-effort: a timing-store hiccup (e.g. a rare SQLite lock
+            # under concurrent multi-host writes) must never cost this
+            # instance its actual result - the check itself already
+            # succeeded above, only the adaptive-timing side record failed.
+            log.error(f'{check_id}: timing.record() failed', exc_info=True)
 
     return result, elapsed
 
@@ -125,7 +132,18 @@ def run_instances(check_id: str, spec, instances: list[dict],
             out_results[key] = result
             out_timing[key] = elapsed
         if cb is not None:
-            cb(key, result, elapsed)
+            try:
+                cb(key, result, elapsed)
+            except Exception:
+                # A misbehaving callback (e.g. streaming's SSE emit) must not
+                # take down this worker thread silently - results/timing for
+                # this instance are already recorded above regardless, but an
+                # uncaught exception here would otherwise propagate out of
+                # the thread target and be swallowed by threading's default
+                # excepthook, dropping the caller's per-instance notification
+                # (e.g. streaming.run_stream()'s per-host check_done event)
+                # without any visible error.
+                log.error(f'{cid}: on_instance_done callback failed for {key!r}', exc_info=True)
 
     for instance_params in instances:
         key = _dedupe_key(instance_params.get('host', ''), seen_counts)

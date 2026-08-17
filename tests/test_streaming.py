@@ -171,7 +171,7 @@ def test_multi_host_final_report_has_by_host_shape(temp_check, isolated_db):
 
 def test_multi_host_actually_runs_in_parallel(temp_check, isolated_db):
     def slow(host=''):
-        time.sleep(0.2)
+        time.sleep(0.3)
         return {'ok': True}
 
     temp_check('__test_st_parallel__', slow)
@@ -180,7 +180,8 @@ def test_multi_host_actually_runs_in_parallel(temp_check, isolated_db):
         {'id': '__test_st_parallel__', 'instances': [{'host': 'a'}, {'host': 'b'}]},
     ])
     elapsed = time.monotonic() - start
-    assert elapsed < 0.35, f'expected ~0.2s parallel execution, took {elapsed:.2f}s'
+    # sequential would be ~0.6s, parallel ~0.3s - generous margin for CI jitter
+    assert elapsed < 0.5, f'expected ~0.3s parallel execution, took {elapsed:.2f}s'
 
 
 def test_multi_host_one_failing_host_does_not_block_others(temp_check, isolated_db):
@@ -223,12 +224,13 @@ def test_multi_host_total_time_uses_max_not_sum(temp_check, isolated_db):
     temp_check('__test_st_total__', check_a)
     events = _run_and_drain([
         {'id': '__test_st_total__', 'instances': [
-            {'host': 'x', 'sleep': 0.05}, {'host': 'y', 'sleep': 0.15},
+            {'host': 'x', 'sleep': 0.1}, {'host': 'y', 'sleep': 0.3},
         ]},
     ])
     all_done = next(e for e in events if e['type'] == 'all_done')
-    # max(0.05, 0.15) ~= 0.15, not 0.05+0.15=0.20
-    assert all_done['report']['total_time'] < 0.19
+    # max(0.1, 0.3) ~= 0.3, vs the sequential-sum alternative 0.1+0.3=0.4 -
+    # threshold sits with generous margin below that floor for CI jitter
+    assert all_done['report']['total_time'] < 0.37
 
 
 def test_multi_host_records_timing_via_run_instances(temp_check, isolated_db, monkeypatch):
