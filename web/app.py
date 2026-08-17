@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from netaudit_pkg.engine import list_available, run_checks
+from netaudit_pkg.engine import list_available, run_checks_multi
 from netaudit_pkg.history import save_report, list_reports, load_report, ai_analyze, verify_api_key
 from netaudit_pkg import timing, storage, tools
 from netaudit_pkg import streaming
@@ -50,6 +50,7 @@ _tasks_lock = threading.Lock()
 class CheckItem(BaseModel):
     id: str
     params: dict = {}
+    instances: list[dict] | None = None
 
 
 class RunRequest(BaseModel):
@@ -97,9 +98,29 @@ class RepListRequest(BaseModel):
     note: str = ''
 
 
+def _to_selected_item(c: CheckItem) -> dict:
+    """CheckItem -> engine.run_checks_multi()/timing.decide_mode() item shape.
+    'instances' (multi-host) takes precedence when set; otherwise falls back
+    to the legacy flat 'params' form, unchanged."""
+    if c.instances is not None:
+        return {'id': c.id, 'instances': c.instances}
+    return {'id': c.id, 'params': c.params}
+
+
+def _per_check_estimate(item: dict) -> float:
+    """Single-number estimate for one selected item, for the /api/estimate
+    per_check breakdown. For 'instances' items this is the max across
+    instances (mirrors decide_mode()'s own per-check contribution) rather
+    than a misleading estimate(id, {}) on empty params."""
+    if 'instances' in item:
+        estimates = [timing.estimate(item['id'], inst) for inst in item['instances']]
+        return round(max(estimates), 2) if estimates else 0.0
+    return round(timing.estimate(item['id'], item.get('params', {})), 2)
+
+
 def _execute_task(task_id: str, selected: list[dict]) -> None:
     try:
-        report = run_checks(selected)
+        report = run_checks_multi(selected)
         rid = save_report(report)
         report['_report_id'] = rid
         with _tasks_lock:
@@ -123,9 +144,9 @@ def api_checks() -> list[dict]:
 
 @app.post('/api/estimate')
 def api_estimate(req: RunRequest) -> dict:
-    selected = [{'id': c.id, 'params': c.params} for c in req.checks]
+    selected = [_to_selected_item(c) for c in req.checks]
     mode, est = timing.decide_mode(selected, force_async=req.force_async)
-    per = {i['id']: round(timing.estimate(i['id'], i.get('params', {})), 2) for i in selected}
+    per = {item['id']: _per_check_estimate(item) for item in selected}
     return {'mode': mode, 'estimate': est, 'per_check': per}
 
 
@@ -133,11 +154,11 @@ def api_estimate(req: RunRequest) -> dict:
 def api_run(req: RunRequest) -> dict:
     if not req.checks:
         raise HTTPException(400, 'no checks selected')
-    selected = [{'id': c.id, 'params': c.params} for c in req.checks]
+    selected = [_to_selected_item(c) for c in req.checks]
     mode, est = timing.decide_mode(selected, force_async=req.force_async)
 
     if mode == 'sync':
-        report = run_checks(selected)
+        report = run_checks_multi(selected)
         rid = save_report(report)
         report['_report_id'] = rid
         return {'mode': 'sync', 'estimate': est, 'report': report}
@@ -261,7 +282,7 @@ def api_presets() -> list[dict]:
 
 @app.post('/api/presets')
 def api_save_preset(req: PresetRequest) -> dict:
-    checks = [{'id': c.id, 'params': c.params} for c in req.checks]
+    checks = [_to_selected_item(c) for c in req.checks]
     pid = storage.preset_save(req.name, checks)
     return {'ok': True, 'id': pid}
 

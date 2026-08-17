@@ -115,7 +115,29 @@ def record(check_id: str, params: dict, elapsed: float) -> None:
 
 
 def decide_mode(selected: list[dict], force_async: bool = False, threshold: float | None = None):
-    total = sum(estimate(item['id'], item.get('params', {})) for item in selected)
+    """
+    selected items may be either:
+      - {'id': ..., 'params': {...}}                  legacy, single-instance
+      - {'id': ..., 'instances': [{...}, {...}, ...]}  multi-instance
+
+    Per-check contribution to the total:
+      - 'params' form   -> estimate(id, params)                       (unchanged)
+      - 'instances' form -> max(estimate(id, inst) for inst in instances),
+        since same-check instances run in parallel, bounded by the
+        slowest one. An empty instances list contributes 0.
+
+    total = sum of per-check contributions, since different checks in one
+    request still run sequentially relative to each other.
+    """
+    total = 0.0
+    for item in selected:
+        check_id = item['id']
+        if 'instances' in item:
+            instance_estimates = [estimate(check_id, inst) for inst in item['instances']]
+            total += max(instance_estimates) if instance_estimates else 0.0
+        else:
+            total += estimate(check_id, item.get('params', {}))
+
     if force_async:
         return 'async', round(total, 2)
     thr = threshold if threshold is not None else _sync_threshold()

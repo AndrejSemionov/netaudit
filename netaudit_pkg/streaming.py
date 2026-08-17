@@ -26,6 +26,7 @@ from .registry import registry
 from .utils import log
 from . import checks  # noqa: F401 - registration
 from . import timing, storage
+from .engine import run_instances
 
 # Checks with a live stream: id -> (command builder, incremental line parser)
 STREAMING_IDS = {'mtr', 'ping', 'tcptraceroute'}
@@ -168,11 +169,45 @@ def run_stream(task: StreamTask):
             if task.cancelled.is_set():
                 break
             check_id = item['id']
-            params = item.get('params', {})
             spec = registry.get(check_id)
             if spec is None:
                 report['results'][check_id] = {'error': 'check not found'}
                 continue
+
+            instances = item.get('instances')
+            # Multi-host is only supported for regular (non-streaming) checks.
+            # mtr/ping/tcptraceroute keep the single-host legacy path even if
+            # 'instances' was somehow provided for them - their live-stream
+            # (Popen + incremental parse) is tied to one process/task, and
+            # multiplexing that across hosts is out of scope here.
+            is_multi_host = (
+                check_id not in STREAMING_IDS
+                and instances is not None
+                and len(instances) > 1
+            )
+
+            if is_multi_host:
+                task.emit({'type': 'check_start', 'id': check_id,
+                           'label': spec.label, 'streaming': False, 'multi_host': True})
+
+                def _on_instance_done(host_key, result, elapsed, cid=check_id):
+                    task.emit({'type': 'check_done', 'id': cid, 'host': host_key,
+                               'result': result, 'elapsed': elapsed})
+
+                by_host, by_host_timing = run_instances(
+                    check_id, spec, instances, on_instance_done=_on_instance_done)
+
+                report['results'][check_id] = {'_multi_host': True, 'by_host': by_host}
+                report['timing'][check_id] = by_host_timing
+                report['meta'][check_id] = {'label': spec.label, 'category': spec.category}
+                task.emit({'type': 'check_group_done', 'id': check_id,
+                           'result': report['results'][check_id]})
+                continue
+
+            # legacy single-instance path (also used when 'instances' has
+            # exactly one entry, or wasn't provided at all - falls back to
+            # 'params', unchanged)
+            params = instances[0] if instances else item.get('params', {})
 
             task.emit({'type': 'check_start', 'id': check_id,
                        'label': spec.label, 'streaming': check_id in STREAMING_IDS})
@@ -216,7 +251,12 @@ def run_stream(task: StreamTask):
             report['meta'][check_id] = {'label': spec.label, 'category': spec.category}
             task.emit({'type': 'check_done', 'id': check_id, 'result': result, 'elapsed': elapsed})
 
-        report['total_time'] = round(sum(report['timing'].values()), 2)
+        check_elapsed_contributions = [
+            max(v.values()) if isinstance(v, dict) else v
+            for v in report['timing'].values()
+            if not (isinstance(v, dict) and not v)  # skip empty dict (no successful instances)
+        ]
+        report['total_time'] = round(sum(check_elapsed_contributions), 2)
         try:
             rid = storage.save_report(report)
             report['_report_id'] = rid

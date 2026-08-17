@@ -1,5 +1,5 @@
 """
-Tests for netaudit_pkg.engine: run_checks() and list_available().
+Tests for netaudit_pkg.engine: run_checks(), run_checks_multi(), and list_available().
 
 These register throwaway checks into the REAL global registry (registry.py's
 module-level `registry` singleton) rather than a fresh one, because
@@ -11,9 +11,12 @@ tests or into the real check list.
 
 from __future__ import annotations
 
+import time
+import threading
+
 import pytest
 
-from netaudit_pkg.engine import run_checks, list_available
+from netaudit_pkg.engine import run_checks, run_checks_multi, run_instances, list_available
 from netaudit_pkg.registry import registry, CheckSpec
 
 
@@ -125,6 +128,248 @@ def test_run_checks_success_does_feed_timing(temp_check, isolated_db, monkeypatc
     temp_check('__test_records__', lambda: {'ok': True})
     run_checks([{'id': '__test_records__', 'params': {}}])
     assert '__test_records__' in recorded
+
+
+# ===========================================================================
+# run_checks_multi
+# ===========================================================================
+
+def test_multi_unknown_id_reports_error():
+    result = run_checks_multi([{'id': '__nonexistent_check_xyz__', 'instances': [{}]}])
+    assert 'error' in result['results']['__nonexistent_check_xyz__']
+    assert 'not found' in result['results']['__nonexistent_check_xyz__']['error']
+
+
+def test_multi_missing_required_tool(temp_check, isolated_db):
+    temp_check('__test_multi_missing_tool__', lambda host='': {'ok': True},
+               required_tools=['__definitely_not_a_real_binary_xyz__'])
+    result = run_checks_multi([
+        {'id': '__test_multi_missing_tool__', 'instances': [{'host': 'a'}]},
+    ])
+    entry = result['results']['__test_multi_missing_tool__']
+    assert 'error' in entry
+    assert 'missing tools' in entry['error']
+
+
+def test_multi_single_instance_is_flat_like_run_checks(temp_check, isolated_db):
+    """1 instance -> same flat shape as run_checks(), for backward compatibility."""
+    temp_check('__test_multi_single__', lambda host='': {'summary': {'ok': 1}})
+    result = run_checks_multi([
+        {'id': '__test_multi_single__', 'instances': [{'host': '1.2.3.4'}]},
+    ])
+    assert result['results']['__test_multi_single__'] == {'summary': {'ok': 1}}
+    assert isinstance(result['timing']['__test_multi_single__'], float)
+    assert '_multi_host' not in result['results']['__test_multi_single__']
+
+
+def test_multi_two_instances_different_hosts(temp_check, isolated_db):
+    def check_with_host(host=''):
+        return {'host_seen': host}
+
+    temp_check('__test_multi_two__', check_with_host)
+    result = run_checks_multi([
+        {'id': '__test_multi_two__', 'instances': [
+            {'host': '1.1.1.1'}, {'host': '2.2.2.2'},
+        ]},
+    ])
+    entry = result['results']['__test_multi_two__']
+    assert entry['_multi_host'] is True
+    assert entry['by_host']['1.1.1.1'] == {'host_seen': '1.1.1.1'}
+    assert entry['by_host']['2.2.2.2'] == {'host_seen': '2.2.2.2'}
+
+    timing_entry = result['timing']['__test_multi_two__']
+    assert isinstance(timing_entry, dict)
+    assert set(timing_entry.keys()) == {'1.1.1.1', '2.2.2.2'}
+
+
+def test_multi_duplicate_host_gets_suffixed_key(temp_check, isolated_db):
+    calls = []
+
+    def check_with_host(host=''):
+        calls.append(host)
+        return {'call_num': len(calls)}
+
+    temp_check('__test_multi_dup__', check_with_host)
+    result = run_checks_multi([
+        {'id': '__test_multi_dup__', 'instances': [
+            {'host': '1.1.1.1'}, {'host': '1.1.1.1'}, {'host': '1.1.1.1'},
+        ]},
+    ])
+    by_host = result['results']['__test_multi_dup__']['by_host']
+    assert set(by_host.keys()) == {'1.1.1.1', '1.1.1.1#2', '1.1.1.1#3'}
+    assert set(result['timing']['__test_multi_dup__'].keys()) == {'1.1.1.1', '1.1.1.1#2', '1.1.1.1#3'}
+
+
+def test_multi_one_instance_failing_does_not_block_others(temp_check, isolated_db):
+    def maybe_fail(host=''):
+        if host == 'bad':
+            raise ValueError('boom')
+        return {'ok': True}
+
+    temp_check('__test_multi_partial_fail__', maybe_fail)
+    result = run_checks_multi([
+        {'id': '__test_multi_partial_fail__', 'instances': [
+            {'host': 'good1'}, {'host': 'bad'}, {'host': 'good2'},
+        ]},
+    ])
+    by_host = result['results']['__test_multi_partial_fail__']['by_host']
+    assert by_host['good1'] == {'ok': True}
+    assert by_host['good2'] == {'ok': True}
+    assert 'error' in by_host['bad']
+    assert 'ValueError' in by_host['bad']['error']
+
+
+def test_multi_instances_run_in_parallel_not_sequentially(temp_check, isolated_db):
+    """Two 0.2s instances of the same check should take ~0.2s total, not ~0.4s,
+    proving they run concurrently rather than via a plain sequential for-loop."""
+    def slow_check(host=''):
+        time.sleep(0.2)
+        return {'ok': True}
+
+    temp_check('__test_multi_parallel__', slow_check)
+    start = time.monotonic()
+    run_checks_multi([
+        {'id': '__test_multi_parallel__', 'instances': [{'host': 'a'}, {'host': 'b'}]},
+    ])
+    elapsed = time.monotonic() - start
+    assert elapsed < 0.35, f'expected ~0.2s parallel execution, took {elapsed:.2f}s'
+
+
+def test_multi_timing_record_called_once_per_instance(temp_check, isolated_db, monkeypatch):
+    recorded = []
+    monkeypatch.setattr('netaudit_pkg.engine.timing.record',
+                         lambda check_id, params, elapsed: recorded.append((check_id, params)))
+
+    temp_check('__test_multi_record__', lambda host='': {'ok': True})
+    run_checks_multi([
+        {'id': '__test_multi_record__', 'instances': [
+            {'host': 'a'}, {'host': 'b'}, {'host': 'c'},
+        ]},
+    ])
+    assert len(recorded) == 3
+    hosts_recorded = {params.get('host') for _, params in recorded}
+    assert hosts_recorded == {'a', 'b', 'c'}
+
+
+def test_multi_total_time_is_max_per_check_summed_across_checks(temp_check, isolated_db):
+    """Within one check, instances run in parallel -> total_time contribution is
+    the max elapsed among its instances. Across different checks -> summed."""
+    def check_a(host='', sleep=0.0):
+        time.sleep(sleep)
+        return {'ok': True}
+
+    temp_check('__test_multi_total_a__', check_a)
+    temp_check('__test_multi_total_b__', check_a)
+
+    result = run_checks_multi([
+        {'id': '__test_multi_total_a__', 'instances': [
+            {'host': 'x', 'sleep': 0.05}, {'host': 'y', 'sleep': 0.15},
+        ]},
+        {'id': '__test_multi_total_b__', 'instances': [
+            {'host': 'z', 'sleep': 0.05},
+        ]},
+    ])
+    # expected ~ max(0.05, 0.15) + 0.05 = ~0.20, definitely not 0.05+0.15+0.05=0.25
+    assert result['total_time'] < 0.24
+
+
+# ===========================================================================
+# run_instances (shared execution core used by run_checks_multi and streaming)
+# ===========================================================================
+
+def test_run_instances_returns_results_and_timing_by_key(temp_check, isolated_db):
+    temp_check('__test_ri_basic__', lambda host='': {'seen': host})
+    spec = registry.get('__test_ri_basic__')
+    results, timings = run_instances('__test_ri_basic__', spec, [
+        {'host': 'a'}, {'host': 'b'},
+    ])
+    assert results == {'a': {'seen': 'a'}, 'b': {'seen': 'b'}}
+    assert set(timings.keys()) == {'a', 'b'}
+    assert all(isinstance(v, float) for v in timings.values())
+
+
+def test_run_instances_dedupes_repeated_host(temp_check, isolated_db):
+    temp_check('__test_ri_dup__', lambda host='': {'ok': True})
+    spec = registry.get('__test_ri_dup__')
+    results, timings = run_instances('__test_ri_dup__', spec, [
+        {'host': 'x'}, {'host': 'x'},
+    ])
+    assert set(results.keys()) == {'x', 'x#2'}
+    assert set(timings.keys()) == {'x', 'x#2'}
+
+
+def test_run_instances_isolates_failures(temp_check, isolated_db):
+    def maybe_fail(host=''):
+        if host == 'bad':
+            raise ValueError('boom')
+        return {'ok': True}
+
+    temp_check('__test_ri_fail__', maybe_fail)
+    spec = registry.get('__test_ri_fail__')
+    results, _ = run_instances('__test_ri_fail__', spec, [
+        {'host': 'good'}, {'host': 'bad'},
+    ])
+    assert results['good'] == {'ok': True}
+    assert 'error' in results['bad']
+
+
+def test_run_instances_calls_callback_per_instance(temp_check, isolated_db):
+    temp_check('__test_ri_cb__', lambda host='': {'ok': True})
+    spec = registry.get('__test_ri_cb__')
+    seen = []
+    lock = threading.Lock()
+
+    def on_done(key, result, elapsed):
+        with lock:
+            seen.append((key, result, elapsed))
+
+    run_instances('__test_ri_cb__', spec, [
+        {'host': 'a'}, {'host': 'b'}, {'host': 'c'},
+    ], on_instance_done=on_done)
+
+    assert len(seen) == 3
+    keys = {k for k, _, _ in seen}
+    assert keys == {'a', 'b', 'c'}
+    assert all(r == {'ok': True} for _, r, _ in seen)
+
+
+def test_run_instances_no_callback_does_not_error(temp_check, isolated_db):
+    """on_instance_done is optional - omitting it must not raise."""
+    temp_check('__test_ri_nocb__', lambda host='': {'ok': True})
+    spec = registry.get('__test_ri_nocb__')
+    results, timings = run_instances('__test_ri_nocb__', spec, [{'host': 'a'}])
+    assert results == {'a': {'ok': True}}
+
+
+def test_run_instances_records_timing_per_instance(temp_check, isolated_db, monkeypatch):
+    recorded = []
+    monkeypatch.setattr('netaudit_pkg.engine.timing.record',
+                         lambda check_id, params, elapsed: recorded.append(params.get('host')))
+
+    temp_check('__test_ri_timing__', lambda host='': {'ok': True})
+    spec = registry.get('__test_ri_timing__')
+    run_instances('__test_ri_timing__', spec, [{'host': 'a'}, {'host': 'b'}])
+
+    assert set(recorded) == {'a', 'b'}
+
+
+def test_run_checks_multi_uses_run_instances_for_multi_case(temp_check, isolated_db, monkeypatch):
+    """Confirms run_checks_multi() is actually delegating to run_instances()
+    (not a separate parallel copy of the same logic) by monkeypatching it."""
+    calls = []
+    import netaudit_pkg.engine as engine_mod
+    real_run_instances = engine_mod.run_instances
+
+    def spy(check_id, spec, instances, on_instance_done=None):
+        calls.append((check_id, len(instances)))
+        return real_run_instances(check_id, spec, instances, on_instance_done)
+
+    monkeypatch.setattr(engine_mod, 'run_instances', spy)
+    temp_check('__test_rcm_delegates__', lambda host='': {'ok': True})
+    run_checks_multi([
+        {'id': '__test_rcm_delegates__', 'instances': [{'host': 'a'}, {'host': 'b'}]},
+    ])
+    assert calls == [('__test_rcm_delegates__', 2)]
 
 
 # ===========================================================================

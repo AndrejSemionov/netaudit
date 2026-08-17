@@ -57,6 +57,16 @@
     flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text);
     padding: 5px 8px; border-radius: 5px; font-family: var(--mono); font-size: 12px;
   }
+  .instances { margin: 0; }
+  .add-host-btn, .remove-host-btn {
+    margin: 6px 0 0 24px; background: none; border: 1px dashed var(--border); color: var(--muted);
+    padding: 4px 10px; border-radius: 5px; font-size: 11px; cursor: pointer; font-family: var(--mono);
+  }
+  .add-host-btn:hover, .remove-host-btn:hover { border-color: var(--accent); color: var(--text); }
+  .remove-host-btn { margin: 4px 0 0 24px; display: block; }
+  .host-section { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .host-section:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
+  .host-section-label { font-size: 13px; color: var(--muted); margin: 0 0 8px 0; font-family: var(--mono); }
   .run-bar {
     position: sticky; bottom: 0; background: var(--panel); padding-top: 12px; margin-top: 8px;
     border-top: 1px solid var(--border);
@@ -801,19 +811,12 @@ function renderCheckList() {
     checks.forEach(c => {
       const tr = tCheck(c);
       const disabled = c.missing_tools.length > 0;
-      const paramsHtml = c.params.map(p => {
-        const isTarget = ['target','url','hostname','host','server'].includes(p.name);
-        const plabel = tr.paramLabel(p);
-        if (p.type === 'select') {
-          const opts = (p.options || []).map(o => `<option value="${o}" ${o === p.default ? 'selected' : ''}>${tr.optLabel(o)}</option>`).join('');
-          return `<label>${plabel}<select data-check="${c.id}" data-param="${p.name}">${opts}</select></label>`;
-        }
-        if (p.type === 'checkbox') {
-          return `<label style="display:flex;align-items:center;gap:6px"><input type="checkbox" data-check="${c.id}" data-param="${p.name}" ${p.default ? 'checked' : ''} style="width:auto">${plabel}</label>`;
-        }
-        const listAttr = isTarget ? 'list="savedTargets"' : '';
-        return `<label>${plabel}<input ${listAttr} data-check="${c.id}" data-param="${p.name}" type="${p.type === 'number' ? 'number' : (p.type === 'password' ? 'password' : 'text')}" value="${p.default ?? ''}"></label>`;
-      }).join('');
+      const hasHostParam = c.params.some(p => p.name === 'host');
+      // mtr/ping/tcptraceroute keep their live-stream single-host path on the
+      // backend (see streaming.py's is_multi_host) - never offer "+ Добавить
+      // хост" for them even though they may have a 'host'-named param.
+      const supportsMultiHost = hasHostParam && !NO_MULTI_HOST_IDS.has(c.id);
+      const paramsHtml = renderParamsInstance(c, tr, 0);
       const el = document.createElement('div');
       el.className = 'check' + (disabled ? ' disabled' : '');
       el.dataset.id = c.id;
@@ -824,7 +827,8 @@ function renderCheckList() {
           ${disabled ? `<span class="missing">${t('missing')}: ${c.missing_tools.join(',')}</span>` : ''}
         </div>
         <div class="desc">${tr.description || ''}</div>
-        <div class="params">${paramsHtml}</div>`;
+        <div class="instances"><div class="params" data-instance="0">${paramsHtml}</div></div>
+        ${supportsMultiHost ? `<button type="button" class="add-host-btn" onclick="event.stopPropagation(); addHostInstance('${c.id}')">${t('run.add_host')}</button>` : ''}`;
       catEl.appendChild(el);
     });
     container.appendChild(catEl);
@@ -838,6 +842,62 @@ function renderCheckList() {
   container.addEventListener('change', (ev) => {
     if (ev.target.matches('input[data-param], select[data-param]')) updateEstimate();
   });
+}
+
+// mtr/ping/tcptraceroute: backend keeps these single-host only (their
+// live-stream Popen path isn't multiplexed across hosts - see streaming.py).
+const NO_MULTI_HOST_IDS = new Set(['mtr', 'ping', 'tcptraceroute']);
+
+function renderParamsInstance(c, tr, instanceIdx) {
+  return c.params.map(p => {
+    const isTarget = ['target','url','hostname','host','server'].includes(p.name);
+    const plabel = tr.paramLabel(p);
+    if (p.type === 'select') {
+      const opts = (p.options || []).map(o => `<option value="${o}" ${o === p.default ? 'selected' : ''}>${tr.optLabel(o)}</option>`).join('');
+      return `<label>${plabel}<select data-check="${c.id}" data-param="${p.name}">${opts}</select></label>`;
+    }
+    if (p.type === 'checkbox') {
+      return `<label style="display:flex;align-items:center;gap:6px"><input type="checkbox" data-check="${c.id}" data-param="${p.name}" ${p.default ? 'checked' : ''} style="width:auto">${plabel}</label>`;
+    }
+    const listAttr = isTarget ? 'list="savedTargets"' : '';
+    return `<label>${plabel}<input ${listAttr} data-check="${c.id}" data-param="${p.name}" type="${p.type === 'number' ? 'number' : (p.type === 'password' ? 'password' : 'text')}" value="${p.default ?? ''}"></label>`;
+  }).join('');
+}
+
+function addHostInstance(checkId) {
+  const el = document.querySelector(`.check[data-id="${checkId}"]`);
+  if (!el) return;
+  const instancesEl = el.querySelector('.instances');
+  const existing = instancesEl.querySelectorAll('.params');
+  const nextIdx = existing.length;
+  const c = CHECKS.find(cc => cc.id === checkId);
+  const tr = tCheck(c);
+
+  const block = document.createElement('div');
+  block.className = 'params';
+  block.dataset.instance = String(nextIdx);
+  block.innerHTML = renderParamsInstance(c, tr, nextIdx) +
+    `<button type="button" class="remove-host-btn" onclick="event.stopPropagation(); removeHostInstance('${checkId}', ${nextIdx})">${t('run.remove_host')}</button>`;
+  instancesEl.appendChild(block);
+  updateEstimate();
+}
+
+function removeHostInstance(checkId, instanceIdx) {
+  const el = document.querySelector(`.check[data-id="${checkId}"]`);
+  if (!el) return;
+  const instancesEl = el.querySelector('.instances');
+  // never remove the last remaining instance (instance 0, without a remove
+  // button, is always present - only extra host blocks are removable)
+  const target = instancesEl.querySelector(`.params[data-instance="${instanceIdx}"]`);
+  if (target) target.remove();
+  // renumber remaining extra blocks so data-instance stays contiguous
+  const remaining = Array.from(instancesEl.querySelectorAll('.params')).filter(b => b.dataset.instance !== '0');
+  remaining.forEach((b, i) => {
+    b.dataset.instance = String(i + 1);
+    const btn = b.querySelector('.remove-host-btn');
+    if (btn) btn.setAttribute('onclick', `event.stopPropagation(); removeHostInstance('${checkId}', ${i + 1})`);
+  });
+  updateEstimate();
 }
 
 function toggleCheck(id, ev) {
@@ -881,14 +941,23 @@ function getSelected() {
   const selected = [];
   document.querySelectorAll('.check.sel').forEach(el => {
     const id = el.dataset.id;
-    const params = {};
-    el.querySelectorAll('input[data-param], select[data-param]').forEach(inp => {
-      let v = inp.value;
-      if (inp.type === 'number') v = Number(v);
-      if (inp.type === 'checkbox') v = inp.checked;
-      params[inp.dataset.param] = v;
+    const instanceBlocks = el.querySelectorAll('.instances .params');
+    const instances = Array.from(instanceBlocks).map(block => {
+      const params = {};
+      block.querySelectorAll('input[data-param], select[data-param]').forEach(inp => {
+        let v = inp.value;
+        if (inp.type === 'number') v = Number(v);
+        if (inp.type === 'checkbox') v = inp.checked;
+        params[inp.dataset.param] = v;
+      });
+      return params;
     });
-    selected.push({ id, params });
+    if (instances.length > 1) {
+      selected.push({ id, instances });
+    } else {
+      // exactly one instance -> legacy flat 'params' shape, unchanged
+      selected.push({ id, params: instances[0] || {} });
+    }
   });
   return selected;
 }
@@ -1048,11 +1117,31 @@ function renderReport(report) {
     const timing = report.timing[id];
     const card = document.createElement('div');
     card.className = 'card';
-    const canvasId = 'chart_' + id + '_' + Math.random().toString(36).slice(2, 7);
-    const { html, chart } = renderResult(id, result, canvasId);
-    card.innerHTML = `<h2>${meta.label} <span class="timing">${timing}s</span></h2>` + html;
+
+    if (result && result._multi_host) {
+      // one card per check, one section per host - timing is a {host: elapsed}
+      // dict here rather than a single number (see engine.run_checks_multi()
+      // / streaming.run_stream()'s multi-host report shape)
+      const hosts = Object.keys(result.by_host);
+      const sectionsHtml = hosts.map(host => {
+        const hostResult = result.by_host[host];
+        const hostTiming = timing && typeof timing === 'object' ? timing[host] : undefined;
+        const canvasId = 'chart_' + id + '_' + host.replace(/[^a-zA-Z0-9]/g, '_') + '_' + Math.random().toString(36).slice(2, 7);
+        const { html, chart } = renderResult(id, hostResult, canvasId);
+        if (chart) pending.push(chart);
+        return `<div class="host-section">
+          <h3 class="host-section-label"># host ${host}${hostTiming != null ? ` <span class="timing">${hostTiming}s</span>` : ''}</h3>
+          ${html}
+        </div>`;
+      }).join('');
+      card.innerHTML = `<h2>${meta.label}</h2>` + sectionsHtml;
+    } else {
+      const canvasId = 'chart_' + id + '_' + Math.random().toString(36).slice(2, 7);
+      const { html, chart } = renderResult(id, result, canvasId);
+      card.innerHTML = `<h2>${meta.label} <span class="timing">${timing}s</span></h2>` + html;
+      if (chart) pending.push(chart);
+    }
     root.appendChild(card);
-    if (chart) pending.push(chart);
   }
   // рисуем графики после того как canvas'ы в DOM
   requestAnimationFrame(() => pending.forEach(fn => { const c = fn(); if (c) CHART_INSTANCES.push(c); }));

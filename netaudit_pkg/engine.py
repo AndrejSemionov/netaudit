@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import threading
 from datetime import datetime
 
 from .registry import registry
@@ -57,6 +58,148 @@ def run_checks(selected: list[dict]) -> dict:
         report['meta'][check_id] = {'label': spec.label, 'category': spec.category}
 
     report['total_time'] = round(sum(report['timing'].values()), 2)
+    return report
+
+
+def _run_one_instance(check_id: str, spec, params: dict) -> tuple[dict, float]:
+    """Runs a single check instance, returns (result, elapsed). Mirrors the
+    try/except + timing.record() behavior of run_checks()'s inner loop."""
+    log.info(f'Running: {spec.label} ({check_id})...')
+    start = time.monotonic()
+    try:
+        result = spec.func(**params)
+    except Exception as e:
+        result = {'error': f'exception: {type(e).__name__}: {e}'}
+    elapsed = round(time.monotonic() - start, 2)
+
+    if not (isinstance(result, dict) and result.get('error')):
+        timing.record(check_id, params, elapsed)
+
+    return result, elapsed
+
+
+def _dedupe_key(host_value, seen_counts: dict) -> str:
+    """host_value -> display key, suffixing repeats within the same check as
+    '#2', '#3', ... so duplicate hosts don't overwrite each other in by_host."""
+    key = str(host_value)
+    seen_counts[key] = seen_counts.get(key, 0) + 1
+    n = seen_counts[key]
+    return key if n == 1 else f'{key}#{n}'
+
+
+def run_instances(check_id: str, spec, instances: list[dict],
+                   on_instance_done=None) -> tuple[dict, dict]:
+    """
+    Runs N instances of ONE check, in parallel (threading), and returns
+    (results_by_key, timing_by_key).
+
+    This is the shared execution core behind both run_checks_multi() (plain
+    report building) and streaming.run_stream() (adds SSE progress events on
+    top via on_instance_done) - the parallel dispatch, per-instance isolation,
+    timing, and host-key dedup logic lives here exactly once.
+
+    - `key` is instance['host'] (stringified), suffixed with '#2', '#3', ...
+      on repeats within this call so duplicate hosts don't collide.
+    - A single instance still goes through the same threading path (a thread
+      of one), kept simple rather than special-cased, since the cost is
+      negligible and it guarantees identical behavior between the 1- and
+      N-instance cases.
+    - A failing instance (exception in spec.func) does not block the others -
+      each instance is isolated in its own try/except (see _run_one_instance).
+    - timing.record() is called once per instance via _run_one_instance,
+      with that instance's own params/elapsed.
+    - on_instance_done(key, result, elapsed), if given, is called once per
+      instance as soon as it completes (from that instance's worker thread) -
+      used by streaming.run_stream() to emit a per-host SSE event without
+      run_instances() itself knowing anything about SSE/queues.
+    """
+    results: dict = {}
+    timings: dict = {}
+    lock = threading.Lock()
+    seen_counts: dict = {}
+    threads = []
+
+    def _worker(cid, sp, params, key, out_results, out_timing, out_lock, cb):
+        result, elapsed = _run_one_instance(cid, sp, params)
+        with out_lock:
+            out_results[key] = result
+            out_timing[key] = elapsed
+        if cb is not None:
+            cb(key, result, elapsed)
+
+    for instance_params in instances:
+        key = _dedupe_key(instance_params.get('host', ''), seen_counts)
+        t = threading.Thread(
+            target=_worker,
+            args=(check_id, spec, instance_params, key, results, timings, lock, on_instance_done),
+            daemon=True,
+        )
+        threads.append(t)
+        t.start()
+    for t in threads:
+        t.join()
+
+    return results, timings
+
+
+def run_checks_multi(selected: list[dict]) -> dict:
+    """
+    selected: list of {'id': 'cve', 'instances': [{'host': ..., ...}, {'host': ..., ...}]}
+
+    One instance for a check -> report['results'][check_id] / report['timing'][check_id]
+    are flat, identical in shape to run_checks() (backward compatible).
+
+    Multiple instances for a check -> executed via run_instances() (parallel):
+        report['results'][check_id] = {'_multi_host': True, 'by_host': {key: result, ...}}
+        report['timing'][check_id]  = {key: elapsed, ...}
+
+    A failing instance (missing tools, exception) does not block the others -
+    each instance is isolated the same way run_checks() isolates each check.
+
+    report['total_time'] is a wall-clock approximation: for each check, the
+    max elapsed among its instances (since they ran in parallel), summed
+    across checks (since different checks still run one after another).
+    """
+    report = {
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'results': {},
+        'timing': {},
+        'meta': {},
+    }
+
+    check_max_elapsed = []  # per-check max elapsed, for total_time
+
+    for item in selected:
+        check_id = item['id']
+        instances = item.get('instances', [{}])
+        spec = registry.get(check_id)
+
+        if spec is None:
+            report['results'][check_id] = {'error': f'check {check_id} not found'}
+            continue
+
+        missing = missing_tools(spec.required_tools)
+        if missing:
+            report['results'][check_id] = {'error': f'missing tools: {", ".join(missing)}'}
+            report['timing'][check_id] = 0.0
+            continue
+
+        report['meta'][check_id] = {'label': spec.label, 'category': spec.category}
+
+        if len(instances) == 1:
+            result, elapsed = _run_one_instance(check_id, spec, instances[0])
+            report['results'][check_id] = result
+            report['timing'][check_id] = elapsed
+            check_max_elapsed.append(elapsed)
+            continue
+
+        by_host, by_host_timing = run_instances(check_id, spec, instances)
+        report['results'][check_id] = {'_multi_host': True, 'by_host': by_host}
+        report['timing'][check_id] = by_host_timing
+        if by_host_timing:
+            check_max_elapsed.append(max(by_host_timing.values()))
+
+    report['total_time'] = round(sum(check_max_elapsed), 2)
     return report
 
 

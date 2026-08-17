@@ -248,6 +248,8 @@ const I18N = {
     // прогресс выполнения / статусы аудита
     'run.idle': 'Запустить аудит',
     'run.stopbtn': '■ Остановить',
+    'run.add_host': '+ Добавить хост',
+    'run.remove_host': '× Удалить',
     'run.mode.sync': 'сразу',
     'run.mode.async': 'в фоне',
     'run.estimate': 'Запустить · ~{duration} · {mode}',
@@ -511,6 +513,8 @@ const I18N = {
     // audit run progress / statuses
     'run.idle': 'Run audit',
     'run.stopbtn': '■ Stop',
+    'run.add_host': '+ Add host',
+    'run.remove_host': '× Remove',
     'run.mode.sync': 'immediately',
     'run.mode.async': 'in background',
     'run.estimate': 'Run · ~{duration} · {mode}',
