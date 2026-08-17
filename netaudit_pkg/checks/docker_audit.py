@@ -180,11 +180,21 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='',
         needs_sudo = 'permission denied' in (ps_out + ps_err).lower()
 
         if needs_sudo:
-            if ssh.needs_sudo_password():
-                return {'error': 'docker isn\'t accessible without sudo, and passwordless sudo isn\'t set up and no password was given',
-                        'hint': 'add the user to the docker group (usermod -aG docker <user>), '
-                                'or set "Password (if not using a key)" for sudo -S'}
             ps_out, ps_err = ssh.sudo('docker ps -q' + (' -a' if include_stopped else ''))
+            if 'permission denied' in (ps_out + ps_err).lower() or 'password is required' in (ps_out + ps_err).lower():
+                # Sudo was genuinely denied for docker ps (scoped sudoers
+                # refusal, or no password available for sudo -S) - this
+                # must NOT fall through to the zero-containers path below:
+                # an empty ps_out from a denied sudo attempt is
+                # indistinguishable from a genuinely empty ps_out unless
+                # checked explicitly here, and reporting "no running
+                # containers found" in that case would be actively
+                # misleading (hiding real containers behind an
+                # inaccessible sudo, not confirming there are none).
+                return {'error': 'docker isn\'t accessible without sudo, and sudo itself was denied',
+                        'detail': (ps_out + ps_err).strip()[:300],
+                        'hint': 'add the user to the docker group (usermod -aG docker <user>), '
+                                'or configure passwordless sudo for docker, or supply a sudo password'}
 
         container_ids = [c.strip() for c in ps_out.splitlines() if c.strip()]
 

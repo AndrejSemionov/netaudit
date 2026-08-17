@@ -133,10 +133,6 @@ def check_lynis_audit(host='', user='root', port=22, key_path='', password='',
             if not installed:
                 return {'error': 'failed to install lynis', 'detail': install_err}
 
-        if ssh.needs_sudo_password():
-            return {'error': 'sudo is needed, but passwordless sudo isn\'t set up and no password was given',
-                    'hint': 'set "Password (if not using a key)" — it will also be used for sudo -S'}
-
         ssh.sudo('lynis audit system --quiet --no-colors', timeout=180)
         # the file is always root:root with 640 permissions, always read it via
         # sudo regardless of how the audit itself ran - otherwise cat silently

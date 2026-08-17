@@ -149,10 +149,6 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='',
         return {'error': f'could not connect: {e}'}
 
     try:
-        if ssh.needs_sudo_password():
-            return {'error': 'sudo is needed, but passwordless sudo isn\'t set up and no password was given',
-                    'hint': 'set "Password (if not using a key)" — it will also be used for sudo -S'}
-
         def _ensure_installed(tool):
             if ssh.is_tool_installed(tool):
                 return True

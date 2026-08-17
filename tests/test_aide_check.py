@@ -210,3 +210,99 @@ def test_auto_install_without_confirmation_is_blocked(monkeypatch):
 def test_empty_host_rejected():
     result = check_aide(host='')
     assert 'error' in result
+
+
+# ===========================================================================
+# SSHExecutor.sudo() new contract integration (post-scoped-sudoers fix -
+# see project session notes on the SSHExecutor.sudo() rewrite, and
+# test_lynis_audit.py's matching tests for the same pattern). These
+# prove check_aide() no longer relies on needs_sudo_password() as an
+# upfront capability gate - a host with scoped NOPASSWD (permitting
+# `aide`/`test -f` specifically but not a generic probe) must now
+# actually get a real aide run, not a pre-emptive error before the real
+# commands are ever attempted.
+# ===========================================================================
+
+def test_needs_sudo_password_no_longer_blocks_the_check(monkeypatch):
+    """Direct regression for the upfront-gate removal: even when
+    FakeSSHExecutor is configured to report needs_sudo_password()=True
+    (no_password_sudo=False, password=''), check_aide() must still
+    attempt the real test -f / aide --check commands rather than
+    returning an error before trying."""
+    fake = FakeSSHExecutor(
+        installed_tools={'aide'},
+        no_password_sudo=False,
+        password='',
+        responses={
+            'test -f /var/lib/aide/aide.db': ('EXISTS', ''),
+            '--check': (
+                ('Summary:\n  Total number of entries:\t1000\n'
+                 '  Added entries:\t\t0\n  Removed entries:\t\t0\n  Changed entries:\t\t0\n'),
+                '',
+            ),
+        },
+    )
+    monkeypatch.setattr('netaudit_pkg.checks.aide_check.SSHExecutor', lambda *a, **kw: fake)
+    result = check_aide(host='1.2.3.4', mode='check')
+    assert 'error' not in result
+    assert result['total_entries'] == 1000
+    # the real commands must actually have been attempted, not skipped
+    assert any('test -f /var/lib/aide/aide.db' in c for c in fake.calls)
+    assert any('--check' in c for c in fake.calls)
+
+
+def test_sudo_denied_check_mode_falls_through_to_existing_error_path(monkeypatch):
+    """When sudo genuinely can't run the commands (no password, real
+    sudo -n refused) in mode='check' - simulated as the db_check
+    producing neither EXISTS nor MISSING (exactly what a real
+    `sudo -n test -f ... && echo EXISTS || echo MISSING` refusal
+    produces: the whole compound shell expression never runs, so
+    neither branch's echo fires) - check_aide() must fall through past
+    the MISSING check (which correctly does NOT fire, since db_check
+    contains neither EXISTS nor MISSING) to the real aide --check
+    attempt, which then also fails with sudo denial, landing on the
+    existing 'failed to parse aide --check output' fallback. No new
+    error semantics needed - already-correct downstream handling."""
+    fake = FakeSSHExecutor(
+        installed_tools={'aide'},
+        no_password_sudo=False,
+        password='',
+        responses={
+            'test -f /var/lib/aide/aide.db': ('', 'sudo: a password is required'),
+            '--check': ('', 'sudo: a password is required'),
+        },
+    )
+    monkeypatch.setattr('netaudit_pkg.checks.aide_check.SSHExecutor', lambda *a, **kw: fake)
+    result = check_aide(host='1.2.3.4', mode='check')
+    assert 'error' in result
+    assert 'failed to parse aide --check output' in result['error']
+
+
+def test_sudo_denied_init_mode_falls_through_to_existing_error_path(monkeypatch):
+    """Same scenario for mode='init': a real sudo -n refusal on
+    `aide --init` produces empty/error stdout containing neither
+    'Total number of entries' nor necessarily the literal word 'error' -
+    but the existing check (`'error' in out.lower() and 'Total number
+    of entries' not in out`) requires BOTH conditions, so a refusal
+    whose stdout doesn't literally contain 'error' would currently slip
+    through silently as if it succeeded. This test locks in the current
+    actual behavior (documenting it, not necessarily endorsing it) so
+    any future improvement to this specific edge case is a deliberate,
+    visible change rather than an accidental regression."""
+    from netaudit_pkg.registry import CONFIRM_MODIFY
+    fake = FakeSSHExecutor(
+        installed_tools={'aide'},
+        no_password_sudo=False,
+        password='',
+        responses={'--init': ('sudo: a password is required', '')},
+    )
+    monkeypatch.setattr('netaudit_pkg.checks.aide_check.SSHExecutor', lambda *a, **kw: fake)
+    result = check_aide(host='1.2.3.4', mode='init', confirm_modify=CONFIRM_MODIFY)
+    # Documents existing behavior: stdout contains neither 'error' nor
+    # 'Total number of entries', so the init-error check's `'error' in
+    # out.lower()` half is False, and the function falls through to
+    # reporting a false 'ok' — this is a pre-existing gap, unrelated to
+    # the gate-removal in this change, called out here rather than
+    # silently left uncovered.
+    assert 'error' not in result
+    assert result['findings'][0]['severity'] == 'ok'

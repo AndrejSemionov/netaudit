@@ -180,3 +180,89 @@ def test_clean_result_when_no_findings(monkeypatch):
 def test_empty_host_rejected():
     result = check_rootkit(host='')
     assert 'error' in result
+
+
+# ===========================================================================
+# SSHExecutor.sudo() new contract integration (post-scoped-sudoers fix -
+# see project session notes on the SSHExecutor.sudo() rewrite, and
+# test_lynis_audit.py/test_aide_check.py's matching tests for the same
+# pattern). These prove check_rootkit() no longer relies on
+# needs_sudo_password() as an upfront capability gate - a host with
+# scoped NOPASSWD (permitting rkhunter/chkrootkit specifically but not a
+# generic probe) must now actually get a real run, not a pre-emptive
+# error before the real commands are ever attempted.
+# ===========================================================================
+
+def test_needs_sudo_password_no_longer_blocks_the_check(monkeypatch):
+    """Direct regression for the upfront-gate removal: even when
+    FakeSSHExecutor is configured to report needs_sudo_password()=True
+    (no_password_sudo=False, password=''), check_rootkit() must still
+    attempt the real rkhunter/chkrootkit commands rather than returning
+    an error before trying."""
+    fake = FakeSSHExecutor(
+        installed_tools={'rkhunter', 'chkrootkit'},
+        no_password_sudo=False,
+        password='',
+        responses={
+            'rkhunter --check': ('Warning: test warning\n', ''),
+            'chkrootkit': ("Checking `bindshell'... not infected\n", ''),
+        },
+    )
+    monkeypatch.setattr('netaudit_pkg.checks.rootkit_check.SSHExecutor', lambda *a, **kw: fake)
+    result = check_rootkit(host='1.2.3.4')
+    assert 'error' not in result
+    assert result['tools']['rkhunter']['ran'] is True
+    assert result['tools']['chkrootkit']['ran'] is True
+    # the real commands must actually have been attempted, not skipped
+    assert any('rkhunter --check' in c for c in fake.calls)
+    assert any('chkrootkit' in c for c in fake.calls)
+
+
+def test_sudo_denied_both_tools_falls_through_to_existing_per_tool_errors(monkeypatch):
+    """When sudo genuinely can't run either tool (no password, real
+    sudo -n refused) - simulated as empty output from both, exactly
+    what a real sudo -n denial produces - check_rootkit() must fall
+    through to the ALREADY-EXISTING per-tool 'returned no output (check
+    sudo privileges)' errors (_run_rkhunter/_run_chkrootkit's own
+    checks), aggregated into 'no tool ran' since neither succeeded. No
+    new error semantics needed."""
+    fake = FakeSSHExecutor(
+        installed_tools={'rkhunter', 'chkrootkit'},
+        no_password_sudo=False,
+        password='',
+        responses={
+            'rkhunter --check': ('', 'sudo: a password is required'),
+            'chkrootkit': ('', 'sudo: a password is required'),
+        },
+    )
+    monkeypatch.setattr('netaudit_pkg.checks.rootkit_check.SSHExecutor', lambda *a, **kw: fake)
+    result = check_rootkit(host='1.2.3.4')
+    assert 'error' in result
+    assert 'no tool ran' in result['error']
+    assert 'check sudo privileges' in result['detail']
+
+
+def test_sudo_denied_one_tool_other_succeeds(monkeypatch):
+    """A more realistic partial-scoped-sudoers shape: sudo permits
+    rkhunter but not chkrootkit (or vice versa) - rkhunter must succeed
+    normally while chkrootkit's failure is reported as a warning, not a
+    hard stop for the whole check. This is exactly the existing
+    graceful-degradation path (errors accumulate in `warnings`,
+    `tools_status` tracks ran=False per tool), now reachable because the
+    upfront gate no longer short-circuits before either tool is even
+    attempted."""
+    fake = FakeSSHExecutor(
+        installed_tools={'rkhunter', 'chkrootkit'},
+        no_password_sudo=False,
+        password='',
+        responses={
+            'rkhunter --check': ('Warning: test warning\n', ''),
+            'chkrootkit': ('', 'sudo: a password is required'),
+        },
+    )
+    monkeypatch.setattr('netaudit_pkg.checks.rootkit_check.SSHExecutor', lambda *a, **kw: fake)
+    result = check_rootkit(host='1.2.3.4')
+    assert 'error' not in result
+    assert result['tools']['rkhunter']['ran'] is True
+    assert result['tools']['chkrootkit']['ran'] is False
+    assert any('chkrootkit' in w for w in result.get('warnings', []))

@@ -213,3 +213,161 @@ def test_docker_not_installed(monkeypatch):
 def test_empty_host_rejected():
     result = check_docker_audit(host='')
     assert 'error' in result
+
+
+# ===========================================================================
+# SSHExecutor.sudo() new contract integration (post-scoped-sudoers fix -
+# see project session notes on the SSHExecutor.sudo() rewrite, and
+# test_lynis_audit.py/test_aide_check.py/test_rootkit_check.py's matching
+# tests for the same pattern). docker_audit.py is the one consumer of
+# the four where a plain gate-removal is NOT enough - see this file's
+# module docstring / project session notes: unlike lynis/aide/rootkit
+# (which already had a downstream "no output" check that naturally
+# absorbs a sudo denial), docker_audit's zero-containers path
+# (`if not container_ids: ... 'no running containers found'`) cannot
+# distinguish "sudo was denied, ps_out came back empty" from "there are
+# genuinely zero running containers" without an explicit check - a
+# false 'ok: no running containers found' would be actively misleading
+# (hiding real containers instead of reporting inaccessible ones).
+# ===========================================================================
+
+def test_needs_sudo_password_no_longer_blocks_the_check(monkeypatch):
+    """Direct regression for the upfront-gate removal: even when
+    FakeSSHExecutor is configured to report needs_sudo_password()=True
+    (no_password_sudo=False, password=''), check_docker_audit() must
+    still attempt the real sudo docker ps/inspect commands rather than
+    returning an error before trying."""
+    class SudoFallbackExecutor(FakeSSHExecutor):
+        def run(self, cmd, timeout=20):
+            if 'docker ps -q' in cmd:
+                return ('', 'permission denied')
+            return super().run(cmd, timeout)
+
+        def sudo(self, cmd, timeout=20):
+            if 'docker ps -q' in cmd:
+                return ('abc123\n', '')
+            if 'docker inspect' in cmd:
+                return (_container_json(user='root', image='app:latest'), '')
+            return super().sudo(cmd, timeout)
+
+    fake = SudoFallbackExecutor(
+        no_password_sudo=False,
+        password='',
+        responses={'which docker': ('/usr/bin/docker', ''), 'grep -rE': ('', '')},
+    )
+    monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
+    result = check_docker_audit(host='1.2.3.4')
+    assert 'error' not in result
+    assert result['containers_checked'] == 1
+
+
+def test_sudo_denied_reports_access_error_not_zero_containers(monkeypatch):
+    """The central risk this fix must close: when unprivileged docker ps
+    is denied AND the sudo -n retry is ALSO denied (real scoped-sudoers
+    refusal, not a missing password fallback), the check must report an
+    explicit access error - it must NEVER report 'no running containers
+    found' just because ps_out came back empty from a denied sudo
+    attempt. A false 'zero containers, all clear' here would actively
+    hide real containers from the audit."""
+    class SudoDeniedExecutor(FakeSSHExecutor):
+        def run(self, cmd, timeout=20):
+            if 'docker ps -q' in cmd:
+                return ('', 'permission denied')
+            return super().run(cmd, timeout)
+
+        def sudo(self, cmd, timeout=20):
+            if 'docker ps -q' in cmd:
+                return ('', 'sudo: a password is required')
+            return super().sudo(cmd, timeout)
+
+    fake = SudoDeniedExecutor(
+        no_password_sudo=False,
+        password='',
+        responses={'which docker': ('/usr/bin/docker', '')},
+    )
+    monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
+    result = check_docker_audit(host='1.2.3.4')
+    assert 'error' in result
+    assert 'containers_checked' not in result
+    assert not any(w.get('severity') == 'ok' for w in result.get('findings', []))
+
+
+def test_sudo_succeeds_after_unpriv_denied_with_scoped_sudoers(monkeypatch):
+    """The realistic scoped-sudoers shape (session notes, 46.62.147.41-
+    like host): unprivileged docker ps is denied, but sudo -n docker ps
+    succeeds (scoped NOPASSWD permits it specifically). Containers found
+    via sudo must be reported normally - this is the positive-path
+    counterpart to test_sudo_denied_reports_access_error_not_zero_containers,
+    confirming the fix doesn't overcorrect into treating every sudo
+    attempt as suspect."""
+    class ScopedSudoExecutor(FakeSSHExecutor):
+        def run(self, cmd, timeout=20):
+            if 'docker ps -q' in cmd:
+                return ('', 'permission denied')
+            return super().run(cmd, timeout)
+
+        def sudo(self, cmd, timeout=20):
+            if 'docker ps -q' in cmd:
+                return ('abc123\n', '')
+            if 'docker inspect' in cmd:
+                return (_container_json(user='nginx', image='nginx:1.27'), '')
+            return super().sudo(cmd, timeout)
+
+    fake = ScopedSudoExecutor(
+        no_password_sudo=False,
+        password='',
+        responses={'which docker': ('/usr/bin/docker', ''), 'grep -rE': ('', '')},
+    )
+    monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
+    result = check_docker_audit(host='1.2.3.4')
+    assert 'error' not in result
+    assert result['containers_checked'] == 1
+
+
+def test_genuine_zero_containers_still_reports_ok_when_sudo_not_needed(monkeypatch):
+    """Regression guard: the fix for the sudo-denial-vs-zero-containers
+    ambiguity must not break the ordinary, already-covered case (see
+    test_unprotected_daemon_socket_flagged_even_with_zero_containers)
+    where docker ps genuinely succeeds (no sudo involved at all) and
+    genuinely returns zero containers - that must still produce the
+    normal 'ok: no running containers found', not a false access
+    error."""
+    fake = FakeSSHExecutor(responses={
+        'which docker': ('/usr/bin/docker', ''),
+        'docker ps -q': ('', ''),  # succeeds, genuinely empty - no sudo involved
+        'grep -rE': ('', ''),
+    })
+    monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
+    result = check_docker_audit(host='1.2.3.4')
+    assert 'error' not in result
+    assert result['containers_checked'] == 0
+    assert any(f['severity'] == 'ok' for f in result['findings'])
+
+
+def test_docker_inspect_partial_failure_does_not_break_whole_audit(monkeypatch):
+    """One container's docker inspect failing to parse (e.g. a partial
+    sudo denial mid-loop, or genuinely malformed output) must not abort
+    the whole audit - the existing per-container graceful degradation
+    (continue on JSONDecodeError) must still apply after the gate
+    removal. Two containers: one parses fine, one doesn't - the audit
+    must still complete and report findings for the one that worked."""
+    class PartialInspectExecutor(FakeSSHExecutor):
+        def run(self, cmd, timeout=20):
+            if 'docker ps -q' in cmd:
+                return ('good\nbad\n', '')
+            if "docker inspect 'good'" in cmd:
+                return (_container_json(user='root', image='app:latest'), '')
+            if "docker inspect 'bad'" in cmd:
+                return ('not valid json', '')
+            return super().run(cmd, timeout)
+
+    fake = PartialInspectExecutor(responses={
+        'which docker': ('/usr/bin/docker', ''),
+        'grep -rE': ('', ''),
+    })
+    monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
+    result = check_docker_audit(host='1.2.3.4')
+    assert 'error' not in result
+    assert result['containers_checked'] == 2
+    # the one container that parsed fine should still have contributed findings
+    assert any('root' in f['title'] for f in result['findings'])

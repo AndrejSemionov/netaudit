@@ -93,7 +93,12 @@ class SSHExecutor:
         self.password = password
         self.timeout = timeout
         self.client: 'paramiko.SSHClient | None' = None
-        self._no_password_sudo: bool | None = None  # cached after first sudo() check
+        # Used only by needs_sudo_password() (unchanged this pass - see
+        # that method's docstring and project session notes for why its
+        # own generic-probe contract is being reconsidered separately).
+        # sudo() itself no longer reads or writes this - see sudo()'s
+        # docstring for why a session-level capability cache was removed.
+        self._no_password_sudo: bool | None = None
 
     def connect(self) -> 'SSHExecutor':
         client = paramiko.SSHClient()
@@ -137,24 +142,51 @@ class SSHExecutor:
 
     def sudo(self, cmd: str, timeout: int = 20) -> tuple[str, str]:
         """
-        Runs a command via sudo. Tries passwordless sudo first (`sudo -n`);
-        if that's unavailable, falls back to `sudo -S` reading the password
-        from stdin — this works without a TTY and without any sudoers
-        pre-configuration on the target machine, which matters for servers
-        that aren't yours to configure (client servers, one-off audits).
+        Runs a command via sudo. If a sudo password was provided, uses it
+        directly via `sudo -S`. Otherwise, attempts passwordless sudo via
+        `sudo -n` for THIS command - never a generic capability probe
+        (like `sudo -n true`) against a different, unrelated command.
+
+        Why not a generic probe: sudo capability is a property of the
+        specific command being run, not of the session as a whole. A
+        host can have scoped sudoers rules like
+        `NOPASSWD: /usr/bin/fail2ban-client` that permit exactly one
+        command without a password while refusing everything else,
+        including `true` - so testing `sudo -n true` first and caching
+        that single result for every subsequent sudo() call produces
+        false negatives on any host configured this way (confirmed
+        empirically against a real production host during this
+        project's fail2ban work - see session notes). Probing the
+        actual command directly is both simpler and correct for both
+        the scoped-sudoers case and the traditional blanket-NOPASSWD
+        case.
+
+        No fallback from `sudo -n` to `sudo -S` when no password was
+        given: if passwordless sudo genuinely isn't available for this
+        command, the correct behavior is to return that refusal as-is,
+        not to attempt `sudo -S` with an empty stdin write (which
+        doesn't produce a meaningful error - it silently fails or hangs
+        depending on the target's sudo configuration). A caller that
+        wants password-based sudo must supply a password explicitly.
+
+        Note: `self.password` here is used purely as a sudo password
+        for `sudo -S`, distinct from SSH authentication (which uses
+        key_path, or this same self.password as an SSH login password
+        only when no key_path is given - see connect()). SSH key
+        passphrase support does not currently exist in this class as a
+        separate concept; that is a deliberately separate, not-yet-
+        addressed piece of work (see project session notes) and this
+        method must never be extended to treat key material as sudo
+        credential material.
         """
-        if self._no_password_sudo is None:
-            check_out, _ = self.run('sudo -n true 2>&1 && echo OK || echo NOPASS', timeout=10)
-            self._no_password_sudo = 'NOPASS' not in check_out
+        if self.password:
+            stdin, so, se = self.client.exec_command(f'sudo -S -p "" {cmd}', timeout=timeout)
+            stdin.write(self.password + '\n')
+            stdin.flush()
+            stdin.channel.shutdown_write()
+            return so.read().decode(errors='replace'), se.read().decode(errors='replace')
 
-        if self._no_password_sudo:
-            return self.run(f'sudo {cmd}', timeout=timeout)
-
-        stdin, so, se = self.client.exec_command(f'sudo -S -p "" {cmd}', timeout=timeout)
-        stdin.write((self.password or '') + '\n')
-        stdin.flush()
-        stdin.channel.shutdown_write()
-        return so.read().decode(errors='replace'), se.read().decode(errors='replace')
+        return self.run(f'sudo -n {cmd}', timeout=timeout)
 
     def needs_sudo_password(self) -> bool:
         """True if sudo requires a password and none was provided — callers
