@@ -493,3 +493,148 @@ def test_audit_real_host_shape_46_62_147_41():
     ok_finding = next(f for f in result['findings'] if f['severity'] == 'ok')
     assert 'active jails: 6' in ok_finding['title']
     assert not any(f['severity'] == 'low' for f in result['findings'])
+
+
+# ===========================================================================
+# fail2ban_mode='status-wrapper' - the actual production shape
+# (46.62.147.41, session notes): sudoers scoped to
+# /usr/local/bin/fail2ban-status-only, NOT the raw fail2ban-client
+# binary. Prior to Fail2banCommands existing, audit_fail2ban() could
+# never reach a SUCCESS verdict on a host configured this way - sudo -n
+# fail2ban-client status was confirmed denied (exit 1, "a password is
+# required") even though the wrapper itself succeeds (exit 0, real
+# jails) for the exact same underlying operation. These tests close that
+# gap end-to-end through the semantic layer, not just the collector.
+# ===========================================================================
+
+def test_audit_fail2ban_mode_default_unchanged_when_omitted():
+    """Backward-compatibility regression: calling audit_fail2ban(ssh)
+    exactly as every pre-existing caller does (check_server_audit()
+    before this change, and any direct caller) must behave identically
+    to before fail2ban_mode existed."""
+    status_text = 'Status\n|- Number of jail:\t1\n`- Jail list:\tsshd'
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+            'command -v fail2ban-client': '/usr/bin/fail2ban-client',
+            'status sshd': 'Status for the jail: sshd\n`- Currently banned:\t0\n`- Total banned:\t0',
+            'fail2ban-client status': status_text,
+        },
+        exit_codes={
+            'command -v fail2ban-client': 0,
+            'status sshd': 0,
+            'fail2ban-client status': 0,
+        },
+    )
+    result = audit_fail2ban(fake)  # no fail2ban_mode argument at all
+    assert result['installed'] is True
+    ok_finding = next(f for f in result['findings'] if f['severity'] == 'ok')
+    assert 'active jails: 1' in ok_finding['title']
+
+
+def test_audit_fail2ban_status_wrapper_mode_reaches_success_where_client_mode_would_deny():
+    """The exact production scenario this whole cycle exists to fix:
+    with fail2ban_mode='status-wrapper', a host whose sudoers ONLY
+    permits the wrapper (not fail2ban-client directly) now reaches a
+    real SUCCESS verdict with real jails - not the UNKNOWN/low/
+    requires_manual_verification result the same evidence would produce
+    under the default 'client' mode (see
+    test_audit_status_access_denied_even_with_sudo_is_low for that
+    contrasting case)."""
+    status_text = ('Status\n|- Number of jail:\t6\n'
+                   '`- Jail list:\tnginx-botsearch, nginx-http-auth, nginx-limit-req, '
+                   'recidive, sshd, sshd-ddos')
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+            'command -v fail2ban-client': '/usr/bin/fail2ban-client',
+            '/usr/local/bin/fail2ban-status-only nginx-botsearch':
+                'Status for the jail: nginx-botsearch\n`- Currently banned:\t0\n`- Total banned:\t0',
+            '/usr/local/bin/fail2ban-status-only nginx-http-auth':
+                'Status for the jail: nginx-http-auth\n`- Currently banned:\t0\n`- Total banned:\t0',
+            '/usr/local/bin/fail2ban-status-only nginx-limit-req':
+                'Status for the jail: nginx-limit-req\n`- Currently banned:\t0\n`- Total banned:\t0',
+            '/usr/local/bin/fail2ban-status-only recidive':
+                'Status for the jail: recidive\n`- Currently banned:\t0\n`- Total banned:\t0',
+            '/usr/local/bin/fail2ban-status-only sshd-ddos':
+                'Status for the jail: sshd-ddos\n`- Currently banned:\t0\n`- Total banned:\t0',
+            '/usr/local/bin/fail2ban-status-only sshd':
+                'Status for the jail: sshd\n`- Currently banned:\t0\n`- Total banned:\t1',
+            '/usr/local/bin/fail2ban-status-only': status_text,
+        },
+        exit_codes={
+            'command -v fail2ban-client': 0,
+            '/usr/local/bin/fail2ban-status-only nginx-botsearch': 0,
+            '/usr/local/bin/fail2ban-status-only nginx-http-auth': 0,
+            '/usr/local/bin/fail2ban-status-only nginx-limit-req': 0,
+            '/usr/local/bin/fail2ban-status-only recidive': 0,
+            '/usr/local/bin/fail2ban-status-only sshd-ddos': 0,
+            '/usr/local/bin/fail2ban-status-only sshd': 0,
+            '/usr/local/bin/fail2ban-status-only': 0,
+        },
+    )
+    result = audit_fail2ban(fake, fail2ban_mode='status-wrapper')
+    assert result['installed'] is True
+    assert len(result['jails']) == 6
+    ok_finding = next(f for f in result['findings'] if f['severity'] == 'ok')
+    assert 'active jails: 6' in ok_finding['title']
+    assert 'total bans: 1' in ok_finding['detail']
+    assert not any(f['severity'] == 'low' for f in result['findings'])
+    sshd_entry = next(j for j in result['jails'] if j['jail'] == 'sshd')
+    assert sshd_entry['total_banned'] == 1
+
+
+def test_check_server_audit_passes_fail2ban_mode_through(monkeypatch):
+    """check_server_audit()'s fail2ban_mode param must actually reach
+    audit_fail2ban()'s collector call - the top-level orchestration
+    integration test, mirroring test_check_server_audit_integration.py's
+    established pattern for proving parameters flow all the way down,
+    not just that audit_fail2ban() alone honors the argument."""
+    from netaudit_pkg.checks.server_security import check_server_audit
+
+    status_text = 'Status\n|- Number of jail:\t1\n`- Jail list:\tsshd'
+    responses = {
+        # nginx / firewall / sql / ssh baseline - clean, uninvolved sections
+        'which nginx': 'NONE',
+        'command -v ufw': '',
+        'nft list ruleset': 'table inet filter {\n  chain input {\n  }\n}',
+        'iptables -S': '-P INPUT DROP',
+        'command -v mysql': '',
+        'command -v mariadb': '',
+        'ss -tlnp': '',
+        "grep -rh '^\\s*bind-address' /etc/mysql/": '',
+        'sshd -T': ('permitrootlogin prohibit-password\npasswordauthentication no\n'
+                    'permitemptypasswords no\nport 22\nmaxauthtries 6'),
+        # fail2ban - status-wrapper shape
+        'command -v fail2ban-client': '/usr/bin/fail2ban-client',
+        '/usr/local/bin/fail2ban-status-only sshd':
+            'Status for the jail: sshd\n`- Currently banned:\t0\n`- Total banned:\t0',
+        '/usr/local/bin/fail2ban-status-only': status_text,
+    }
+    exit_codes = {
+        'command -v ufw': 127,
+        'nft list ruleset': 0,
+        'iptables -S': 0,
+        'command -v mysql': 127,
+        'command -v mariadb': 127,
+        'ss -tlnp': 0,
+        "grep -rh '^\\s*bind-address' /etc/mysql/": 1,
+        'command -v fail2ban-client': 0,
+        '/usr/local/bin/fail2ban-status-only sshd': 0,
+        '/usr/local/bin/fail2ban-status-only': 0,
+    }
+    fake = ExitCodeFakeSSHExecutor(responses=responses, exit_codes=exit_codes)
+
+    import netaudit_pkg.checks.server_security as ss
+    orig_executor = ss.SSHExecutor
+    ss.SSHExecutor = lambda *a, **kw: fake
+    try:
+        result = check_server_audit(host='1.2.3.4', fail2ban_mode='status-wrapper')
+    finally:
+        ss.SSHExecutor = orig_executor
+
+    f2b = result['sections']['fail2ban']
+    assert f2b['installed'] is True
+    ok_finding = next(f for f in f2b['findings'] if f['severity'] == 'ok')
+    assert 'active jails: 1' in ok_finding['title']
+    # confirm the wrapper command was actually sent through the full
+    # orchestration path, not just when calling audit_fail2ban() directly
+    assert any('/usr/local/bin/fail2ban-status-only' in c for c in fake.calls)

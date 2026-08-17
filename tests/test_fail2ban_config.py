@@ -23,7 +23,10 @@ docstring for full background):
 
 from __future__ import annotations
 
+import shlex
+
 from netaudit_pkg.fail2ban_config import (
+    Fail2banCommands,
     _binary_check,
     _parse_jail_list,
     _run_sudo_with_exit_code,
@@ -31,6 +34,87 @@ from netaudit_pkg.fail2ban_config import (
     collect_fail2ban_config,
 )
 from tests.conftest import ExitCodeFakeSSHExecutor
+
+# ===========================================================================
+# Fail2banCommands - command grammar provider (pure, no I/O)
+# ===========================================================================
+#
+# Locks in the empirically-confirmed 46.62.147.41 wrapper grammar (see
+# project session notes): fail2ban-status-only takes NO leading "status"
+# argument - the wrapper script hardcodes it - so a jail_status() call
+# must produce '<wrapper> <jail>', never '<wrapper> status <jail>'
+# (confirmed on the real host to fail with exit 255, "Sorry but the jail
+# 'status' does not exist").
+
+def test_client_mode_status():
+    assert Fail2banCommands(mode='client').status() == 'fail2ban-client status'
+
+
+def test_client_mode_jail_status():
+    cmds = Fail2banCommands(mode='client')
+    assert cmds.jail_status('sshd') == 'fail2ban-client status sshd'
+
+
+def test_wrapper_mode_status_has_no_leading_status_argument():
+    """The central empirically-confirmed grammar fact: the wrapper's
+    top-level status call is the bare wrapper path, with no 'status'
+    argument - fail2ban-status-only already hardcodes it internally."""
+    cmds = Fail2banCommands(mode='status-wrapper')
+    assert cmds.status() == '/usr/local/bin/fail2ban-status-only'
+
+
+def test_wrapper_mode_jail_status_has_no_leading_status_argument():
+    """Same grammar fact for the per-jail call - '<wrapper> <jail>', NOT
+    '<wrapper> status <jail>' (which was confirmed on the real host to
+    produce exit 255 - the wrapper would treat 'status' itself as an
+    invalid jail name)."""
+    cmds = Fail2banCommands(mode='status-wrapper')
+    assert cmds.jail_status('sshd') == '/usr/local/bin/fail2ban-status-only sshd'
+
+
+def test_wrapper_mode_custom_path():
+    cmds = Fail2banCommands(mode='status-wrapper', wrapper_path='/opt/custom/f2b-status')
+    assert cmds.status() == '/opt/custom/f2b-status'
+    assert cmds.jail_status('nginx-auth') == '/opt/custom/f2b-status nginx-auth'
+
+
+def test_jail_name_with_shell_metacharacters_is_quoted():
+    """jail_status() must never build an unquoted, shell-injectable
+    command string - both modes."""
+    client_cmds = Fail2banCommands(mode='client')
+    wrapper_cmds = Fail2banCommands(mode='status-wrapper')
+    dangerous_name = 'sshd; rm -rf /'
+    assert 'fail2ban-client status ' in client_cmds.jail_status(dangerous_name)
+    assert shlex.quote(dangerous_name) in client_cmds.jail_status(dangerous_name)
+    assert shlex.quote(dangerous_name) in wrapper_cmds.jail_status(dangerous_name)
+
+
+def test_unknown_mode_raises_explicit_error_no_fallback():
+    """An unrecognized mode must fail loudly and immediately, not
+    silently fall back to a default or guess - see this module's
+    Fail2banCommands docstring on why no auto-fallback between modes is
+    ever attempted anywhere in this design."""
+    import pytest
+    with pytest.raises(ValueError, match='unknown fail2ban command mode'):
+        Fail2banCommands(mode='not-a-real-mode')
+
+
+def test_default_mode_is_client_preserving_prior_behavior():
+    """Backward compatibility requirement for this cycle: the default
+    mode must produce EXACTLY the command strings this module already
+    used before Fail2banCommands existed - 'fail2ban-client status' and
+    'fail2ban-client status <jail>' - so every existing caller that
+    doesn't know about modes yet keeps working identically."""
+    cmds = Fail2banCommands()
+    assert cmds.mode == 'client'
+    assert cmds.status() == 'fail2ban-client status'
+    assert cmds.jail_status('sshd') == 'fail2ban-client status sshd'
+
+
+def test_for_mode_classmethod_equivalent_to_constructor():
+    assert Fail2banCommands.for_mode('client').status() == Fail2banCommands(mode='client').status()
+    assert (Fail2banCommands.for_mode('status-wrapper').status()
+            == Fail2banCommands(mode='status-wrapper').status())
 
 # ===========================================================================
 # _binary_check / binary_verdict — command -v exit-code convention
@@ -472,3 +556,106 @@ def test_collect_confirmed_empty_jail_list_is_distinct_shape_from_parse_failure(
     evidence = collect_fail2ban_config(fake)
     assert evidence.jails == []
     assert _parse_jail_list(evidence.status_sudo.stdout) == []  # confirmed empty, not None
+
+
+# ===========================================================================
+# collect_fail2ban_config with commands=Fail2banCommands(mode='status-wrapper')
+# ===========================================================================
+#
+# These prove the collector actually consults `commands` for command
+# construction rather than building 'fail2ban-client status ...' strings
+# itself anywhere - the real point of Fail2banCommands existing. See
+# project session notes (46.62.147.41): this is the exact production
+# shape - sudoers scoped to /usr/local/bin/fail2ban-status-only, not the
+# raw fail2ban-client binary.
+
+def test_collect_wrapper_mode_uses_bare_wrapper_path_for_top_level_status():
+    """The collector's top-level sudo status call must be exactly the
+    wrapper path with no 'status' argument appended - the client-mode
+    template ('<cmd> status') must not leak into wrapper mode."""
+    status_text = 'Status\n|- Number of jail:\t1\n`- Jail list:\tsshd'
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+            'command -v fail2ban-client': '/usr/bin/fail2ban-client',
+            '/usr/local/bin/fail2ban-status-only': status_text,
+        },
+        exit_codes={
+            'command -v fail2ban-client': 0,
+            '/usr/local/bin/fail2ban-status-only': 0,
+        },
+    )
+    commands = Fail2banCommands(mode='status-wrapper')
+    evidence = collect_fail2ban_config(fake, commands=commands)
+    assert evidence.status_sudo is not None
+    assert evidence.status_sudo.completed is True
+    assert evidence.status_sudo.exit_code == 0
+    assert len(evidence.jails) == 1
+    # the wrapper path was actually invoked, and NOT the client-mode
+    # 'fail2ban-client status' template
+    assert any('/usr/local/bin/fail2ban-status-only' in c for c in fake.calls)
+    assert not any('fail2ban-client status' in c for c in fake.calls
+                   if 'command -v' not in c)
+
+
+def test_collect_wrapper_mode_per_jail_uses_wrapper_plus_bare_jail_name():
+    """Per-jail sudo calls in wrapper mode must be '<wrapper> <jail>',
+    never '<wrapper> status <jail>' - confirmed on the real host that
+    the latter produces exit 255 ('Sorry but the jail 'status' does not
+    exist') since the wrapper already hardcodes 'status' internally."""
+    status_text = ('Status\n|- Number of jail:\t2\n'
+                   '`- Jail list:\tsshd, nginx-auth')
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+            'command -v fail2ban-client': '/usr/bin/fail2ban-client',
+            '/usr/local/bin/fail2ban-status-only sshd':
+                'Status for the jail: sshd\n`- Currently banned:\t0\n`- Total banned:\t1',
+            '/usr/local/bin/fail2ban-status-only nginx-auth':
+                'Status for the jail: nginx-auth\n`- Currently banned:\t2\n`- Total banned:\t5',
+            '/usr/local/bin/fail2ban-status-only': status_text,
+        },
+        exit_codes={
+            'command -v fail2ban-client': 0,
+            '/usr/local/bin/fail2ban-status-only sshd': 0,
+            '/usr/local/bin/fail2ban-status-only nginx-auth': 0,
+            '/usr/local/bin/fail2ban-status-only': 0,
+        },
+    )
+    commands = Fail2banCommands(mode='status-wrapper')
+    evidence = collect_fail2ban_config(fake, commands=commands)
+    assert len(evidence.jails) == 2
+    by_name = {j.name: j for j in evidence.jails}
+    assert by_name['sshd'].status.completed is True
+    assert by_name['sshd'].status.exit_code == 0
+    assert 'Currently banned:\t0' in by_name['sshd'].status.stdout
+    assert by_name['nginx-auth'].status.completed is True
+    assert 'Currently banned:\t2' in by_name['nginx-auth'].status.stdout
+    # confirm the actual calls used the wrapper grammar, never a
+    # 'status <jail>'-style call that would hit the wrapper's own
+    # internal 'status' hardcoding a second time
+    assert any('/usr/local/bin/fail2ban-status-only sshd' in c for c in fake.calls)
+    assert not any('/usr/local/bin/fail2ban-status-only status sshd' in c for c in fake.calls)
+
+
+def test_collect_client_mode_still_default_when_commands_omitted():
+    """Backward-compatibility regression: calling collect_fail2ban_config()
+    exactly as every pre-existing caller does (no `commands` argument at
+    all) must produce identical command strings to before Fail2banCommands
+    existed - 'fail2ban-client status' and 'fail2ban-client status
+    <jail>' - not a wrapper-mode default and not a required argument."""
+    status_text = 'Status\n|- Number of jail:\t1\n`- Jail list:\tsshd'
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+            'command -v fail2ban-client': '/usr/bin/fail2ban-client',
+            'status sshd': 'Status for the jail: sshd\n`- Currently banned:\t0\n`- Total banned:\t0',
+            'fail2ban-client status': status_text,
+        },
+        exit_codes={
+            'command -v fail2ban-client': 0,
+            'status sshd': 0,
+            'fail2ban-client status': 0,
+        },
+    )
+    evidence = collect_fail2ban_config(fake)  # no commands= argument
+    assert evidence.status_sudo.completed is True
+    assert len(evidence.jails) == 1
+    assert any('fail2ban-client status' in c for c in fake.calls)

@@ -184,6 +184,110 @@ class Fail2banEvidence:
 
 
 # ===========================================================================
+# Fail2banCommands - command grammar provider
+# ===========================================================================
+#
+# Different hosts may only permit a specific, narrowly-scoped privileged
+# command through sudo - see this module's docstring and project session
+# notes (46.62.147.41): a production host had sudoers scoped to a custom
+# wrapper (`/usr/local/bin/fail2ban-status-only`) rather than the raw
+# `fail2ban-client` binary, deliberately, to avoid exposing
+# fail2ban-client's other subcommands (unban/set/stop/restart) through
+# sudo on a live production server.
+#
+# The wrapper's own argument grammar is NOT compatible with
+# fail2ban-client's - empirically confirmed on that host:
+#
+#   fail2ban-client status          -> top-level status, all jails
+#   fail2ban-client status <jail>   -> one jail's status
+#
+#   fail2ban-status-only            -> top-level status, all jails
+#   fail2ban-status-only <jail>     -> one jail's status (NO leading
+#                                      "status" argument - the wrapper's
+#                                      own script already hardcodes it;
+#                                      passing "status" as an argument is
+#                                      itself invalid and was confirmed to
+#                                      fail with exit 255, "Sorry but the
+#                                      jail 'status' does not exist")
+#
+# So it is not suffient to make the BINARY configurable while keeping a
+# shared "<binary> status [jail]" template - the two backends have
+# genuinely different argument grammars, not just different paths. This
+# class exists specifically to isolate that difference: it knows how to
+# build the two operations this collector needs (status(), jail_status())
+# for a given mode, and nothing else in this module needs to know the
+# grammar difference exists.
+#
+# No SSH/sudo knowledge lives here - SSHExecutor.sudo() stays a plain
+# `sudo(command)` with zero fail2ban-specific behavior (see project
+# session notes on why: SSHExecutor should not accumulate one
+# per-security-tool method - sudo_fail2ban(), sudo_ufw(), etc. - as more
+# collectors need this same command-grammar-selection capability).
+#
+# No auto-fallback between modes - if 'client' mode is selected but sudo
+# actually only permits the wrapper, that's an explicit ACCESS_DENIED at
+# the semantic layer (see audit_fail2ban()'s _fail2ban_status_verdict()),
+# not something this collector silently works around by trying the other
+# mode. Auto-probing between privileged commands would make audit
+# behavior unpredictable and is deliberately out of scope - see project
+# session notes on why this was rejected.
+
+FAIL2BAN_MODES = ('client', 'status-wrapper')
+_DEFAULT_STATUS_WRAPPER_PATH = '/usr/local/bin/fail2ban-status-only'
+
+
+class Fail2banCommands:
+    """Builds the two fail2ban command strings this collector needs -
+    status() and jail_status(jail) - for a given mode. Pure string
+    construction, no I/O.
+
+    mode='client' (the default - preserves this module's pre-existing
+    behavior exactly, see this class's for_mode() and the project's
+    backward-compatibility requirement for this cycle):
+        status()          -> 'fail2ban-client status'
+        jail_status('x')  -> 'fail2ban-client status x'
+
+    mode='status-wrapper': for hosts where sudoers is deliberately
+    scoped to a narrow status-only wrapper script rather than the raw
+    fail2ban-client binary (see this module's "Fail2banCommands" section
+    docstring for why, and the empirically-confirmed argument grammar
+    this maps to):
+        status()          -> '<wrapper_path>'
+        jail_status('x')  -> '<wrapper_path> x'
+
+    wrapper_path defaults to /usr/local/bin/fail2ban-status-only (the
+    path used during this project's own verification) but can be
+    overridden - the wrapper script itself is host-installed
+    infrastructure this class only needs the path to, not something it
+    creates or manages.
+    """
+
+    def __init__(self, mode: str = 'client', wrapper_path: str = _DEFAULT_STATUS_WRAPPER_PATH):
+        if mode not in FAIL2BAN_MODES:
+            raise ValueError(f'unknown fail2ban command mode {mode!r} - must be one of {FAIL2BAN_MODES}')
+        self.mode = mode
+        self.wrapper_path = wrapper_path
+
+    @classmethod
+    def for_mode(cls, mode: str = 'client', wrapper_path: str = _DEFAULT_STATUS_WRAPPER_PATH) -> Fail2banCommands:
+        """Same as the constructor - exists as an explicit, self-
+        documenting call site for consumers (collect_fail2ban_config(),
+        audit_fail2ban()) rather than a bare Fail2banCommands(...)."""
+        return cls(mode=mode, wrapper_path=wrapper_path)
+
+    def status(self) -> str:
+        if self.mode == 'client':
+            return 'fail2ban-client status'
+        return self.wrapper_path
+
+    def jail_status(self, jail: str) -> str:
+        quoted = shlex.quote(jail)
+        if self.mode == 'client':
+            return f'fail2ban-client status {quoted}'
+        return f'{self.wrapper_path} {quoted}'
+
+
+# ===========================================================================
 # Exit-code recovery over ssh.sudo()
 # ===========================================================================
 
@@ -297,11 +401,30 @@ def _parse_jail_list(stdout: str) -> list[str] | None:
 # Top-level collector
 # ===========================================================================
 
-def collect_fail2ban_config(ssh: SSHExecutor, timeout: int = 20) -> Fail2banEvidence:
+def collect_fail2ban_config(ssh: SSHExecutor, timeout: int = 20,
+                             commands: Fail2banCommands | None = None) -> Fail2banEvidence:
     """Collects all fail2ban evidence from one host: binary presence,
     unprivileged status (diagnostic only), sudo status (authoritative),
     and per-jail sudo status for every jail successfully parsed out of
     the sudo status output.
+
+    `commands` selects the command grammar used for the status/jail_status
+    calls - see Fail2banCommands for the full contract and why this
+    exists (a host's sudoers may be scoped to a narrow status-only
+    wrapper rather than the raw fail2ban-client binary - see project
+    session notes, 46.62.147.41). Defaults to Fail2banCommands() (mode
+    ='client'), which reproduces this module's pre-existing behavior
+    exactly - existing callers that don't pass `commands` see no change.
+
+    The binary presence check (_binary_check(), `command -v
+    fail2ban-client`) is deliberately NOT affected by `commands` - it
+    always checks for the real fail2ban-client binary regardless of
+    mode, since binary presence is a fact about the host's fail2ban
+    installation, not about which privileged command grammar Netaudit
+    has been configured to use to query it. A status-wrapper mode host
+    still needs fail2ban-client itself installed (the wrapper execs it
+    internally) - this check still answers the right question for both
+    modes.
 
     Short-circuits (status_unpriv is still collected for diagnostic
     value, but status_sudo stays None and no per-jail calls are made)
@@ -317,9 +440,12 @@ def collect_fail2ban_config(ssh: SSHExecutor, timeout: int = 20) -> Fail2banEvid
     actually exists, so it would be wrong to skip the one check that
     might still succeed and give a real answer.
     """
+    if commands is None:
+        commands = Fail2banCommands()
+
     binary_check = _binary_check(ssh, timeout=timeout)
 
-    unpriv_cmd = 'fail2ban-client status'
+    unpriv_cmd = commands.status()
     unpriv_stdout, unpriv_code = run_command_with_exit_code(ssh, unpriv_cmd, timeout=timeout)
     status_unpriv = CommandResult(completed=unpriv_code is not None, exit_code=unpriv_code,
                                    stdout=unpriv_stdout, command=unpriv_cmd)
@@ -328,14 +454,14 @@ def collect_fail2ban_config(ssh: SSHExecutor, timeout: int = 20) -> Fail2banEvid
         return Fail2banEvidence(binary_check=binary_check, status_unpriv=status_unpriv,
                                  status_sudo=None, jails=[])
 
-    status_sudo = _run_sudo_with_exit_code(ssh, 'fail2ban-client status', timeout=timeout)
+    status_sudo = _run_sudo_with_exit_code(ssh, commands.status(), timeout=timeout)
 
     jails: list[JailEvidence] = []
     if status_sudo.completed and status_sudo.exit_code == 0:
         jail_names = _parse_jail_list(status_sudo.stdout)
         if jail_names:
             for name in jail_names:
-                jail_cmd = f'fail2ban-client status {shlex.quote(name)}'
+                jail_cmd = commands.jail_status(name)
                 jail_status = _run_sudo_with_exit_code(ssh, jail_cmd, timeout=timeout)
                 jails.append(JailEvidence(name=name, status=jail_status))
 

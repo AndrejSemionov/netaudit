@@ -231,12 +231,25 @@ def _fail2ban_jail_verdict(jail_evidence) -> tuple[str, dict]:
     return 'CONFIRMED', {'currently_banned': currently_banned, 'total_banned': total_banned}
 
 
-def audit_fail2ban(ssh: SSHExecutor) -> dict:
+def audit_fail2ban(ssh: SSHExecutor, fail2ban_mode: str = 'client') -> dict:
     """Findings-producing fail2ban audit. Thin wrapper over
     fail2ban_config.collect_fail2ban_config() (raw evidence collection)
     and the verdict functions above - the same collector/semantic-layer
     split firewall_config.py/audit_firewall() and sql_config.py/
     audit_sql() established.
+
+    fail2ban_mode selects the command grammar collect_fail2ban_config()
+    uses for its privileged status calls - see
+    fail2ban_config.Fail2banCommands for the full contract. Defaults to
+    'client' ('fail2ban-client status'/'fail2ban-client status <jail>'),
+    which reproduces this function's pre-existing behavior exactly - no
+    change for any existing caller that doesn't pass this argument.
+    'status-wrapper' targets hosts whose sudoers is deliberately scoped
+    to a narrow status-only wrapper script rather than the raw
+    fail2ban-client binary (see project session notes, 46.62.147.41, for
+    why a host might be configured this way - avoiding sudo access to
+    fail2ban-client's other subcommands like unban/set/stop on a
+    production server).
 
     UNKNOWN is never reported as 'ok', and a jail whose ban counts
     couldn't be confirmed is never silently counted as zero. This is
@@ -256,9 +269,9 @@ def audit_fail2ban(ssh: SSHExecutor) -> dict:
     updating - only the CONTENT of jails/findings changes to reflect
     the corrected evidence handling.
     """
-    from ..fail2ban_config import collect_fail2ban_config
+    from ..fail2ban_config import Fail2banCommands, collect_fail2ban_config
 
-    evidence = collect_fail2ban_config(ssh)
+    evidence = collect_fail2ban_config(ssh, commands=Fail2banCommands(mode=fail2ban_mode))
     findings = []
 
     binary_verdict, binary_ctx = _fail2ban_binary_verdict(evidence)
@@ -975,11 +988,14 @@ def audit_ssh_hardening(ssh: SSHExecutor) -> dict:
         {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
         {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
+        {'name': 'fail2ban_mode', 'type': 'select', 'label': 'fail2ban status command',
+         'options': ['client', 'status-wrapper'], 'default': 'client'},
     ],
     required_tools=[],
     description='Full server security audit over SSH: nginx, fail2ban, firewall, MySQL, SSH hardening. Read-only.',
 )
-def check_server_audit(host='', user='root', port=22, key_path='', password='') -> dict:
+def check_server_audit(host='', user='root', port=22, key_path='', password='',
+                        fail2ban_mode='client') -> dict:
     if paramiko is None:
         return {'error': 'paramiko not installed'}
     if not host:
@@ -994,7 +1010,7 @@ def check_server_audit(host='', user='root', port=22, key_path='', password='') 
     try:
         sections = {
             'nginx': audit_nginx(ssh),
-            'fail2ban': audit_fail2ban(ssh),
+            'fail2ban': audit_fail2ban(ssh, fail2ban_mode=fail2ban_mode),
             'firewall': audit_firewall(ssh),
             'sql': audit_sql(ssh),
             'ssh': audit_ssh_hardening(ssh),
