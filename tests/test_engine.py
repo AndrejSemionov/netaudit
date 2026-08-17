@@ -220,42 +220,53 @@ def test_multi_one_instance_failing_does_not_block_others(temp_check, isolated_d
 
 
 def test_multi_instances_run_in_parallel_not_sequentially(temp_check, isolated_db):
-    """Two instances of the same check with the same sleep duration should
-    take close to ONE sleep's worth of wall-clock time, not two - proving
-    they run concurrently rather than via a plain sequential for-loop.
+    """Two instances of the same check must have their actual execution
+    windows (spec.func() call, not the surrounding worker/bookkeeping code)
+    overlap in time - proving they run concurrently rather than via a plain
+    sequential for-loop.
 
-    Uses the actual measured per-instance elapsed time (from the result,
-    not the nominal sleep= value) as its own baseline, so this holds
-    regardless of how fast or slow the machine actually is - a fixed-
-    seconds threshold is fundamentally unreliable under full-suite load
-    (observed on a real VM: an isolated run of a similarly-shaped test
-    clears any reasonable fixed margin, but the same test under full-suite
-    thread/scheduling pressure can occasionally take 3x+ longer in
-    absolute terms while the parallel-vs-sequential RATIO stays correct).
+    Measures start/end timestamps INSIDE the check function itself, via a
+    thread-safe shared list, rather than timing run_checks_multi() as a
+    black box from the outside. This is deliberately immune to overhead
+    from anything other than the check's own execution - including
+    timing.record()'s SQLite write, which runs AFTER a thread's elapsed
+    time is captured but BEFORE the thread actually finishes (join()
+    waits for it too). That distinction matters: a real VM run showed
+    wall-clock time significantly exceeding even the sequential-sum of
+    the two checks' own elapsed times, which turned out to be occasional
+    slow SQLite writes inside timing.record() padding the outer
+    wall-clock measurement without changing the checks' own timing at
+    all - a black-box wall-clock assertion conflates "did the checks run
+    in parallel" with "was every side-effect around them also fast,"
+    which is a different (and unrelated) question this test isn't meant
+    to answer.
     """
+    lock = threading.Lock()
+    windows = []  # list of (start, end) tuples, one per instance
+
     def slow_check(host=''):
+        t0 = time.monotonic()
         time.sleep(0.2)
+        t1 = time.monotonic()
+        with lock:
+            windows.append((t0, t1))
         return {'ok': True}
 
     temp_check('__test_multi_parallel__', slow_check)
-    start = time.monotonic()
-    result = run_checks_multi([
+    run_checks_multi([
         {'id': '__test_multi_parallel__', 'instances': [{'host': 'a'}, {'host': 'b'}]},
     ])
-    wall_clock = time.monotonic() - start
 
-    per_instance = result['timing']['__test_multi_parallel__']  # {'a': elapsed, 'b': elapsed}
-    max_instance = max(per_instance.values())
-    sum_instances = sum(per_instance.values())
+    assert len(windows) == 2, 'both instances should have recorded a window'
+    (start_a, end_a), (start_b, end_b) = windows
 
-    # parallel wall-clock should sit close to the slower of the two instances,
-    # not anywhere near their sum - "closer to max than to sum" holds under
-    # any machine speed, since both max_instance and sum_instances scale with
-    # however slow the sleeps actually ran
-    assert wall_clock < (max_instance + sum_instances) / 2, (
-        f'expected wall-clock ({wall_clock:.2f}s) close to the slower instance '
-        f'({max_instance:.2f}s), not the sequential sum ({sum_instances:.2f}s) - '
-        f'looks like the two instances ran one after another instead of in parallel'
+    # true parallel execution means the two [start, end] windows overlap -
+    # sequential execution would have one window's start be >= the other's end
+    overlap = min(end_a, end_b) - max(start_a, start_b)
+    assert overlap > 0, (
+        f'expected the two instances\' execution windows to overlap '
+        f'(window a: {start_a:.3f}-{end_a:.3f}, window b: {start_b:.3f}-{end_b:.3f}) - '
+        f'looks like they ran sequentially instead of in parallel'
     )
 
 

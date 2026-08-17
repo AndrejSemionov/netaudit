@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 import queue
+import threading
 
 import pytest
 
@@ -170,30 +171,37 @@ def test_multi_host_final_report_has_by_host_shape(temp_check, isolated_db):
 
 
 def test_multi_host_actually_runs_in_parallel(temp_check, isolated_db):
-    """Uses the actual measured per-instance elapsed time (from check_done
-    events, not the nominal sleep= value) as its own baseline, so this holds
-    regardless of machine speed - see the matching test in test_engine.py
-    for the full rationale (a fixed-seconds threshold proved unreliable
-    under full-suite load on a real VM)."""
+    """Measures start/end timestamps INSIDE the check function itself (via a
+    thread-safe shared list) to verify the two instances' execution windows
+    actually overlap - see the matching test in test_engine.py for the full
+    rationale (a black-box wall-clock/elapsed comparison can be polluted by
+    slow bookkeeping around the check, like timing.record()'s SQLite write
+    occasionally taking a while under load on a real VM - that's unrelated
+    to whether the checks themselves ran in parallel, which is what this
+    test is actually meant to verify)."""
+    lock = threading.Lock()
+    windows = []
+
     def slow(host=''):
+        t0 = time.monotonic()
         time.sleep(0.2)
+        t1 = time.monotonic()
+        with lock:
+            windows.append((t0, t1))
         return {'ok': True}
 
     temp_check('__test_st_parallel__', slow)
-    start = time.monotonic()
-    events = _run_and_drain([
+    _run_and_drain([
         {'id': '__test_st_parallel__', 'instances': [{'host': 'a'}, {'host': 'b'}]},
     ])
-    wall_clock = time.monotonic() - start
 
-    dones = [e for e in events if e['type'] == 'check_done' and e['id'] == '__test_st_parallel__']
-    elapsed_values = [d['elapsed'] for d in dones]
-    max_instance = max(elapsed_values)
-    sum_instances = sum(elapsed_values)
-
-    assert wall_clock < (max_instance + sum_instances) / 2, (
-        f'expected wall-clock ({wall_clock:.2f}s) close to the slower instance '
-        f'({max_instance:.2f}s), not the sequential sum ({sum_instances:.2f}s)'
+    assert len(windows) == 2, 'both instances should have recorded a window'
+    (start_a, end_a), (start_b, end_b) = windows
+    overlap = min(end_a, end_b) - max(start_a, start_b)
+    assert overlap > 0, (
+        f'expected the two instances\' execution windows to overlap '
+        f'(window a: {start_a:.3f}-{end_a:.3f}, window b: {start_b:.3f}-{end_b:.3f}) - '
+        f'looks like they ran sequentially instead of in parallel'
     )
 
 
