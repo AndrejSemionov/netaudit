@@ -28,13 +28,21 @@ _local = threading.local()
 
 
 def _conn() -> sqlite3.Connection:
-    """Per-thread connection (SQLite doesn't like being shared across threads)."""
+    """Per-thread connection (SQLite doesn't like being shared across threads).
+
+    timeout=10 (vs sqlite3's own 5s default) makes a connection retry/wait on
+    a locked database instead of raising immediately - needed since
+    run_instances() (multi-host) opens several of these concurrently from
+    worker threads, and the default margin isn't always enough under load
+    (observed empirically: passes most of the time, but not reliably across
+    Python versions/CI runners - see e.g. 3.12 CI and the VM on 3.14)."""
     if not hasattr(_local, 'conn'):
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(DB_PATH), timeout=10)
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA journal_mode=WAL')  # safer under concurrent reads
         conn.execute('PRAGMA foreign_keys=ON')
+        conn.execute('PRAGMA busy_timeout=10000')  # ms - retry on SQLITE_BUSY instead of raising immediately
         _local.conn = conn
         _migrate(conn)
     return _local.conn
