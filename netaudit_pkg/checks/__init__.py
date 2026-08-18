@@ -19,3 +19,4 @@ from . import nginx_hardening  # noqa: F401
 from . import ssh_hardening    # noqa: F401
 from . import kernel_hardening  # noqa: F401
 from . import log_discovery_audit  # noqa: F401
+from . import ssh_auth_audit  # noqa: F401
