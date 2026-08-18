@@ -20,7 +20,7 @@ Test case table (agreed, do not reorder/skip):
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from netaudit_pkg.ssh_auth_parser import AuthMethod, SSHAuthEventType, parse_ssh_auth_line
 
@@ -93,10 +93,40 @@ def test_syslog_timestamp_with_reference_year():
     event = parse_ssh_auth_line(line, reference_year=2026)
 
     assert event.event_type == SSHAuthEventType.ACCEPTED
-    assert event.timestamp == datetime(2026, 8, 17, 19, 52, 31)
+    assert event.timestamp == datetime(2026, 8, 17, 19, 52, 31, tzinfo=timezone.utc)
     assert event.username == 'netaudit'
     assert event.source_ip == '192.168.88.12'
     assert event.pid == 2360
+
+
+def test_syslog_timestamp_is_timezone_aware_utc():
+    """Regression test for a real E2E bug (project session notes,
+    2026-08-18): a syslog-format timestamp previously parsed as naive,
+    while an ISO8601 timestamp parsed as aware — comparing the two in
+    Detection's window filtering raised TypeError ('can't compare
+    offset-naive and offset-aware datetimes'). This is the documented
+    NetAudit parser policy invariant: every non-None SSHAuthEvent.timestamp
+    is timezone-aware, with syslog-format lines (which carry no timezone
+    of their own) interpreted as UTC."""
+    line = 'Aug 17 19:52:31 server sshd-session[2360]: Accepted password for netaudit from 192.168.88.12 port 35530 ssh2'
+    event = parse_ssh_auth_line(line, reference_year=2026)
+
+    assert event.timestamp.tzinfo is not None
+    assert event.timestamp.utcoffset() == timedelta(0)
+
+
+def test_iso8601_and_syslog_timestamps_are_mutually_comparable():
+    """Regression test: an ISO8601 event and a syslog event must be
+    directly comparable (both aware) without raising TypeError — this
+    is exactly the comparison Detection's apply_window() performs."""
+    iso_line = '2026-08-18T08:23:50.017004+00:00 server sshd-session[1355]: Accepted password for netaudit from 192.168.88.12 port 37520 ssh2'
+    syslog_line = 'Aug 17 19:52:31 server sshd-session[2360]: Accepted password for netaudit from 192.168.88.12 port 35530 ssh2'
+
+    iso_event = parse_ssh_auth_line(iso_line, reference_year=2026)
+    syslog_event = parse_ssh_auth_line(syslog_line, reference_year=2026)
+
+    # must not raise TypeError
+    assert syslog_event.timestamp <= iso_event.timestamp
 
 
 def test_syslog_timestamp_without_reference_year_is_none():

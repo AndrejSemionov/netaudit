@@ -36,6 +36,19 @@ Scope (per Analysis Contract v3 / SSHAuthEvent v1 freeze)
   this module never guesses one; a reference_year must be supplied by
   the caller (see parse_ssh_auth_line()'s signature) for syslog-format
   lines, or the resulting timestamp is None rather than an assumed year.
+- INVARIANT (added after a real E2E bug, see project session notes):
+  when SSHAuthEvent.timestamp is not None, it is ALWAYS timezone-aware.
+  ISO8601 timestamps keep their own explicit offset. Syslog-format
+  timestamps carry no timezone of their own — this module interprets
+  them as UTC, which is a documented NetAudit parser policy, not an
+  objective fact recovered from the log line (the line itself contains
+  no timezone information at all). Downstream consumers (Detection,
+  Findings) are entitled to assume every non-None timestamp is aware
+  and comparable to any other aware datetime — mixing an aware
+  ISO8601 event with a naive syslog event in the same comparison
+  previously raised TypeError inside Detection's window filtering; this
+  is why the invariant is enforced here, at the single place all
+  timestamps are constructed, rather than patched downstream.
 - A line whose timestamp cannot be parsed at all (malformed, or a format
   this module doesn't recognize) yields timestamp=None — never
   datetime.now() or any other fabricated stand-in. A missing timestamp
@@ -164,6 +177,7 @@ def _parse_timestamp(line: str, reference_year: int | None) -> datetime | None:
             return datetime(
                 reference_year, month, int(g['day']),
                 int(g['hour']), int(g['minute']), int(g['second']),
+                tzinfo=timezone.utc,
             )
         except ValueError:
             return None
