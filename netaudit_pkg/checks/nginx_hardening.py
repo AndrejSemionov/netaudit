@@ -878,6 +878,114 @@ def _build_tier2_components(cfg_v2: NginxConfigV2) -> list[Component]:
 
 
 # ===========================================================================
+# Tier-2 Finding generation (project session notes, 2026-08-18): fixes a
+# confirmed Control -> Finding contract violation. Every Tier-2 control
+# sets Component.finding_id on FAIL, but before this fix no code anywhere
+# in the project ever created a Finding with a matching id for any of the
+# 7 Tier-2 controls (Tier-1's finding_id values all resolve to a real
+# audit_nginx() or _build_findings() finding; Tier-2's did not, for any
+# of the seven — confirmed by exhaustive grep, see
+# test_nginx_hardening.py's regression tests).
+#
+# Each control's Finding contract (severity, title, recommendation) was
+# individually reviewed against an existing severity precedent where one
+# exists — NOT copied mechanically across controls. See each _TIER2_*
+# constant's inline comment for that control's specific rationale.
+#
+# detail and evidence are both populated from Component.reason for every
+# one of the 7 controls — reason already contains the full, per-server
+# (or per-listen-group, for NGX-EXP-003) aggregated evidence text
+# _aggregate_server_verdicts() built, so no control required re-parsing
+# NginxConfigV2 to produce its Finding. detail answers "why did this
+# FAIL"; evidence answers "what was observed" — they happen to share the
+# same source text for Tier-2 today because no more granular evidence
+# source exists yet (this is config state, not a log line), not because
+# the two concepts are considered identical in general.
+# ===========================================================================
+
+_TIER2_FINDING_SPECS: dict[str, dict] = {
+    'NGX-HDR-004': {
+        'severity': 'medium',  # matches existing HSTS finding (audit_nginx(), 'medium') — comparable
+                                 # broad-protection-class header, weighted equal to HSTS in scoring (0.055 each)
+        'title': 'Content-Security-Policy is missing or not restrictive',
+        'recommendation': "Add a Content-Security-Policy header with at least one restrictive "
+                           "fetch-directive (e.g. default-src 'self').",
+    },
+    'NGX-HDR-005': {
+        'severity': 'low',  # narrow-scope protection (referrer leakage), same class as existing
+                              # X-Frame-Options/X-Content-Type-Options ('low'), lowest Tier-2 header weight (0.02)
+        'title': 'Referrer-Policy is missing or invalid',
+        'recommendation': 'Add a Referrer-Policy header with a valid W3C token '
+                           '(e.g. strict-origin-when-cross-origin).',
+    },
+    'NGX-HDR-006': {
+        'severity': 'low',  # same reasoning/weight class as NGX-HDR-005
+        'title': 'Permissions-Policy is missing or invalid',
+        'recommendation': 'Add a Permissions-Policy header restricting at least one browser '
+                           'feature (e.g. geolocation=()).',
+    },
+    'NGX-CONF-003': {
+        'severity': 'medium',  # comparable to existing autoindex/server_tokens findings ('medium') —
+                                 # explicit 0 is a documented (nginx.org), direct resource-exhaustion exposure
+        'title': 'client_max_body_size is unrestricted or invalid',
+        'recommendation': 'Set client_max_body_size to an explicit, bounded value appropriate '
+                           'for your application (e.g. 10m).',
+    },
+    'NGX-EXP-002': {
+        'severity': 'medium',  # no direct existing-finding precedent (genuinely new check) — reasoned
+                                 # from first principles: HTTPS exists and is paired but not enforced;
+                                 # less severe than NGX-EXP-001 (no TLS at all) since the secure endpoint DOES exist
+        'title': 'HTTP traffic is not redirected to HTTPS',
+        'recommendation': 'Add a `return 301 https://$host$request_uri;` (or equivalent) '
+                           'redirect on the HTTP server block.',
+    },
+    'NGX-EXP-003': {
+        'severity': 'low',  # narrow-scope, config-hygiene finding — docs note the low weight reflects
+                              # rarity of applicability, not reduced severity when it fires, but the
+                              # per-occurrence consequence is situational, not a direct exposure
+        'title': 'Ambiguous default server for shared address:port',
+        'recommendation': "Add the `default_server` parameter to the intended server block's "
+                           "`listen` directive for this address:port pair.",
+    },
+    'NGX-TLS-004': {
+        'severity': 'high',  # direct analogue of existing NGX-TLS-001 ('high', "outdated TLS 1.0/1.1
+                               # is enabled") — both are proven cryptographic transport weaknesses,
+                               # the most severe class this catalogue checks
+        'title': 'Weak or forbidden cipher suite explicitly enabled',
+        'recommendation': 'Remove the forbidden cipher class from ssl_ciphers, or set an explicit '
+                           '@SECLEVEL=2 (or higher) policy.',
+    },
+}
+
+
+def build_tier2_findings(components: list[Component]) -> list[dict]:
+    """Turns Tier-2 Components with a set finding_id into Finding dicts.
+    Reads only what each Component already computed (finding_id, reason)
+    — does not re-inspect NginxConfigV2, does not re-derive PASS/FAIL,
+    does not add any new verdict logic. A Component with finding_id=None
+    (PASS, or applicable=False or which reads UNKNOWN/N/A) produces no
+    Finding — this function trusts the control's own applicability
+    decision completely, per the same "Detection does not apply severity
+    thresholds — that's the Findings layer's job, and Findings does not
+    re-derive facts" boundary already established for SSH Logs Audit.
+    """
+    findings: list[dict] = []
+    for component in components:
+        finding_id = component.finding_id
+        if not finding_id:
+            continue
+        spec = _TIER2_FINDING_SPECS.get(finding_id)
+        if spec is None:
+            continue
+        reason = component.reason or ''
+        findings.append(_finding(
+            spec['severity'], spec['title'], reason,
+            id=finding_id, evidence=reason, recommendation=spec['recommendation'],
+        ))
+    return findings
+
+
+# ===========================================================================
 # Internal reusable API
 # ===========================================================================
 
@@ -939,7 +1047,17 @@ def audit_nginx_hardening(ssh: SSHExecutor) -> dict:
 
     components = _build_components(cfg) + _build_tier2_components(cfg_v2)
     hardening = weighted_score(components)
-    findings = _build_findings(cfg)
+    # Tier-1's two self-generated findings (NGX-TLS-002, NGX-EXP-001) plus
+    # Tier-2's seven, now that the Control -> Finding contract violation
+    # (project session notes, 2026-08-18) is fixed for all 7 Tier-2
+    # controls — see build_tier2_findings()'s docstring. Tier-1's other
+    # seven findings remain, by original design, the caller's
+    # responsibility to fetch from audit_nginx() separately (this
+    # function's own docstring, "Deliberately does not call audit_nginx()")
+    # — that boundary is unchanged by this fix, which only closes the gap
+    # where Tier-2 controls had no finding source AT ALL, not even an
+    # external one to defer to.
+    findings = _build_findings(cfg) + build_tier2_findings(components)
 
     return {
         'installed': True,

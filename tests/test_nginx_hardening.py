@@ -65,6 +65,23 @@ server {
 }
 """
 
+# Tier-2 controls FAIL here (no add_header at all -> CSP/Referrer-Policy/
+# Permissions-Policy all FAIL; no HTTP server to pair for a redirect ->
+# NGX-EXP-002 is UNKNOWN, not exercised by this fixture) while Tier-1
+# stays fully hardened, isolating the Tier-2 finding_id/Finding link this
+# regression test checks from Tier-1's already-covered behavior.
+NGINX_T_TIER2_FAILING_HEADERS = """\
+http {
+    server {
+        listen 443 ssl;
+        ssl_certificate /etc/ssl/certs/example.pem;
+        ssl_protocols TLSv1.3;
+        server_tokens off;
+        server_name example.com;
+    }
+}
+"""
+
 
 def _ssh_responses(conf: str, *, installed=True) -> dict:
     if not installed:
@@ -267,3 +284,76 @@ def test_check_nginx_hardening_registered_as_hardening_category():
     spec = registry.get('nginx_hardening')
     assert spec is not None
     assert spec.category == 'hardening'
+
+
+# ===========================================================================
+# Regression: Control -> Finding contract for Tier-2 components
+# (project session notes, 2026-08-18, live E2E on 46.62.147.41): a Tier-2
+# component that FAILs (applicable=True, score < max, finding_id set) must
+# have a matching Finding in the returned findings list explaining WHY it
+# scored 0 - not just a numeric score drop with no explanatory text. This
+# was violated on HEAD before this fix: NGX-HDR-004/005/006, NGX-TLS-004,
+# NGX-CONF-003, NGX-EXP-002, NGX-EXP-003 all set finding_id on FAIL, but
+# no code anywhere in the project ever created a Finding with a matching
+# id for any of them (confirmed by grep - Tier-1's finding_id values all
+# resolve to a real id='...' finding in either server_security.audit_nginx()
+# or this module's own _build_findings(); Tier-2's did not, for any of the
+# seven). Component.finding_id -> Finding is a general contract this
+# module documents (scoring.py's own Component docstring), not something
+# specific to Tier-1's original two controls - a Tier-2 component that
+# sets finding_id must satisfy the same contract Tier-1 already does.
+# ===========================================================================
+
+def test_tier2_failing_components_have_matching_findings(fake_ssh):
+    fake_ssh.responses = _ssh_responses(NGINX_T_TIER2_FAILING_HEADERS)
+    result = audit_nginx_hardening(fake_ssh)
+
+    finding_ids = {f.get('id') for f in result['findings'] if f.get('id')}
+    components = result['hardening']['components']
+
+    # Tier-1 finding_id values are intentionally NOT produced by
+    # audit_nginx_hardening() itself — they come from audit_nginx()
+    # (server_security.py), a separate function this check deliberately
+    # does not call (test_audit_nginx_hardening_does_not_call_audit_nginx_findings
+    # above pins that down). Scoping this regression test to Tier-2 ids
+    # only keeps it from re-litigating that already-covered, intentional
+    # behavior.
+    tier2_ids = {'NGX-TLS-004', 'NGX-HDR-004', 'NGX-HDR-005', 'NGX-HDR-006',
+                 'NGX-CONF-003', 'NGX-EXP-002', 'NGX-EXP-003'}
+
+    failing_tier2_components = [
+        c for c in components
+        if c.get('applicable', True) and c['score'] < c['max']
+        and c.get('finding_id') in tier2_ids
+    ]
+
+    # Sanity check on the fixture itself: this test is only meaningful if
+    # it actually exercises at least one Tier-2 FAIL — if the fixture
+    # stops producing any, the test would trivially "pass" without
+    # checking anything, which is worse than not having it at all.
+    assert failing_tier2_components, (
+        'fixture NGINX_T_TIER2_FAILING_HEADERS produced no failing, applicable, '
+        'Tier-2 finding_id-bearing component — this test needs at least one to be meaningful'
+    )
+
+    missing = [c['finding_id'] for c in failing_tier2_components if c['finding_id'] not in finding_ids]
+    assert not missing, (
+        f'Tier-2 component(s) with finding_id {missing} scored below max but no Finding with a '
+        f'matching id exists in result["findings"] — Control -> Finding contract violated '
+        f'(scoring.py Component docstring: finding_id "explains why it scored 0/100")'
+    )
+
+
+def test_tier2_specific_finding_ids_present_when_failing(fake_ssh):
+    """More specific than the generic contract check above — pins down
+    that THIS fixture's known-FAIL controls (CSP, Referrer-Policy,
+    Permissions-Policy all absent; server_tokens off but no add_header at
+    all) produce exactly the finding ids we expect, not just "some"
+    finding satisfying the generic contract."""
+    fake_ssh.responses = _ssh_responses(NGINX_T_TIER2_FAILING_HEADERS)
+    result = audit_nginx_hardening(fake_ssh)
+
+    finding_ids = {f.get('id') for f in result['findings'] if f.get('id')}
+
+    for expected_id in ('NGX-HDR-004', 'NGX-HDR-005', 'NGX-HDR-006'):
+        assert expected_id in finding_ids, f'{expected_id} (CSP/Referrer-Policy/Permissions-Policy) should FAIL and produce a Finding'
