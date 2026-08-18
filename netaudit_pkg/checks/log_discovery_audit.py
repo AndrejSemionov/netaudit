@@ -401,18 +401,44 @@ def build_findings(report: LogDiscoveryReport) -> list[dict]:
             'info', 'no nginx logs found', 'nginx may not be installed, or /var/log/nginx is empty',
             check='log_discovery',
         ))
-    else:
+    elif active_nginx:
         findings.append(_finding(
             'ok', f'{len(active_nginx)} active nginx log file(s) found',
             f'{report.nginx_rotated_count} rotated/archived file(s) excluded from findings',
             check='log_discovery',
         ))
-        for decoy in decoy_nginx:
-            findings.append(_finding(
-                'info', f'{_source_label(decoy)} is an unused default log (vhost-based logging in use)',
-                'this is expected with per-vhost nginx logging config — the real traffic goes to a differently-named file',
-                check='log_discovery',
-            ))
+    elif report.nginx_rotated_count > 0:
+        # Zero current files carry data, but rotated archives exist — this
+        # is the confirmed real state on 46.62.147.41 immediately after a
+        # logrotate cycle (project session notes, live VM verification,
+        # 2026-08-18): andreykapro_access.log/andreykapro_error.log were
+        # both size=0 with an mtime matching a recent rotation, while 89
+        # rotated archives were present. A naive "0 active" alone reads as
+        # an alarm; the presence of rotation history is strong evidence
+        # this is a normal post-rotation gap, not a logging outage.
+        findings.append(_finding(
+            'info', 'Current nginx log files are empty, likely just after log rotation',
+            f'0 active current log file(s), {report.nginx_rotated_count} rotated/archived file(s) present — '
+            'verify nginx continues writing to the current log files after rotation if this persists',
+            check='log_discovery',
+        ))
+    else:
+        # Zero current files AND zero rotation history — no evidence nginx
+        # has ever logged here, or something is actively broken. This is
+        # the one case in the matrix that warrants an actual flag.
+        findings.append(_finding(
+            'medium', 'No active nginx logs and no rotation history found',
+            'neither current nor rotated nginx log files show any data — verify nginx logging is configured '
+            'and the service is actually writing logs',
+            check='log_discovery',
+        ))
+
+    for decoy in decoy_nginx:
+        findings.append(_finding(
+            'info', f'{_source_label(decoy)} is an unused default log (vhost-based logging in use)',
+            'this is expected with per-vhost nginx logging config — the real traffic goes to a differently-named file',
+            check='log_discovery',
+        ))
 
     if report.journal.available:
         detail = f'{report.journal.disk_usage_raw} on disk' if report.journal.disk_usage_raw else ''

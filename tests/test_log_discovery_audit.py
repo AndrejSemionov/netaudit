@@ -361,3 +361,77 @@ def test_build_findings_nginx_decoy_is_info():
     decoy_findings = [f for f in findings if 'unused default log' in f['title']]
     assert len(decoy_findings) == 1
     assert decoy_findings[0]['severity'] == 'info'
+
+
+# ===========================================================================
+# nginx activity vs rotation matrix — per project session decision
+# (2026-08-18, live VM verification against 46.62.147.41): zero active
+# current files immediately after a real logrotate cycle must not read as
+# an alarm on its own — rotation history is strong evidence this is a
+# normal post-rotation gap. Matrix:
+#   active>0             -> ok, regardless of rotated count
+#   active==0, rotated>0 -> info (likely just rotated)
+#   active==0, rotated==0 -> medium (no evidence nginx ever logged here)
+# ===========================================================================
+
+
+def _nginx_report_with(per_file, rotated_count):
+    """Builds a minimal LogDiscoveryReport with only nginx populated, for
+    isolating build_findings()'s nginx branch from the rest of the report
+    shape."""
+    from netaudit_pkg.checks.log_discovery_audit import JournalInfo, LogDiscoveryReport
+
+    return LogDiscoveryReport(
+        fixed_sources=[], nginx_sources=per_file, nginx_rotated_count=rotated_count,
+        journal=JournalInfo(available=False, disk_usage_bytes=None, disk_usage_raw=None, on_defaults=None),
+        logrotate=[],
+    )
+
+
+def test_zero_active_with_rotated_logs_is_info():
+    """The exact real case from 46.62.147.41: andreykapro_access.log and
+    andreykapro_error.log both size=0 (just rotated), with 89 archived
+    files present."""
+    stale = _file_verdict(
+        _file_evidence('/var/log/nginx/andreykapro_access.log', '0|1|nginx|adm|640', read_exit=1),
+        SourceType.NGINX_LOG,
+    )
+    report = _nginx_report_with([stale], rotated_count=89)
+    findings = build_findings(report)
+
+    nginx_findings = [f for f in findings if 'nginx log' in f['title'].lower()]
+    assert len(nginx_findings) == 1
+    assert nginx_findings[0]['severity'] == 'info'
+    assert 'rotation' in nginx_findings[0]['title'].lower()
+
+
+def test_zero_active_without_rotated_logs_is_medium():
+    """No current data AND no rotation history at all — the one case in
+    the matrix that actually warrants a flag."""
+    stale = _file_verdict(
+        _file_evidence('/var/log/nginx/access.log', '0|1|nginx|adm|640', read_exit=1),
+        SourceType.NGINX_LOG,
+    )
+    report = _nginx_report_with([stale], rotated_count=0)
+    findings = build_findings(report)
+
+    nginx_findings = [f for f in findings if 'nginx log' in f['title'].lower()]
+    assert len(nginx_findings) == 1
+    assert nginx_findings[0]['severity'] == 'medium'
+    assert 'no rotation history' in nginx_findings[0]['title'].lower()
+
+
+def test_active_logs_are_not_flagged():
+    """A currently-active file means 'ok', regardless of how much
+    rotation history exists alongside it — rotation count is irrelevant
+    once there's live data."""
+    active = _file_verdict(
+        _file_evidence('/var/log/nginx/andreykapro_access.log', '14638129|1|www-data|www-data|640', read_exit=1),
+        SourceType.NGINX_LOG,
+    )
+    report = _nginx_report_with([active], rotated_count=89)
+    findings = build_findings(report)
+
+    nginx_findings = [f for f in findings if 'active nginx log' in f['title'].lower()]
+    assert len(nginx_findings) == 1
+    assert nginx_findings[0]['severity'] == 'ok'
