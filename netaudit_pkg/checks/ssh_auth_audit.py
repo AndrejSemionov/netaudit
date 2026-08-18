@@ -127,6 +127,19 @@ def check_ssh_auth_audit(host='', user='root', port=22, key_path='', password=''
         return {'error': f'could not connect: {e}'}
 
     try:
+        # Single reference point for the whole pipeline — see this
+        # module's docstring, "reference_year": every time-dependent
+        # value downstream (parser's reference_year, Detection's
+        # reference_time) must derive from ONE now() call taken here,
+        # not be independently re-queried at each step. Two separate
+        # datetime.now() calls could in principle disagree (however
+        # unlikely in practice) and would violate the same
+        # caller-determines-it-once principle already enforced for
+        # reference_year in ssh_auth_parser.py and reference_time in
+        # ssh_auth_detection.py.
+        reference_time = datetime.now(timezone.utc)
+        reference_year = reference_time.year
+
         # --- Discovery: find auth.log's current available/readable state ---
         discovery_evidence = collect_log_discovery(ssh)
         report = build_report(discovery_evidence)
@@ -162,8 +175,6 @@ def check_ssh_auth_audit(host='', user='root', port=22, key_path='', password=''
         journal_ok = selected_source == 'journal'
         detection_succeeded = file_ok or journal_ok
 
-        reference_year = datetime.now(timezone.utc).year
-
         # --- Parser: raw lines from the single selected source ---
         events = []
         source_stdout = None
@@ -179,7 +190,7 @@ def check_ssh_auth_audit(host='', user='root', port=22, key_path='', password=''
 
         # --- Detection: window + aggregate + signal ---
         context = DetectionContext(
-            reference_time=datetime.now(timezone.utc), window=timedelta(hours=window_hours),
+            reference_time=reference_time, window=timedelta(hours=window_hours),
             collection_limit=lines,
         )
         windowed = apply_window(events, context)
