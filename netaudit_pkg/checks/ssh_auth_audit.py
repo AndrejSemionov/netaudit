@@ -75,9 +75,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from .log_discovery_audit import build_report
+from .log_discovery_audit import SourceType, file_verdict
 from ..log_collection import collect_file, collect_journal
-from ..log_discovery import collect_log_discovery
+from ..log_discovery import probe_log_file
 from ..registry import register
 from ..ssh import HostKeyMismatchError, SSHExecutor
 from ..ssh_auth_detection import DetectionContext, apply_window, detect
@@ -90,6 +90,7 @@ except ImportError:
     paramiko = None
 
 JOURNAL_UNIT = 'ssh'
+AUTH_LOG_PATH = '/var/log/auth.log'
 DEFAULT_TAIL_LINES = 200
 DEFAULT_WINDOW_HOURS = 24
 
@@ -140,10 +141,18 @@ def check_ssh_auth_audit(host='', user='root', port=22, key_path='', password=''
         reference_time = datetime.now(timezone.utc)
         reference_year = reference_time.year
 
-        # --- Discovery: find auth.log's current available/readable state ---
-        discovery_evidence = collect_log_discovery(ssh)
-        report = build_report(discovery_evidence)
-        auth_source = next(s for s in report.fixed_sources if s.source_type.value == 'auth_log')
+        # --- Discovery: targeted probe of auth.log ONLY — not full-host
+        # discovery. See log_discovery.probe_log_file()'s docstring: this
+        # check previously called collect_log_discovery() (which also
+        # globs every nginx log file, checks journal state, logrotate.d
+        # configs, and five other fixed sources this check never uses)
+        # just to learn auth.log's availability. Confirmed wasteful in
+        # practice — the nginx glob alone accounted for most of a ~45s
+        # run on 46.62.147.41. probe_log_file() + file_verdict() give
+        # the exact same LogSource verdict for auth.log without any of
+        # that unrelated work.
+        auth_log_evidence = probe_log_file(ssh, AUTH_LOG_PATH)
+        auth_source = file_verdict(auth_log_evidence, SourceType.AUTH_LOG)
 
         # --- Collection: try the primary FILE source first, journal only as fallback ---
         # Sources are ALTERNATIVES, not additive evidence — see this

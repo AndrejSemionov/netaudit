@@ -209,6 +209,17 @@ def _file_verdict(evidence: LogFileEvidence, source_type: SourceType) -> LogSour
     )
 
 
+def file_verdict(evidence: LogFileEvidence, source_type: SourceType) -> LogSource:
+    """Public wrapper around _file_verdict() — turns a single
+    LogFileEvidence (e.g. from log_discovery.probe_log_file(), a
+    targeted single-file probe) into its LogSource verdict without
+    requiring a full LogDiscoveryReport. Same function, just exposed for
+    callers (e.g. checks/ssh_auth_audit.py) that only need one source's
+    availability/readability decision, not the whole-host Discovery
+    report. No duplicated logic — this delegates directly."""
+    return _file_verdict(evidence, source_type)
+
+
 # ===========================================================================
 # nginx: decoy detection + rotated-file filtering
 # ===========================================================================

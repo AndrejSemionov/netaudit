@@ -233,6 +233,28 @@ def _collect_log_file(ssh: SSHExecutor, path: str, timeout: int) -> LogFileEvide
     return LogFileEvidence(path=path, stat_result=stat_result, read_probe=read_probe)
 
 
+def probe_log_file(ssh: SSHExecutor, path: str, timeout: int = 20) -> LogFileEvidence:
+    """Public, targeted Discovery primitive: probes exactly ONE file
+    path (stat + test -r, same as every fixed source inside
+    collect_log_discovery()) without running the rest of full-host
+    discovery (the other five fixed sources, the nginx glob, journal,
+    logrotate.d checks).
+
+    Exists because collect_log_discovery() is deliberately "collect
+    everything" — appropriate for a full Logs Audit Discovery pass, but
+    wasteful for a caller (e.g. checks/ssh_auth_audit.py) that only
+    needs one specific file's state. Confirmed wasteful in practice: an
+    SSH auth audit calling collect_log_discovery() just to learn
+    auth.log's availability was also paying for a 94-file nginx glob on
+    46.62.147.41 (~45s of a ~45s total run) it never used.
+
+    This is a thin public wrapper around the same _collect_log_file()
+    used internally by collect_log_discovery() for each fixed source —
+    not a second, parallel implementation of stat/readability probing.
+    Both call the same _stat_probe()/_read_probe() primitives."""
+    return _collect_log_file(ssh, path, timeout)
+
+
 def _collect_logrotate_config(ssh: SSHExecutor, name: str, timeout: int) -> LogrotateEvidence:
     import shlex
     path = f'/etc/logrotate.d/{name}'
