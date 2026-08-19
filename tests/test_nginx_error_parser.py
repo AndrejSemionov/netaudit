@@ -25,7 +25,7 @@ from datetime import timezone
 
 import pytest
 
-from nginx_error_parser import (
+from netaudit_pkg.nginx_error_parser import (
     NginxErrorEventType,
     NginxErrorSeverity,
     parse_nginx_error_line,
