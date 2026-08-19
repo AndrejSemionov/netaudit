@@ -32,8 +32,9 @@ real case demonstrates the same abstraction is warranted.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 
@@ -74,10 +75,103 @@ class NginxErrorEvent:
     raw_line: str
 
 
+_VALID_SEVERITIES = {
+    "debug": NginxErrorSeverity.DEBUG,
+    "info": NginxErrorSeverity.INFO,
+    "notice": NginxErrorSeverity.NOTICE,
+    "warn": NginxErrorSeverity.WARN,
+    "error": NginxErrorSeverity.ERROR,
+    "crit": NginxErrorSeverity.CRIT,
+    "alert": NginxErrorSeverity.ALERT,
+    "emerg": NginxErrorSeverity.EMERG,
+}
+
+# Structural line format:
+#   yyyy/mm/dd hh:mm:ss [level] pid#tid: rest
+# `rest` is handled separately (connection_id + message), not by this regex,
+# so that "*abc" (invalid connection_id) can be told apart from a genuinely
+# malformed structural prefix.
+_LINE_RE = re.compile(
+    r"^(?P<year>\d{4})/(?P<month>\d{2})/(?P<day>\d{2})"
+    r" (?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2})"
+    r" \[(?P<level>[a-z]+)\]"
+    r" (?P<pid>\d+)#(?P<tid>\d+):"
+    r"(?P<rest>.*)$"
+)
+
+# Structural connection_id: "*N" immediately after the mandatory single
+# space following "pid#tid:", followed by a space or end of string.
+_CONNECTION_ID_RE = re.compile(r"^\*(?P<cid>\d+)(?: |$)")
+
+
 def parse_nginx_error_line(line: str) -> NginxErrorEvent:
     """Parse a single nginx error log line.
 
     Never raises. Returns NginxErrorEvent(event_type=UNKNOWN, ...) for any
     line that does not match the fixed nginx error-log structure.
     """
-    raise NotImplementedError
+    unknown = NginxErrorEvent(
+        event_type=NginxErrorEventType.UNKNOWN,
+        timestamp=None,
+        severity=None,
+        pid=None,
+        tid=None,
+        connection_id=None,
+        message=None,
+        raw_line=line,
+    )
+
+    if not isinstance(line, str):
+        return unknown
+
+    match = _LINE_RE.match(line)
+    if match is None:
+        return unknown
+
+    level_text = match.group("level")
+    severity = _VALID_SEVERITIES.get(level_text)
+    if severity is None:
+        return unknown
+
+    try:
+        timestamp = datetime(
+            int(match.group("year")),
+            int(match.group("month")),
+            int(match.group("day")),
+            int(match.group("hour")),
+            int(match.group("minute")),
+            int(match.group("second")),
+            tzinfo=timezone.utc,
+        )
+    except ValueError:
+        # Structurally matched but semantically invalid date/time
+        # (e.g. month=13, day=32) — still UNKNOWN, never raises.
+        return unknown
+
+    pid = int(match.group("pid"))
+    tid = int(match.group("tid"))
+
+    # `rest` includes the mandatory single space after ':', per the fixed
+    # nginx format ("pid#tid: rest"). Strip exactly that one leading space
+    # if present; an empty rest after stripping means an empty message.
+    rest = match.group("rest")
+    rest = rest.removeprefix(" ")
+
+    connection_id: int | None = None
+    cid_match = _CONNECTION_ID_RE.match(rest)
+    if cid_match is not None:
+        connection_id = int(cid_match.group("cid"))
+        message = rest[cid_match.end():]
+    else:
+        message = rest
+
+    return NginxErrorEvent(
+        event_type=NginxErrorEventType.PARSED,
+        timestamp=timestamp,
+        severity=severity,
+        pid=pid,
+        tid=tid,
+        connection_id=connection_id,
+        message=message,
+        raw_line=line,
+    )
