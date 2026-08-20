@@ -1368,8 +1368,16 @@ function renderResult(id, r, canvasId) {
     }
     html += (r.findings||[]).map(f => {
       const cveLine = f.cve ? `<b>${f.cve}</b>${f.package ? ` <span class="timing">${f.package} ${f.version||''}</span>` : ''}` : (f.package ? `<b>${f.package}</b> <span class="timing">${f.version||''}</span>` : '');
+      // Not every Finding contract includes 'title' — nginx_findings.py's
+      // Finding (finding_type/severity/confidence/detail/recommendation/
+      // event_count) deliberately has no human title field, unlike the
+      // older shared findings.py Finding used by server_audit/dns_audit/
+      // hardening checks. finding_type (e.g. "HIGH_5XX_RATE") is the
+      // fallback headline for any findings source that omits 'title',
+      // rather than rendering literal 'undefined'.
+      const headline = f.title || f.finding_type || '';
       const fixed = (f.fixed_versions && f.fixed_versions.length) ? `<div style="font-size:12px;color:var(--muted);margin:2px 0 0 4px">fixed in: ${f.fixed_versions.join(', ')}</div>` : '';
-      return `<div style="padding:5px 0">${sevPill(f.severity)} ${cveLine || f.title}${f.title && cveLine ? `<div style="font-size:12px;color:var(--muted);margin:2px 0 0 4px">${f.title}</div>` : ''}${f.detail?`<div style="font-size:12px;color:var(--muted);margin:2px 0 0 4px">${f.detail}</div>`:''}${fixed}</div>`;
+      return `<div style="padding:5px 0">${sevPill(f.severity)} ${cveLine || headline}${headline && cveLine ? `<div style="font-size:12px;color:var(--muted);margin:2px 0 0 4px">${headline}</div>` : ''}${f.detail?`<div style="font-size:12px;color:var(--muted);margin:2px 0 0 4px">${f.detail}</div>`:''}${fixed}</div>`;
     }).join('');
     return { html };
   }

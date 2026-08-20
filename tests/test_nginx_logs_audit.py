@@ -264,3 +264,66 @@ def test_registered_check_is_discoverable_via_checks_package():
         'otherwise @register never executes and the check is invisible '
         'to the CLI/web UI despite existing in source.'
     )
+
+
+# ===========================================================================
+# Regression (2026-08-20): UI contract documentation. web/static/index.html's
+# generic findings renderer (the `if (r.findings && !r.sections)` block)
+# originally assumed every finding has a human 'title' field — true for the
+# older shared netaudit_pkg/findings.py Finding (used by server_audit,
+# dns_audit, cve_audit, systemd_hardening) but NOT true for
+# nginx_findings.py's Finding, whose contract is deliberately
+# finding_type/severity/confidence/detail/recommendation/event_count with
+# no title field. Caught via manual UI audit against a live nginx_logs_audit
+# API response. Fixed in index.html with a `f.title || f.finding_type`
+# fallback rather than adding an artificial 'title' to nginx_findings.py —
+# the machine-readable finding_type (e.g. "HIGH_5XX_RATE") is the correct
+# fallback headline, not a workaround.
+#
+# This test cannot exercise the JS renderer itself (no JS test
+# infrastructure in this project — plain static files, no build/test
+# runner) — it documents and locks the Python-side half of the contract:
+# the JSON this check emits carries 'finding_type', never 'title'. If a
+# future change added 'title' back to nginx_findings.Finding, this test
+# would need updating too, which is the point: the two sides of this
+# contract (API JSON shape here, JS fallback in index.html) must be
+# changed together, not silently drift apart again.
+# ===========================================================================
+
+def test_finding_json_has_finding_type_not_title():
+    """Documents the actual JSON shape check_nginx_logs_audit() emits for
+    each finding — 'finding_type' present, 'title' absent — so the UI's
+    fallback rendering (f.title || f.finding_type) has a concrete contract
+    to stay in sync with."""
+    from netaudit_pkg.nginx_access_detection import (
+        CoverageStatus as AccessCoverageStatus,
+    )
+    from netaudit_pkg.nginx_access_detection import detect_access_signals
+
+    # A single HIGH_5XX_RATE-triggering event set is the simplest way to
+    # get one real Finding out of the actual Access Detection + Findings
+    # pipeline, rather than hand-constructing a Finding and risking it
+    # drifting from what build_access_findings() actually produces.
+    from netaudit_pkg.nginx_access_parser import NginxAccessEvent, NginxAccessEventType
+    from netaudit_pkg.nginx_findings import build_access_findings
+    events = [
+        NginxAccessEvent(event_type=NginxAccessEventType.PARSED, remote_addr='1.2.3.4',
+                          remote_user=None, timestamp=None, request='GET /', status=500,
+                          body_bytes_sent=0, http_referer=None, http_user_agent=None, raw_line='x')
+        for _ in range(10)
+    ]
+    result = detect_access_signals(events, AccessCoverageStatus.COMPLETE)
+    findings = build_access_findings(result)
+    assert findings, 'expected at least one Finding from 10x 5xx events (fixture assumption)'
+
+    finding_dict = {
+        'finding_type': findings[0].finding_type, 'severity': findings[0].severity,
+        'confidence': findings[0].confidence, 'detail': findings[0].detail,
+        'recommendation': findings[0].recommendation, 'event_count': findings[0].event_count,
+    }
+    assert 'finding_type' in finding_dict
+    assert 'title' not in finding_dict, (
+        "nginx_findings.Finding must not grow a 'title' field without updating "
+        "web/static/index.html's generic findings renderer fallback together with it."
+    )
+
