@@ -80,11 +80,13 @@ FAILED/UNKNOWN -> False). This module does not duplicate that table.
 from __future__ import annotations
 
 from ..log_discovery import collect_log_discovery
-from ..nginx_access_detection import CoverageStatus as AccessCoverageStatus, detect_access_signals
+from ..nginx_access_detection import CoverageStatus as AccessCoverageStatus
+from ..nginx_access_detection import detect_access_signals
 from ..nginx_access_parser import NginxAccessEventType, parse_nginx_access_line
 from ..nginx_config_v2 import collect_nginx_config_v2
-from ..nginx_error_detection import CoverageStatus as ErrorCoverageStatus, detect_error_signals
-from ..nginx_error_parser import parse_nginx_error_line
+from ..nginx_error_detection import CoverageStatus as ErrorCoverageStatus
+from ..nginx_error_detection import detect_error_signals
+from ..nginx_error_parser import NginxErrorEventType, parse_nginx_error_line
 from ..nginx_findings import build_access_findings, build_error_findings
 from ..nginx_log_collection import NginxLogCollectionResult, collect_nginx_logs
 from ..nginx_log_matching import dedupe_matches, match_log_directive
@@ -210,6 +212,7 @@ def audit_nginx_logs(ssh: SSHExecutor, lines: int = DEFAULT_TAIL_LINES) -> dict:
         counts[f.severity] = counts.get(f.severity, 0) + 1
 
     parsed_access_events = sum(1 for e in access_events if e.event_type == NginxAccessEventType.PARSED)
+    parsed_error_events = sum(1 for e in error_events if e.event_type == NginxErrorEventType.PARSED)
 
     return {
         'installed': True,
@@ -233,7 +236,8 @@ def audit_nginx_logs(ssh: SSHExecutor, lines: int = DEFAULT_TAIL_LINES) -> dict:
                 'sources_matched': len(error_sources),
                 'coverage': error_coverage.value,
                 'detection_succeeded': error_result.detection_succeeded,
-                'events_parsed': len(error_events),
+                'events_parsed': parsed_error_events,
+                'events_total': len(error_events),
             },
         },
     }
