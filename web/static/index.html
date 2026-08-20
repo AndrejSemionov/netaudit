@@ -1365,7 +1365,7 @@ function renderResult(id, r, canvasId) {
     // an empty result without this renderer needing to know that check's
     // specific field names).
     if (Array.isArray(r.findings) && r.findings.length === 0 && r.overall_exposure == null) {
-      let emptyHtml = `<div class="timing">${t('res.no_findings') || 'No findings — check completed successfully.'}</div>`;
+      let emptyHtml = `<div class="timing">${t('res.no_findings')}</div>`;
       if (r.meta && typeof r.meta === 'object' && Object.keys(r.meta).length) {
         emptyHtml += `<pre style="margin-top:8px;font-size:11px;opacity:.75">${JSON.stringify(r.meta, null, 2)}</pre>`;
       }
