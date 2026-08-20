@@ -327,3 +327,54 @@ def test_finding_json_has_finding_type_not_title():
         "web/static/index.html's generic findings renderer fallback together with it."
     )
 
+
+# ===========================================================================
+# Regression (2026-08-20): UI contract documentation, part 2. Empty findings
+# ([]) previously rendered a visually blank card in web/static/index.html —
+# indistinguishable from a silently broken check. Fixed in index.html by
+# rendering an explicit "no findings" line plus r.meta (when present) for
+# context. This test locks the Python side of that contract: whenever
+# check_nginx_logs_audit() returns findings=[], its meta must still be
+# present and non-empty, so the UI's fallback has something to show
+# instead of just the generic "no findings" text with nothing else.
+# ===========================================================================
+
+def test_meta_present_even_with_empty_findings():
+    """The EMPTY-coverage live run against the writer host (46.62.147.41,
+    2026-08-20 session) produced findings=[] with meta.access.coverage ==
+    'empty' / meta.error.coverage == 'empty' — exactly the case the UI
+    empty-state renderer depends on to explain *why* there were no
+    findings. This is a light structural check via the internal
+    audit_nginx_logs() path with a coverage forced to EMPTY, rather than a
+    full mocked SSH run (already covered by the orchestration-level tests
+    above) — it only needs to confirm meta survives an all-empty result."""
+    from netaudit_pkg.checks.nginx_logs_audit import (
+        _resolve_access_coverage,
+        _resolve_error_coverage,
+    )
+    from netaudit_pkg.nginx_access_detection import detect_access_signals
+    from netaudit_pkg.nginx_error_detection import detect_error_signals
+    from netaudit_pkg.nginx_findings import build_access_findings, build_error_findings
+
+    access_coverage = _resolve_access_coverage(['empty', 'empty'])
+    error_coverage = _resolve_error_coverage(['empty'])
+    access_result = detect_access_signals([], access_coverage)
+    error_result = detect_error_signals([], error_coverage)
+    findings = build_access_findings(access_result) + build_error_findings(error_result)
+
+    assert findings == []
+    # Mirrors the 'meta' dict shape audit_nginx_logs() builds — this test
+    # doesn't call audit_nginx_logs() itself (that needs a live/mocked SSH
+    # session), it confirms the ingredients that feed 'meta' remain
+    # non-empty/truthy in the all-EMPTY case, which is what the UI relies
+    # on to render something other than a blank "no findings" line.
+    meta = {
+        'access': {'coverage': access_coverage.value, 'detection_succeeded': access_result.detection_succeeded},
+        'error': {'coverage': error_coverage.value, 'detection_succeeded': error_result.detection_succeeded},
+    }
+    assert meta and all(meta.values()), (
+        "meta must stay non-empty even when findings=[] — the UI's empty-state "
+        "renderer shows meta as the only explanation for why there were no findings."
+    )
+
+

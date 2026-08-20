@@ -1350,6 +1350,27 @@ function renderResult(id, r, canvasId) {
   if (r.findings && !r.sections) {
     const sevPill = s => ({critical:'<span class="pill bad">critical</span>', high:'<span class="pill bad">high</span>', medium:'<span class="pill warn">medium</span>', low:`<span class="pill" style="background:#2a3140;color:#9aa4b4">low</span>`, ok:'<span class="pill ok">ok</span>'}[s] || s);
     let html = '';
+    // Empty findings ([]) is a genuine, distinct outcome from a check that
+    // errored (r.error, handled earlier) or hasn't run — it means the
+    // check completed and found nothing to report. Rendering a blank card
+    // for this case is indistinguishable from a silently broken check, so
+    // an explicit "no findings" line is shown whenever findings is empty
+    // AND there's no other content this renderer would otherwise show
+    // (systemd_hardening's overall_exposure pill must still render even
+    // with zero findings — an empty-findings short-circuit here would
+    // silently drop that pill, which existed before this change).
+    // Followed by r.meta (generic, not keyed on any specific check's
+    // shape) if present, so the person can see *why* nothing was found
+    // (e.g. nginx_logs_audit's meta.access.coverage === 'empty' explains
+    // an empty result without this renderer needing to know that check's
+    // specific field names).
+    if (Array.isArray(r.findings) && r.findings.length === 0 && r.overall_exposure == null) {
+      let emptyHtml = `<div class="timing">${t('res.no_findings') || 'No findings — check completed successfully.'}</div>`;
+      if (r.meta && typeof r.meta === 'object' && Object.keys(r.meta).length) {
+        emptyHtml += `<pre style="margin-top:8px;font-size:11px;opacity:.75">${JSON.stringify(r.meta, null, 2)}</pre>`;
+      }
+      return { html: emptyHtml };
+    }
     // systemd_hardening: overall exposure score (0-10) + predicate, straight
     // from `systemd-analyze security`'s own text-mode summary line, shown
     // as a headline pill above the per-directive severity counts.
