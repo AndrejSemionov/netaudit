@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import time
 import threading
+import time
 from datetime import datetime
 
+# importing registers all the checks
+from . import (
+    checks,  # noqa: F401
+    timing,
+)
 from .registry import registry
 from .utils import log, missing_tools
-from . import timing
-
-# importing registers all the checks
-from . import checks  # noqa: F401
 
 
 def run_checks(selected: list[dict]) -> dict:
@@ -163,6 +164,18 @@ def run_instances(check_id: str, spec, instances: list[dict],
 def run_checks_multi(selected: list[dict]) -> dict:
     """
     selected: list of {'id': 'cve', 'instances': [{'host': ..., ...}, {'host': ..., ...}]}
+    or the legacy single-instance form {'id': 'cve', 'params': {'host': ..., ...}}
+    (same shape run_checks() accepts — see 'instances' vs 'params' resolution
+    below, fixed 2026-08-20: this function previously read only 'instances'
+    and silently discarded 'params' via item.get('instances', [{}]), which
+    made every check launched through web/app.py's api_run()/api_estimate()
+    (built via _to_selected_item(), which emits the legacy 'params' form
+    whenever the caller didn't specify 'instances') always receive params={},
+    with no error raised — the underlying check function's own empty-host
+    default ('host not specified') was the only visible symptom. Confirmed
+    via a direct run_checks_multi() call bypassing HTTP/threading entirely,
+    matching CLI's run_checks(), which already resolved 'params' first via
+    item.get('params', {})).
 
     One instance for a check -> report['results'][check_id] / report['timing'][check_id]
     are flat, identical in shape to run_checks() (backward compatible).
@@ -189,7 +202,17 @@ def run_checks_multi(selected: list[dict]) -> dict:
 
     for item in selected:
         check_id = item['id']
-        instances = item.get('instances', [{}])
+        # 'instances' (multi-host) takes precedence when present, even if
+        # empty — an explicit empty list is a deliberate "no hosts" request,
+        # not a signal to fall back to 'params'. Only when 'instances' is
+        # absent entirely do we resolve the legacy single-instance 'params'
+        # form (or {} if neither key is present, matching run_checks()'s own
+        # item.get('params', {}) default) into a one-item instances list.
+        if 'instances' in item:
+            instances = item['instances']
+        else:
+            instances = [item.get('params', {})]
+
         spec = registry.get(check_id)
 
         if spec is None:

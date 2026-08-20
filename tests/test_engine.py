@@ -11,13 +11,18 @@ tests or into the real check list.
 
 from __future__ import annotations
 
-import time
 import threading
+import time
 
 import pytest
 
-from netaudit_pkg.engine import run_checks, run_checks_multi, run_instances, list_available
-from netaudit_pkg.registry import registry, CheckSpec
+from netaudit_pkg.engine import (
+    list_available,
+    run_checks,
+    run_checks_multi,
+    run_instances,
+)
+from netaudit_pkg.registry import CheckSpec, registry
 
 
 @pytest.fixture
@@ -160,6 +165,76 @@ def test_multi_single_instance_is_flat_like_run_checks(temp_check, isolated_db):
     assert result['results']['__test_multi_single__'] == {'summary': {'ok': 1}}
     assert isinstance(result['timing']['__test_multi_single__'], float)
     assert '_multi_host' not in result['results']['__test_multi_single__']
+
+
+# ===========================================================================
+# Regression (2026-08-20): run_checks_multi() previously read only
+# 'instances' via item.get('instances', [{}]) — the legacy single-instance
+# 'params' form (identical shape to what run_checks() and web/app.py's
+# _to_selected_item() both use/emit) was silently discarded, always
+# producing one instance with EMPTY params regardless of what 'params'
+# actually contained. Caught via web API smoke-testing nginx_logs_audit:
+# POST /api/run with {'params': {'host': '...'}} produced "host not
+# specified" even though the check function's own default is host=''.
+# ===========================================================================
+
+def test_multi_params_form_reaches_the_check_function(temp_check, isolated_db):
+    """The legacy {'id': ..., 'params': {...}} form (no 'instances' key at
+    all) must resolve to one instance carrying those exact params — not an
+    empty dict. This is the API-layer's actual request shape
+    (web/app.py's _to_selected_item() emits 'params', never 'instances',
+    unless the caller explicitly used multi-host)."""
+    def check_with_host(host=''):
+        return {'host_seen': host}
+
+    temp_check('__test_multi_params_form__', check_with_host)
+    result = run_checks_multi([
+        {'id': '__test_multi_params_form__', 'params': {'host': '9.9.9.9'}},
+    ])
+    assert result['results']['__test_multi_params_form__'] == {'host_seen': '9.9.9.9'}
+    assert '_multi_host' not in result['results']['__test_multi_params_form__']
+
+
+def test_multi_params_form_is_flat_like_instances_form(temp_check, isolated_db):
+    """The 'params' form and the single-element 'instances' form must
+    produce identically-shaped results — same flat report, same absence of
+    '_multi_host' — since they represent the same single-instance run."""
+    temp_check('__test_multi_params_flat__', lambda host='': {'summary': {'ok': 1}})
+    via_params = run_checks_multi([
+        {'id': '__test_multi_params_flat__', 'params': {'host': 'a'}},
+    ])
+    via_instances = run_checks_multi([
+        {'id': '__test_multi_params_flat__', 'instances': [{'host': 'a'}]},
+    ])
+    assert via_params['results']['__test_multi_params_flat__'] == \
+        via_instances['results']['__test_multi_params_flat__']
+
+
+def test_multi_no_params_or_instances_key_defaults_to_empty_params(temp_check, isolated_db):
+    """Neither key present at all -> one instance with {} params, matching
+    run_checks()'s own item.get('params', {}) default — not an error, and
+    not silently different behavior from the pre-fix code's [{}] default
+    (this specific no-keys-at-all case behaved correctly before the fix
+    too; this test documents that the fix preserves it)."""
+    temp_check('__test_multi_no_keys__', lambda host='default': {'host_seen': host})
+    result = run_checks_multi([{'id': '__test_multi_no_keys__'}])
+    assert result['results']['__test_multi_no_keys__'] == {'host_seen': 'default'}
+
+
+def test_multi_empty_instances_list_is_not_overridden_by_params(temp_check, isolated_db):
+    """An explicit empty 'instances': [] is a deliberate 'no hosts' request
+    and must NOT fall back to 'params', even if 'params' is also present —
+    'instances' takes precedence whenever the key exists at all, regardless
+    of its contents. (Matches the module docstring's stated precedence
+    rule.)"""
+    calls = []
+    temp_check('__test_multi_empty_instances__', lambda host='': calls.append(host) or {'ok': True})
+    result = run_checks_multi([
+        {'id': '__test_multi_empty_instances__', 'instances': [], 'params': {'host': 'should-not-run'}},
+    ])
+    assert calls == []
+    assert result['results']['__test_multi_empty_instances__'] == \
+        {'_multi_host': True, 'by_host': {}}
 
 
 def test_multi_two_instances_different_hosts(temp_check, isolated_db):
@@ -480,14 +555,14 @@ def test_run_instances_timing_record_failure_does_not_lose_instance_result(temp_
 # ===========================================================================
 
 def test_list_available_includes_registered_check(temp_check):
-    temp_check('__test_listed__', lambda: {}, risk_level='PASSIVE')
+    temp_check('__test_listed__', dict, risk_level='PASSIVE')
     listed = {c['id']: c for c in list_available()}
     assert '__test_listed__' in listed
     assert listed['__test_listed__']['risk_level'] == 'PASSIVE'
 
 
 def test_list_available_reports_missing_tools(temp_check):
-    temp_check('__test_missing_reported__', lambda: {},
+    temp_check('__test_missing_reported__', dict,
                required_tools=['__definitely_not_a_real_binary_xyz__'])
     listed = {c['id']: c for c in list_available()}
     entry = listed['__test_missing_reported__']
