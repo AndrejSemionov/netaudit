@@ -8,6 +8,7 @@ from . import (
     cve_audit,  # noqa: F401
     dns_audit,  # noqa: F401
     docker_audit,  # noqa: F401
+    fail2ban_logs_audit,  # noqa: F401
     kernel_hardening,  # noqa: F401
     log_discovery_audit,  # noqa: F401
     lynis_audit,  # noqa: F401
