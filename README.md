@@ -311,14 +311,14 @@ python3 netaudit.py run aide_check --host 1.2.3.4 --user root --mode check
 
 ## Checks
 
-29 checks across 6 categories: network (mtr, tcptraceroute, ping, dig, arping),
+34 checks across 7 categories: network (mtr, tcptraceroute, ping, dig, arping),
 site (ssl, http, security headers, external web audit, SQL injection, DNS audit,
 Certificate Transparency monitoring), security (open ports, firewall, CVE audit,
-data breach check), performance (CPU/RAM/disk, iperf3), server via SSH (SSH audit,
-full security audit, Lynis hardening audit, systemd sandboxing audit, kernel sysctl
-hardening audit, rootkit check, file integrity monitoring, backup verification,
-Docker container audit), traffic capture (tshark, MikroTik) with threat scoring of
-destinations.
+data breach check), hardening (nginx config hardening, SSH hardening, kernel sysctl
+hardening), performance (CPU/RAM/disk, iperf3), server via SSH (SSH audit,
+full security audit, Lynis hardening audit, systemd sandboxing audit, rootkit check,
+file integrity monitoring, backup verification, Docker container audit, Logs Audit —
+see below), traffic capture (tshark, MikroTik) with threat scoring of destinations.
 
 **Full server security audit** (`server_audit`, SSH) — a complete security audit of a server
 in one connection:
@@ -396,6 +396,61 @@ represent genuinely different security postures, not just "more" or "less" secur
 router-role auto-detection in this version — a genuine NAT/router host will legitimately
 score lower on the three forwarding-related controls; see `docs/checks/kernel_hardening.md`
 for the full control list and scoring rationale. Read-only.
+
+### Logs Audit
+
+A layered pipeline (discovery → collection → parsing → detection → findings), currently with
+Nginx access/error logs as the reference implementation and SSH authentication logs as a
+second, independently-built log source. Each layer is read-only and collects a bounded tail
+of recent log content — never a full file.
+
+**Log source discovery** (`log_discovery`, SSH) — figures out what log sources exist on a
+host and their state (exists/readable/rotated/active), without reading any log content or
+detecting anything security-relevant. Deliberately unprivileged (no sudo): it reports what
+NetAudit's own SSH access level can already see, and flags which sources would need elevated
+access to read. Useful on its own before running either audit below, to understand what's
+actually reachable on a given host.
+
+```bash
+python3 netaudit.py run log_discovery --host 1.2.3.4 --user root
+```
+
+**Nginx Logs Audit** (`nginx_logs_audit`, SSH) — resolves every `server {}` block's
+`access_log`/`error_log` directives (including nginx's directive-cascade rules), matches them
+against what's actually discoverable on disk, deduplicates repeated destinations across
+blocks, and analyzes the collected content for: request-rate anomalies, path scanning
+(repeated 404s suggesting enumeration), request bursts, a high parse-failure rate (log format
+mismatch), a high error rate, critical-severity error log entries, and repeated identical
+error messages. Multiple `server {}` blocks pointing at multiple distinct log files are
+aggregated into one combined analysis, not run separately per block.
+
+```bash
+python3 netaudit.py run nginx_logs_audit --host 1.2.3.4 --user root
+```
+
+Coverage is reported explicitly per source (`complete`/`partial`/`empty`/`failed`/`unknown`)
+rather than silently treating "successfully collected zero events" the same as "collection
+failed" — an `empty` result with `detection_succeeded: true` means the check worked correctly
+and the log genuinely had nothing in the collected window, which is a different situation
+from a collection error.
+
+**SSH Authentication Audit** (`ssh_auth_audit`, SSH) — analyzes SSH authentication activity
+(`auth.log`, falling back to the systemd journal when `auth.log` isn't available or readable)
+for repeated authentication failures, invalid-user enumeration attempts, distributed
+brute-force patterns (many source IPs, few attempts each), and successful logins that
+followed a run of failures from the same source. `auth.log` and the journal are treated as
+alternatives — whichever is actually readable is used, they're never combined into one
+result.
+
+```bash
+python3 netaudit.py run ssh_auth_audit --host 1.2.3.4 --user root
+```
+
+Both audits share the same read-only, bounded-tail collection approach and the same explicit
+coverage semantics, but were built independently — they use different internal event models
+and a different definition of "coverage uncertainty" suited to each log format. That
+divergence is intentional for now: a common abstraction across log sources is only introduced
+once a third independent source shows an actual need for one, not preemptively.
 
 ## Security
 
