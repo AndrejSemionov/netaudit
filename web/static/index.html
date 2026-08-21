@@ -844,7 +844,7 @@ async function loadChecks() {
 function renderCheckList() {
   const byCat = {};
   CHECKS.forEach(c => { (byCat[c.category] ||= []).push(c); });
-  const catNames = { network: t('cat.network'), site: t('cat.site'), security: t('cat.security'), performance: t('cat.performance'), server: t('cat.server'), capture: t('cat.capture') };
+  const catNames = { network: t('cat.network'), site: t('cat.site'), security: t('cat.security'), performance: t('cat.performance'), server: t('cat.server'), capture: t('cat.capture'), hardening: t('cat.hardening') };
 
   const container = document.getElementById('checkList');
   container.innerHTML = '';

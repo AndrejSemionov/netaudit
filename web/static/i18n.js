@@ -23,6 +23,7 @@ const I18N = {
     'cat.performance': 'Производительность',
     'cat.server': 'Сервер (SSH)',
     'cat.capture': 'Захват трафика',
+    'cat.hardening': 'Харденинг',
     // кнопки/статусы аудита
     'run': 'Запустить аудит',
     'run.stop': '■ Остановить',
@@ -291,6 +292,7 @@ const I18N = {
     'cat.performance': 'Performance',
     'cat.server': 'Server (SSH)',
     'cat.capture': 'Traffic capture',
+    'cat.hardening': 'Hardening',
     'run': 'Run audit',
     'run.stop': '■ Stop',
     'save.preset': 'Save as preset',
