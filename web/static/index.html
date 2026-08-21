@@ -590,6 +590,28 @@ print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168
         Терминал (аналог): <code>curl -s "https://crt.sh/?q=%.example.com&output=json"</code><br>
         ⚠️ crt.sh на практике нестабилен и иногда медленно отвечает или временно недоступен — проверка использует короткий таймаут и в этом случае просто вернёт понятную ошибку, не блокируя остальной аудит. Если не получилось с первого раза — попробуй ещё раз чуть позже.</p>
       </div>
+
+      <div class="settings-group">
+        <h2>Logs Audit (обнаружение, Nginx, SSH)</h2>
+        <p class="hint"><b>Обнаружение источников логов (SSH)</b> — выясняет, какие источники логов вообще есть на хосте и в каком они состоянии (существует/читаем/ротирован/активен), не читая при этом содержимое логов. Работает без sudo намеренно: показывает, что видно текущему уровню SSH-доступа, и отдельно помечает источники, которые нужно читать с повышенными правами. Полезно запускать первым, до Nginx Logs Audit или SSH Authentication Audit — чтобы понять, что вообще реально доступно на конкретном хосте.<br>
+        UI: Host + User + Port + Key path (или Password) → «Запустить аудит».<br>
+        Установка: не требуется, только SSH-клиент.<br>
+        Терминал (частичный аналог): <code>ls -la /var/log/auth.log /var/log/syslog /var/log/nginx/*.log</code>, <code>journalctl --disk-usage</code>.<br>
+        Полностью readonly, ничего не читает и не меняет — только `stat`/`ls`-уровень проверок.</p>
+
+        <p class="hint"><b>Nginx Logs Audit (SSH)</b> — резолвит директивы <code>access_log</code>/<code>error_log</code> каждого блока <code>server {}</code> (включая правила каскадного наследования nginx), сопоставляет их с тем, что реально обнаруживается на диске, дедуплицирует повторяющиеся источники между блоками, и анализирует собранное содержимое: аномалии частоты запросов, сканирование путей (повторяющиеся 404 — признак перебора), всплески запросов, высокую долю ошибок парсинга, высокую частоту ошибок, критичные записи error-лога и повторяющиеся одинаковые сообщения об ошибках.<br>
+        UI: Host + User + Port + Key path (или Password) + количество строк на источник (по умолчанию 200).<br>
+        Установка: не требуется, только SSH-клиент; на целевом сервере нужен установленный nginx.<br>
+        Терминал (частичный аналог): <code>sudo nginx -T</code> (резолв конфига), <code>tail -n 200 /var/log/nginx/*access.log /var/log/nginx/*error.log</code>.<br>
+        Покрытие (<code>coverage</code>) указывается явно по каждому источнику — «собрали ноль событий успешно» и «сбор не удался» никогда не выглядят одинаково в результате. Полностью readonly, собирает только ограниченный «хвост» последних строк, не файл целиком.<br>
+        ⚠️ Если сервер недавно делал <code>logrotate</code>, а nginx не переоткрыл файловые дескрипторы (`nginx -s reopen` / `systemctl reload nginx`), текущие файлы логов могут быть пустыми, пока весь трафик продолжает писаться в ротированные — результат корректно покажет <code>coverage: empty</code>, это не ошибка проверки, а факт состояния сервера.</p>
+
+        <p class="hint"><b>SSH Authentication Audit (SSH)</b> — анализирует активность SSH-аутентификации (<code>auth.log</code>, с откатом на журнал systemd, если <code>auth.log</code> недоступен или нечитаем) на предмет повторяющихся неудачных попыток входа, перебора несуществующих пользователей, распределённых попыток подбора (много source-IP, мало попыток с каждого) и успешных входов, последовавших за серией неудач с того же источника.<br>
+        UI: Host + User + Port + Key path (или Password) + количество строк + окно времени в часах.<br>
+        Установка: не требуется, только SSH-клиент.<br>
+        Терминал (частичный аналог): <code>tail -n 200 /var/log/auth.log</code>, либо <code>journalctl -u ssh -n 200</code>, если файла нет.<br>
+        <code>auth.log</code> и журнал — альтернативы, никогда не объединяются в один результат: используется то, что реально читаемо на конкретном хосте. Полностью readonly.</p>
+      </div>
     </div>
 
     <div class="lang-block lang-en" style="display:none">
@@ -779,6 +801,28 @@ print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168
         Install: none needed, a plain HTTPS request to the public crt.sh API, no key.<br>
         Terminal equivalent: <code>curl -s "https://crt.sh/?q=%.example.com&output=json"</code><br>
         ⚠️ crt.sh is known to be unstable in practice — sometimes slow, sometimes briefly unavailable. This check uses a short timeout and returns a plain error in that case instead of blocking the rest of the audit. If it doesn't work the first time, just try again a bit later.</p>
+      </div>
+
+      <div class="settings-group">
+        <h2>Logs Audit (discovery, Nginx, SSH)</h2>
+        <p class="hint"><b>Log source discovery (SSH)</b> — figures out what log sources exist on a host and their state (exists/readable/rotated/active), without reading any log content. Deliberately unprivileged (no sudo): it reports what the current SSH access level can already see, and flags which sources need elevated access to read. Worth running first, before either audit below, to understand what's actually reachable on a given host.<br>
+        UI: Host + User + Port + Key path (or Password) → "Run Audit".<br>
+        Install: none needed, only an SSH client.<br>
+        Terminal equivalent (partial): <code>ls -la /var/log/auth.log /var/log/syslog /var/log/nginx/*.log</code>, <code>journalctl --disk-usage</code>.<br>
+        Fully read-only — nothing is read or changed, only `stat`/`ls`-level checks.</p>
+
+        <p class="hint"><b>Nginx Logs Audit (SSH)</b> — resolves every <code>server {}</code> block's <code>access_log</code>/<code>error_log</code> directives (including nginx's directive-cascade rules), matches them against what's actually discoverable on disk, deduplicates repeated destinations across blocks, and analyzes the collected content for: request-rate anomalies, path scanning (repeated 404s suggesting enumeration), request bursts, a high parse-failure rate, a high error rate, critical-severity error log entries, and repeated identical error messages.<br>
+        UI: Host + User + Port + Key path (or Password) + lines per source (default 200).<br>
+        Install: none needed on the NetAudit side, only an SSH client; the target server needs nginx installed.<br>
+        Terminal equivalent (partial): <code>sudo nginx -T</code> (config resolution), <code>tail -n 200 /var/log/nginx/*access.log /var/log/nginx/*error.log</code>.<br>
+        Coverage is reported explicitly per source — "collected zero events successfully" and "collection failed" never look the same in the result. Fully read-only, collects only a bounded tail of recent lines, never a full file.<br>
+        ⚠️ If the server recently ran <code>logrotate</code> and nginx never reopened its file descriptors (<code>nginx -s reopen</code> / <code>systemctl reload nginx</code>), the current log files can be empty while all traffic keeps writing to the rotated ones — the result will correctly show <code>coverage: empty</code>, which reflects the server's actual state rather than a check failure.</p>
+
+        <p class="hint"><b>SSH Authentication Audit (SSH)</b> — analyzes SSH authentication activity (<code>auth.log</code>, falling back to the systemd journal when <code>auth.log</code> isn't available or readable) for repeated authentication failures, invalid-user enumeration attempts, distributed brute-force patterns (many source IPs, few attempts each), and successful logins that followed a run of failures from the same source.<br>
+        UI: Host + User + Port + Key path (or Password) + lines + time window in hours.<br>
+        Install: none needed, only an SSH client.<br>
+        Terminal equivalent (partial): <code>tail -n 200 /var/log/auth.log</code>, or <code>journalctl -u ssh -n 200</code> if the file isn't there.<br>
+        <code>auth.log</code> and the journal are treated as alternatives, never combined into one result — whichever is actually readable on the target is used. Fully read-only.</p>
       </div>
     </div>
 
