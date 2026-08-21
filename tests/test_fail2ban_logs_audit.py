@@ -36,7 +36,6 @@ from netaudit_pkg.log_collection import CollectionResult, CommandResult, SourceK
 from netaudit_pkg.ssh import HostKeyMismatchError
 from tests.conftest import FakeSSHExecutor
 
-
 # ===========================================================================
 # Helpers
 # ===========================================================================
@@ -92,7 +91,7 @@ def test_check_fail2ban_logs_audit_connection_failure(monkeypatch):
             pass
 
         def connect(self):
-            raise Exception('connection refused')
+            raise ConnectionRefusedError('connection refused')
 
     monkeypatch.setattr('netaudit_pkg.checks.fail2ban_logs_audit.SSHExecutor', _BoomSSH)
     result = check_fail2ban_logs_audit(host='10.0.0.5')

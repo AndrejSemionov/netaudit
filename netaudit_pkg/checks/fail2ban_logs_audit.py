@@ -112,7 +112,14 @@ def _source_coverage(collected) -> CoverageStatus:
     source was never even attempted — source.available was False) to a
     CoverageStatus. See module docstring — PARTIAL is not reachable here
     by construction."""
-    raise NotImplementedError
+    if collected is None:
+        return CoverageStatus.UNKNOWN
+    result = collected.result
+    if not result.completed or result.exit_code != 0:
+        return CoverageStatus.FAILED
+    if collected.line_count == 0:
+        return CoverageStatus.EMPTY
+    return CoverageStatus.COMPLETE
 
 
 # ===========================================================================
