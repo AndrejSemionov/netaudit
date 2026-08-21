@@ -23,20 +23,20 @@
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
-    font-family: -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 14px;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 16px;
   }
   header {
     display: flex; align-items: baseline; gap: 14px;
     padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--panel);
   }
-  header h1 { margin: 0; font-size: 18px; letter-spacing: 0.5px; }
-  header .sub { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+  header h1 { margin: 0; font-size: 21px; letter-spacing: 0.5px; }
+  header .sub { color: var(--muted); font-size: 14px; font-family: var(--mono); }
   .layout { display: grid; grid-template-columns: 380px 1fr; min-height: calc(100vh - 57px); }
   .sidebar { border-right: 1px solid var(--border); padding: 20px; overflow-y: auto; background: var(--panel); }
   .main { padding: 24px; overflow-y: auto; }
   .cat { margin-bottom: 20px; }
   .cat h3 {
-    margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 1px;
     color: var(--muted); font-family: var(--mono);
   }
   .check {
@@ -48,62 +48,62 @@
   .check-head { display: flex; align-items: center; gap: 8px; cursor: pointer; }
   .check-head input { accent-color: var(--accent); width: 16px; height: 16px; }
   .check-head .label { font-weight: 500; flex: 1; }
-  .check-head .missing { font-size: 10px; color: var(--bad); font-family: var(--mono); }
-  .check .desc { color: var(--muted); font-size: 12px; margin: 4px 0 0 24px; }
+  .check-head .missing { font-size: 12px; color: var(--bad); font-family: var(--mono); }
+  .check .desc { color: var(--muted); font-size: 14px; margin: 4px 0 0 24px; }
   .params { margin: 8px 0 0 24px; display: none; flex-direction: column; gap: 6px; }
   .check.sel .params { display: flex; }
-  .params label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .params label { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
   .params input, .params select {
     flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text);
-    padding: 5px 8px; border-radius: 5px; font-family: var(--mono); font-size: 12px;
+    padding: 5px 8px; border-radius: 5px; font-family: var(--mono); font-size: 14px;
   }
   .instances { margin: 0; }
   .add-host-btn, .remove-host-btn {
     margin: 6px 0 0 24px; background: none; border: 1px dashed var(--border); color: var(--muted);
-    padding: 4px 10px; border-radius: 5px; font-size: 11px; cursor: pointer; font-family: var(--mono);
+    padding: 4px 10px; border-radius: 5px; font-size: 13px; cursor: pointer; font-family: var(--mono);
   }
   .add-host-btn:hover, .remove-host-btn:hover { border-color: var(--accent); color: var(--text); }
   .remove-host-btn { margin: 4px 0 0 24px; display: block; }
   .host-section { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
   .host-section:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
-  .host-section-label { font-size: 13px; color: var(--muted); margin: 0 0 8px 0; font-family: var(--mono); }
+  .host-section-label { font-size: 15px; color: var(--muted); margin: 0 0 8px 0; font-family: var(--mono); }
   .run-bar {
     position: sticky; bottom: 0; background: var(--panel); padding-top: 12px; margin-top: 8px;
     border-top: 1px solid var(--border);
   }
   button {
     background: var(--accent); color: #06121f; border: none; padding: 10px 18px;
-    border-radius: 7px; font-weight: 600; cursor: pointer; font-size: 14px; width: 100%;
+    border-radius: 7px; font-weight: 600; cursor: pointer; font-size: 16px; width: 100%;
   }
   button:disabled { opacity: .5; cursor: not-allowed; }
   button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent-dim); }
   .toolbar { display: flex; gap: 8px; margin-bottom: 16px; }
   .toolbar button { width: auto; }
   .status {
-    font-family: var(--mono); font-size: 13px; color: var(--muted);
+    font-family: var(--mono); font-size: 15px; color: var(--muted);
     padding: 12px 0; min-height: 20px;
   }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin-bottom: 16px; }
-  .card h2 { margin: 0 0 12px; font-size: 15px; }
-  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .card h2 { margin: 0 0 12px; font-size: 17px; }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; }
   th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
-  th { background: var(--panel-2); color: var(--muted); font-weight: 500; font-family: var(--mono); font-size: 11px; }
+  th { background: var(--panel-2); color: var(--muted); font-weight: 500; font-family: var(--mono); font-size: 13px; }
   td { font-family: var(--mono); }
   tr.bad td { background: rgba(255,92,108,.12); color: var(--bad); }
-  .pill { display: inline-block; padding: 1px 7px; border-radius: 5px; font-size: 11px; font-family: var(--mono); }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 5px; font-size: 13px; font-family: var(--mono); }
   .pill.ok { background: rgba(55,214,122,.15); color: var(--ok); }
   .pill.warn { background: rgba(255,180,84,.15); color: var(--warn); }
   .pill.bad { background: rgba(255,92,108,.15); color: var(--bad); }
-  pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; font-size: 12px; font-family: var(--mono); white-space: pre-wrap; word-break: break-word; }
+  pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; font-size: 14px; font-family: var(--mono); white-space: pre-wrap; word-break: break-word; }
   .empty { color: var(--muted); text-align: center; padding: 60px 20px; font-family: var(--mono); }
   .ai-card { border-color: var(--accent-dim); }
   .rec { border-left: 2px solid var(--accent); padding: 8px 0 8px 12px; margin-bottom: 10px; }
   .rec .action { font-weight: 600; }
-  .rec .why { color: var(--muted); font-size: 12px; margin-top: 2px; }
-  .timing { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+  .rec .why { color: var(--muted); font-size: 14px; margin-top: 2px; }
+  .timing { color: var(--muted); font-family: var(--mono); font-size: 13px; }
   .sev-high { color: var(--bad); } .sev-medium { color: var(--warn); } .sev-low { color: var(--muted); }
   .tabs-nav { margin-left: auto; display: flex; gap: 4px; }
-  .donate-link { margin-left: 14px; font-size: 13px; color: var(--muted); text-decoration: none;
+  .donate-link { margin-left: 14px; font-size: 15px; color: var(--muted); text-decoration: none;
     padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); white-space: nowrap; }
   .donate-link:hover { color: #ffb454; border-color: #ffb454; }
   .donate-popup { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 1000;
@@ -111,47 +111,47 @@
   .donate-popup-inner { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
     padding: 18px; margin-top: 80px; width: 340px; max-width: 90vw; }
   .donate-popup-header { display: flex; justify-content: space-between; align-items: center;
-    font-weight: 600; font-size: 15px; margin-bottom: 12px; }
-  .donate-popup-close { background: none; border: none; color: var(--muted); font-size: 22px;
+    font-weight: 600; font-size: 17px; margin-bottom: 12px; }
+  .donate-popup-close { background: none; border: none; color: var(--muted); font-size: 25px;
     cursor: pointer; line-height: 1; padding: 0 4px; }
   .donate-popup-close:hover { color: var(--text); }
   .donate-row { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px;
     border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; cursor: pointer;
     text-decoration: none; color: var(--text); }
   .donate-row:hover { border-color: #ffb454; }
-  .donate-row-label { font-size: 12px; color: var(--muted); }
-  .donate-row-value { font-size: 12px; font-family: var(--mono); word-break: break-all; }
-  .donate-popup-hint { font-size: 11px; color: var(--muted); margin: 8px 0 0; text-align: center; }
+  .donate-row-label { font-size: 14px; color: var(--muted); }
+  .donate-row-value { font-size: 14px; font-family: var(--mono); word-break: break-all; }
+  .donate-popup-hint { font-size: 13px; color: var(--muted); margin: 8px 0 0; text-align: center; }
   .lang-sel { margin-left: 8px; background: var(--card); color: var(--text); border: 1px solid var(--border);
-    border-radius: 6px; padding: 5px 6px; font-size: 12px; cursor: pointer; }
+    border-radius: 6px; padding: 5px 6px; font-size: 14px; cursor: pointer; }
   .tab-btn { width: auto; background: transparent; color: var(--muted); border: 1px solid transparent; padding: 6px 14px; font-weight: 500; }
   .tab-btn.active { color: var(--text); border-color: var(--border); background: var(--panel-2); }
   .tab-page { display: none; }
   .tab-page.active { display: block; }
   .settings-wrap { max-width: 760px; padding: 24px; }
   .settings-group { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin-bottom: 18px; }
-  .settings-group h2 { margin: 0 0 4px; font-size: 15px; }
-  .settings-group .hint { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+  .settings-group h2 { margin: 0 0 4px; font-size: 17px; }
+  .settings-group .hint { color: var(--muted); font-size: 14px; margin: 0 0 14px; }
   .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
-  .field label { font-size: 13px; color: var(--muted); }
+  .field label { font-size: 15px; color: var(--muted); }
   .field input, .field select {
     background: var(--bg); border: 1px solid var(--border); color: var(--text);
-    padding: 8px 10px; border-radius: 6px; font-family: var(--mono); font-size: 13px;
+    padding: 8px 10px; border-radius: 6px; font-family: var(--mono); font-size: 15px;
   }
   .field-row { display: flex; gap: 8px; align-items: flex-end; }
   .field-row .field { flex: 1; margin-bottom: 0; }
-  .btn-sm { width: auto; padding: 8px 14px; font-size: 13px; }
+  .btn-sm { width: auto; padding: 8px 14px; font-size: 15px; }
   .btn-danger { background: transparent; color: var(--bad); border: 1px solid rgba(255,92,108,.3); }
-  .list-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; }
+  .list-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 15px; }
   .list-row .grow { flex: 1; }
-  .key-status { font-size: 12px; font-family: var(--mono); margin-left: 8px; }
+  .key-status { font-size: 14px; font-family: var(--mono); margin-left: 8px; }
   .save-row { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
   .preset-chip {
     display: inline-flex; align-items: center; gap: 6px; background: var(--panel-2);
     border: 1px solid var(--accent-dim); border-radius: 20px; padding: 4px 12px; margin: 0 6px 6px 0;
-    cursor: pointer; font-size: 13px;
+    cursor: pointer; font-size: 15px;
   }
-  .preset-chip .del { color: var(--muted); font-size: 15px; }
+  .preset-chip .del { color: var(--muted); font-size: 17px; }
   button.stopbtn { background: var(--bad); color: #fff; }
   .chart-box { height: 240px; margin: 4px 0 14px; }
   .chart-box canvas { max-height: 240px; }
@@ -204,7 +204,7 @@
     <div id="presetBar" style="margin-bottom:16px"></div>
     <div id="checkList"></div>
     <div class="run-bar">
-      <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:8px">
+      <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--muted);margin-bottom:8px">
         <input type="checkbox" id="forceAsync" style="accent-color:var(--accent)">
         <span data-i18n="force.async">принудительно выполнять в фоне</span>
       </label>
@@ -236,7 +236,7 @@
         </div>
       </div>
       <div class="chart-box" style="height:320px;margin-top:16px"><canvas id="trendChart"></canvas></div>
-      <div id="trendEmpty" style="color:var(--muted);font-size:13px"></div>
+      <div id="trendEmpty" style="color:var(--muted);font-size:15px"></div>
     </div>
   </div>
 </div>
@@ -1309,7 +1309,7 @@ function renderResult(id, r, canvasId) {
 
   // --- ssh audit ---
   if (r.checks) {
-    return { html: Object.entries(r.checks).map(([k,v]) => `<h4 style="margin:10px 0 4px;color:var(--muted);font-family:var(--mono);font-size:12px">${k}</h4><pre>${v}</pre>`).join('') };
+    return { html: Object.entries(r.checks).map(([k,v]) => `<h4 style="margin:10px 0 4px;color:var(--muted);font-family:var(--mono);font-size:14px">${k}</h4><pre>${v}</pre>`).join('') };
   }
 
   // --- iperf: бары up/down ---
@@ -1354,7 +1354,7 @@ function renderResult(id, r, canvasId) {
       }
       const ver = (!isArray && sec.version) ? ` <span class="timing">${sec.version}</span>` : '';
       const findings = secFindings.map(f =>
-        `<div style="padding:5px 0"><span>${sevPill(f.severity)}</span> ${f.title}${f.detail?`<div style="font-size:12px;color:var(--muted);margin:2px 0 0 4px">${f.detail}</div>`:''}</div>`).join('');
+        `<div style="padding:5px 0"><span>${sevPill(f.severity)}</span> ${f.title}${f.detail?`<div style="font-size:14px;color:var(--muted);margin:2px 0 0 4px">${f.detail}</div>`:''}</div>`).join('');
       html += `<div style="margin:14px 0 6px"><b>${name}</b>${ver}</div>${findings}`;
     }
     return { html };
@@ -1368,7 +1368,7 @@ function renderResult(id, r, canvasId) {
   if (r.hardening) {
     const h = r.hardening;
     const scoreClass = h.score >= 80 ? 'ok' : (h.score >= 50 ? 'warn' : 'bad');
-    let html = `<div style="margin-bottom:12px"><span class="pill ${scoreClass}" style="font-size:14px">${t('res.hardening_score') || 'Score'}: ${h.score}/${h.max}</span></div>`;
+    let html = `<div style="margin-bottom:12px"><span class="pill ${scoreClass}" style="font-size:16px">${t('res.hardening_score') || 'Score'}: ${h.score}/${h.max}</span></div>`;
     if (Array.isArray(h.components) && h.components.length) {
       html += '<div style="margin-bottom:14px">';
       for (const c of h.components) {
@@ -1385,7 +1385,7 @@ function renderResult(id, r, canvasId) {
     if (Array.isArray(r.findings) && r.findings.length) {
       const sevPillH = s => ({critical:'<span class="pill bad">critical</span>', high:'<span class="pill bad">high</span>', medium:'<span class="pill warn">medium</span>', low:`<span class="pill" style="background:#2a3140;color:#9aa4b4">low</span>`, ok:'<span class="pill ok">ok</span>'}[s] || s);
       html += r.findings.map(f =>
-        `<div style="padding:5px 0">${sevPillH(f.severity)} ${f.title}${f.detail?`<div style="font-size:12px;color:var(--muted);margin:2px 0 0 4px">${f.detail}</div>`:''}</div>`).join('');
+        `<div style="padding:5px 0">${sevPillH(f.severity)} ${f.title}${f.detail?`<div style="font-size:14px;color:var(--muted);margin:2px 0 0 4px">${f.detail}</div>`:''}</div>`).join('');
     }
     return { html };
   }
@@ -1411,7 +1411,7 @@ function renderResult(id, r, canvasId) {
     if (Array.isArray(r.findings) && r.findings.length === 0 && r.overall_exposure == null) {
       let emptyHtml = `<div class="timing">${t('res.no_findings')}</div>`;
       if (r.meta && typeof r.meta === 'object' && Object.keys(r.meta).length) {
-        emptyHtml += `<pre style="margin-top:8px;font-size:11px;opacity:.75">${JSON.stringify(r.meta, null, 2)}</pre>`;
+        emptyHtml += `<pre style="margin-top:8px;font-size:13px;opacity:.75">${JSON.stringify(r.meta, null, 2)}</pre>`;
       }
       return { html: emptyHtml };
     }
@@ -1441,8 +1441,8 @@ function renderResult(id, r, canvasId) {
       // fallback headline for any findings source that omits 'title',
       // rather than rendering literal 'undefined'.
       const headline = f.title || f.finding_type || '';
-      const fixed = (f.fixed_versions && f.fixed_versions.length) ? `<div style="font-size:12px;color:var(--muted);margin:2px 0 0 4px">fixed in: ${f.fixed_versions.join(', ')}</div>` : '';
-      return `<div style="padding:5px 0">${sevPill(f.severity)} ${cveLine || headline}${headline && cveLine ? `<div style="font-size:12px;color:var(--muted);margin:2px 0 0 4px">${headline}</div>` : ''}${f.detail?`<div style="font-size:12px;color:var(--muted);margin:2px 0 0 4px">${f.detail}</div>`:''}${fixed}</div>`;
+      const fixed = (f.fixed_versions && f.fixed_versions.length) ? `<div style="font-size:14px;color:var(--muted);margin:2px 0 0 4px">fixed in: ${f.fixed_versions.join(', ')}</div>` : '';
+      return `<div style="padding:5px 0">${sevPill(f.severity)} ${cveLine || headline}${headline && cveLine ? `<div style="font-size:14px;color:var(--muted);margin:2px 0 0 4px">${headline}</div>` : ''}${f.detail?`<div style="font-size:14px;color:var(--muted);margin:2px 0 0 4px">${f.detail}</div>`:''}${fixed}</div>`;
     }).join('');
     return { html };
   }
@@ -1473,7 +1473,7 @@ function renderResult(id, r, canvasId) {
       const who = x.host ? `<span style="color:var(--muted)"> ${x.host}</span>` : (hasThreat ? ` <span style="color:var(--warn)">${t('res.no_dns')}</span>` : '');
       const val = isTshark ? fmtBytes(x.bytes) : x.connections;
       const org = x.org ? ` <span style="color:var(--muted)">[${x.org}${x.country ? ', '+x.country : ''}]</span>` : '';
-      const reasons = hasThreat && x.reasons ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${x.reasons.join(' · ')}</div>` : '';
+      const reasons = hasThreat && x.reasons ? `<div style="font-size:13px;color:var(--muted);margin-top:2px">${x.reasons.join(' · ')}</div>` : '';
       const rowClass = x.risk_level === 'high' ? 'bad' : (x.risk_level === 'suspicious' ? 'warn' : '');
       return `<tr class="${rowClass}"><td>${hasThreat ? riskPill(x.risk_level) + ' ' : ''}${x.ip}${who}${org}${reasons}</td>
         <td>${val}</td><td>${(x.protocols||[]).join(', ')}</td><td>${isTshark ? (x.packets+' '+t('res.packets_short')) : (t('res.ports_short')+': '+(x.ports||[]).slice(0,6).join(', '))}</td></tr>`;
@@ -1701,15 +1701,15 @@ async function queryHistoryCapture() {
   const ip = document.getElementById('hcQueryIp').value.trim();
   const hours = Number(document.getElementById('hcQueryHours').value) || 1;
   const root = document.getElementById('hcResults');
-  if (!ip) { root.innerHTML = `<div style="color:var(--muted);font-size:13px">${t('hc.query.need_ip')}</div>`; return; }
-  root.innerHTML = `<div style="color:var(--muted);font-size:13px">${t('hc.query.loading')}</div>`;
+  if (!ip) { root.innerHTML = `<div style="color:var(--muted);font-size:15px">${t('hc.query.need_ip')}</div>`; return; }
+  root.innerHTML = `<div style="color:var(--muted);font-size:15px">${t('hc.query.loading')}</div>`;
   const res = await fetch(`/api/history_capture/query?target_ip=${encodeURIComponent(ip)}&hours=${hours}`);
   const data = await res.json();
-  if (!data.rows.length) { root.innerHTML = `<div style="color:var(--muted);font-size:13px">${t('hc.query.no_data').replace('{hours}', hours)}</div>`; return; }
+  if (!data.rows.length) { root.innerHTML = `<div style="color:var(--muted);font-size:15px">${t('hc.query.no_data').replace('{hours}', hours)}</div>`; return; }
   const sevPill = s => ({critical:'<span class="pill bad">critical</span>', high:'<span class="pill bad">high</span>', suspicious:'<span class="pill warn">suspicious</span>', ok:'<span class="pill ok">ok</span>'}[s] || (s||''));
-  root.innerHTML = `<div style="color:var(--muted);font-size:12px;margin-bottom:8px">${data.total} ${t('hc.query.records')}</div>` +
+  root.innerHTML = `<div style="color:var(--muted);font-size:14px;margin-bottom:8px">${data.total} ${t('hc.query.records')}</div>` +
     data.rows.map(r => `<div class="list-row"><span class="grow">
-      <span style="color:var(--muted);font-family:var(--mono);font-size:11px">${r.seen_at.replace('T',' ').slice(0,19)}</span>
+      <span style="color:var(--muted);font-family:var(--mono);font-size:13px">${r.seen_at.replace('T',' ').slice(0,19)}</span>
       &nbsp;${sevPill(r.risk_level)}&nbsp;<b>${r.dst_ip}</b>${r.dst_port ? ':'+r.dst_port : ''} <span style="color:var(--muted)">${r.protocol||''}</span>
       </span></div>`).join('');
 }
@@ -1718,7 +1718,7 @@ async function loadRep() {
   const res = await fetch('/api/reputation');
   const items = await res.json();
   const root = document.getElementById('repList');
-  if (!items.length) { root.innerHTML = `<div style="color:var(--muted);font-size:13px">${t('rep.empty')}</div>`; return; }
+  if (!items.length) { root.innerHTML = `<div style="color:var(--muted);font-size:15px">${t('rep.empty')}</div>`; return; }
   root.innerHTML = items.map(x =>
     `<div class="list-row">
       <span class="grow">${x.list_type === 'block' ? `<span class="pill bad">${t('rep.list.block')}</span>` : `<span class="pill ok">${t('rep.list.allow')}</span>`}
@@ -1753,7 +1753,7 @@ async function loadTools() {
       ? `<button class="btn-sm" onclick="installTool('${tool.tool}', this)">${t('tool.install')}</button>` : '';
     return `<div class="list-row">
       <span class="grow"><b>${tool.tool}</b> ${status} ${usedBy}
-        ${tool.package ? `<span style="color:var(--muted);font-size:11px">${t('tools.package')}: ${tool.package}</span>` : ''}</span>
+        ${tool.package ? `<span style="color:var(--muted);font-size:13px">${t('tools.package')}: ${tool.package}</span>` : ''}</span>
       ${installBtn}</div>`;
   }).join('');
 }
@@ -1843,7 +1843,7 @@ async function loadTargets() {
   root.innerHTML = targets.length ? targets.map(tg =>
     `<div class="list-row"><span class="grow">${tg.label ? tg.label + ' — ' : ''}${tg.value} <span style="color:var(--muted)">[${tg.kind}]</span></span>
      <button class="btn-danger btn-sm" onclick="delTarget(${tg.id})">${t('delete')}</button></div>`).join('')
-    : `<div style="color:var(--muted);font-size:13px">${t('targets.empty')}</div>`;
+    : `<div style="color:var(--muted);font-size:15px">${t('targets.empty')}</div>`;
 }
 async function addTarget() {
   const value = document.getElementById('newTargetValue').value.trim();
@@ -1866,7 +1866,7 @@ async function loadPresetBar() {
   const presets = await res.json();
   const bar = document.getElementById('presetBar');
   if (!presets.length) { bar.innerHTML = ''; return; }
-  bar.innerHTML = `<div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);font-family:var(--mono);margin-bottom:6px">${t('presets.bar.title')}</div>` +
+  bar.innerHTML = `<div style="font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);font-family:var(--mono);margin-bottom:6px">${t('presets.bar.title')}</div>` +
     presets.map(p => `<span class="preset-chip" onclick="applyPreset(${p.id})">${trPresetName(p.name)}</span>`).join('');
   window._presets = presets;
 }
@@ -1905,7 +1905,7 @@ async function loadPresetsManage() {
   root.innerHTML = presets.length ? presets.map(p =>
     `<div class="list-row"><span class="grow">${trPresetName(p.name)} <span style="color:var(--muted)">(${p.checks.map(c=>c.id).join(', ')})</span></span>
      <button class="btn-danger btn-sm" onclick="delPreset(${p.id})">${t('preset.delete')}</button></div>`).join('')
-    : `<div style="color:var(--muted);font-size:13px">${t('preset.none')}</div>`;
+    : `<div style="color:var(--muted);font-size:15px">${t('preset.none')}</div>`;
 }
 async function delPreset(id) {
   await fetch('/api/presets/' + id, { method: 'DELETE' });
