@@ -99,7 +99,7 @@ def _audit_one_container(info: dict) -> list[dict]:
     for container_port, bindings in port_bindings.items():
         for b in (bindings or []):
             host_ip = b.get('HostIp', '')
-            if host_ip in ('', '0.0.0.0', '::'):
+            if host_ip in ('', '0.0.0.0', '::'):  # nosec B104 - detection logic reading a remote container's bind config, not a local bind call
                 public_ports.append(f'{container_port} -> {b.get("HostPort", "?")}')
     if public_ports:
         findings.append(_finding(
@@ -155,7 +155,7 @@ def _audit_one_container(info: dict) -> list[dict]:
                 'sensitive volume mounts, unpinned images. Read-only — only '
                 '`docker ps`/`docker inspect`, changes nothing.',
 )
-def check_docker_audit(host='', user='root', port=22, key_path='', password='',
+def check_docker_audit(host='', user='root', port=22, key_path='', password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                         include_stopped=False) -> dict:
     if paramiko is None:
         return {'error': 'paramiko not installed'}

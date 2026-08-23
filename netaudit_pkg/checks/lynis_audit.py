@@ -107,7 +107,7 @@ def _to_findings(parsed: dict) -> list[dict]:
     description='Server security audit via Lynis (hardening index + findings) over SSH. Read-only, '
                  'unless "Install lynis if missing" is enabled and confirmed.',
 )
-def check_lynis_audit(host='', user='root', port=22, key_path='', password='',
+def check_lynis_audit(host='', user='root', port=22, key_path='', password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                        auto_install=False, confirm_modify='no') -> dict:
     if paramiko is None:
         return {'error': 'paramiko not installed'}

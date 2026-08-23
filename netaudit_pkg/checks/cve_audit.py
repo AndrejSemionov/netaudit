@@ -746,7 +746,7 @@ def fetch_vuln_details(vuln_id: str) -> dict:
                 'over SSH and checks them against the OSV.dev vulnerability database. AI analysis (shared '
                 'ai_analyze) will match found CVEs against the actual service config and say what actually needs updating.',
 )
-def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> dict:
+def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> dict:  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
     if paramiko is None:
         return {'error': 'paramiko not installed'}
     if not host:

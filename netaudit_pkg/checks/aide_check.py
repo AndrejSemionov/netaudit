@@ -98,7 +98,7 @@ def _parse_summary(raw: str) -> dict | None:
                 '"check" mode compares against an existing database (read-only); "init" overwrites '
                 'the reference database and requires confirmation, same as auto-installing aide.',
 )
-def check_aide(host='', user='root', port=22, key_path='', password='',
+def check_aide(host='', user='root', port=22, key_path='', password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                 mode='check for changes', auto_install=False, confirm_modify='no') -> dict:
     if paramiko is None:
         return {'error': 'paramiko not installed'}

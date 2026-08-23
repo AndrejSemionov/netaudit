@@ -193,7 +193,7 @@ def _to_findings(parsed: dict, unit: str) -> list[dict]:
                  'NoNewPrivileges, PrivateNetwork, etc.) via `systemd-analyze security`. '
                  'Read-only. Requires systemd >= 246 on the target.',
 )
-def check_systemd_hardening(host='', user='root', port=22, key_path='', password='',
+def check_systemd_hardening(host='', user='root', port=22, key_path='', password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                              unit='nginx.service') -> dict:
     if paramiko is None:
         return {'error': 'paramiko not installed'}

@@ -17,7 +17,7 @@ from __future__ import annotations
 import queue
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404 - subprocess used for mtr/ping/tcptraceroute streaming, list-form args throughout this module
 import threading
 import time
 from datetime import datetime
@@ -95,7 +95,7 @@ def _stream_mtr(task, params, out_lines):
         task.emit({'type': 'error', 'message': 'mtr is not installed'})
         return
     hosts = {}
-    task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)  # nosec B603 - cmd built by _mtr_cmd() as list-form args, tool-availability checked before use
     for line in task.process.stdout:
         if task.cancelled.is_set():
             break
@@ -120,7 +120,7 @@ def _stream_ping(task, params, out_lines):
     if not shutil.which('ping'):
         task.emit({'type': 'error', 'message': 'ping not found'})
         return
-    task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)  # nosec B603 - cmd built by _ping_cmd() as list-form args, tool-availability checked before use
     seq = 0
     for line in task.process.stdout:
         if task.cancelled.is_set():
@@ -139,7 +139,7 @@ def _stream_tcptr(task, params, out_lines):
     if not shutil.which('tcptraceroute'):
         task.emit({'type': 'error', 'message': 'tcptraceroute is not installed'})
         return
-    task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)  # nosec B603 - cmd built by _tcptr_cmd() as list-form args, tool-availability checked before use
     for line in task.process.stdout:
         if task.cancelled.is_set():
             break

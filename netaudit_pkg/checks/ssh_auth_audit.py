@@ -113,7 +113,7 @@ DEFAULT_WINDOW_HOURS = 24
                 'and successful logins following failures. Read-only — collects a bounded tail of recent log '
                 'content, never the full file. Sources are alternatives, never combined.',
 )
-def check_ssh_auth_audit(host='', user='root', port=22, key_path='', password='',
+def check_ssh_auth_audit(host='', user='root', port=22, key_path='', password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                           lines=DEFAULT_TAIL_LINES, window_hours=DEFAULT_WINDOW_HOURS) -> dict:
     if paramiko is None:
         return {'error': 'paramiko not installed'}

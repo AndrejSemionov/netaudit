@@ -135,7 +135,7 @@ def _run_chkrootkit(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
                 'is enabled and confirmed. Both tools produce '
                 'false positives — findings need manual verification, not a ready-made verdict.',
 )
-def check_rootkit(host='', user='root', port=22, key_path='', password='',
+def check_rootkit(host='', user='root', port=22, key_path='', password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                    use_rkhunter=True, use_chkrootkit=True, auto_install=False,
                    confirm_modify='no') -> dict:
     if paramiko is None:

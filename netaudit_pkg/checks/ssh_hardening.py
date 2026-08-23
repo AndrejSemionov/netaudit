@@ -502,7 +502,7 @@ def audit_ssh_hardening_score(ssh: SSHExecutor) -> dict:
                 'cryptography against docs/checks/ssh_hardening.md (14 controls, 0-100 '
                 'hardening score). Read-only.',
 )
-def check_ssh_hardening(host='', user='root', port=22, key_path='', password='') -> dict:
+def check_ssh_hardening(host='', user='root', port=22, key_path='', password='') -> dict:  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
     """Public registry entrypoint - opens its own SSH session when run
     standalone, then delegates to audit_ssh_hardening_score(). Callers that
     already hold an open SSHExecutor should call audit_ssh_hardening_score(ssh)

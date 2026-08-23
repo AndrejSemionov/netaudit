@@ -264,7 +264,7 @@ def audit_nginx_logs(ssh: SSHExecutor, lines: int = DEFAULT_TAIL_LINES) -> dict:
                 'across every server block\'s resolved, deduped log destinations. Read-only — collects a '
                 'bounded tail of recent log content per source, never full files.',
 )
-def check_nginx_logs_audit(host='', user='root', port=22, key_path='', password='',
+def check_nginx_logs_audit(host='', user='root', port=22, key_path='', password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                             lines=DEFAULT_TAIL_LINES) -> dict:
     """Public registry entrypoint — opens its own SSH session when run
     standalone, then delegates to audit_nginx_logs(). Callers that already

@@ -72,13 +72,13 @@ from enum import Enum
 
 class SSHAuthEventType(str, Enum):
     ACCEPTED = 'accepted'
-    FAILED_PASSWORD = 'failed_password'
+    FAILED_PASSWORD = 'failed_password'  # nosec B105 - enum member value, not a hardcoded secret
     INVALID_USER = 'invalid_user'
     UNKNOWN = 'unknown'
 
 
 class AuthMethod(str, Enum):
-    PASSWORD = 'password'
+    PASSWORD = 'password'  # nosec B105 - enum member value, not a hardcoded secret
     PUBLICKEY = 'publickey'
 
 

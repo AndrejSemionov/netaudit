@@ -562,7 +562,7 @@ def audit_kernel_hardening_score(ssh: SSHExecutor) -> dict:
                 'docs/checks/kernel_hardening.md (16 controls, 0-100 hardening score). '
                 'Read-only.',
 )
-def check_kernel_hardening(host='', user='root', port=22, key_path='', password='') -> dict:
+def check_kernel_hardening(host='', user='root', port=22, key_path='', password='') -> dict:  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
     """Public registry entrypoint - opens its own SSH session when run
     standalone, then delegates to audit_kernel_hardening_score(). Callers
     that already hold an open SSHExecutor should call

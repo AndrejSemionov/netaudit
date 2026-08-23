@@ -126,7 +126,7 @@ REMOTE_SUDO_CHECKS = {
     required_tools=[],
     description='Read-only audit of a remote server: ports, firewall, fail2ban, login logs.',
 )
-def check_ssh_audit(host: str = '', user: str = 'root', port: int = 22,
+def check_ssh_audit(host: str = '', user: str = 'root', port: int = 22,  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                     key_path: str = '', password: str = '') -> dict:
     if paramiko is None:
         return {'error': 'paramiko not installed (pip install paramiko --break-system-packages)'}

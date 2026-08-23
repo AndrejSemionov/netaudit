@@ -994,7 +994,7 @@ def audit_ssh_hardening(ssh: SSHExecutor) -> dict:
     required_tools=[],
     description='Full server security audit over SSH: nginx, fail2ban, firewall, MySQL, SSH hardening. Read-only.',
 )
-def check_server_audit(host='', user='root', port=22, key_path='', password='',
+def check_server_audit(host='', user='root', port=22, key_path='', password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                         fail2ban_mode='client') -> dict:
     if paramiko is None:
         return {'error': 'paramiko not installed'}

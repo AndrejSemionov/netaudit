@@ -491,7 +491,7 @@ def build_findings(report: LogDiscoveryReport) -> list[dict]:
                 'Unprivileged (no sudo) by design: reports what NetAudit\'s own SSH access level '
                 'can and cannot already see, and flags sources that need elevated access to read.',
 )
-def check_log_discovery(host='', user='root', port=22, key_path='', password='') -> dict:
+def check_log_discovery(host='', user='root', port=22, key_path='', password='') -> dict:  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
     if paramiko is None:
         return {'error': 'paramiko not installed'}
     if not host:

@@ -137,7 +137,7 @@ class SSHExecutor:
 
     def run(self, cmd: str, timeout: int = 20) -> tuple[str, str]:
         """Runs a command as the connected user. Returns (stdout, stderr)."""
-        _, so, se = self.client.exec_command(cmd, timeout=timeout)
+        _, so, se = self.client.exec_command(cmd, timeout=timeout)  # nosec B601 - SSHExecutor core purpose: remote exec_command with fixed, non-shell-form commands
         return so.read().decode(errors='replace'), se.read().decode(errors='replace')
 
     def sudo(self, cmd: str, timeout: int = 20) -> tuple[str, str]:
@@ -180,7 +180,7 @@ class SSHExecutor:
         credential material.
         """
         if self.password:
-            stdin, so, se = self.client.exec_command(f'sudo -S -p "" {cmd}', timeout=timeout)
+            stdin, so, se = self.client.exec_command(f'sudo -S -p "" {cmd}', timeout=timeout)  # nosec B601 - SSHExecutor core purpose: remote exec_command with fixed, non-shell-form commands
             stdin.write(self.password + '\n')
             stdin.flush()
             stdin.channel.shutdown_write()

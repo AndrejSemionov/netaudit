@@ -161,11 +161,11 @@ def check_arp_capture(target_ip: str = '', gateway_ip: str = '', interface: str 
     proc_to_target = None
     proc_to_gateway = None
     try:
-        import subprocess
-        proc_to_target = subprocess.Popen(
+        import subprocess  # nosec B404 - subprocess used for arpspoof, list-form args, tool-availability checked before use
+        proc_to_target = subprocess.Popen(  # nosec B603, B607 - arpspoof invoked as list-form args (no shell=True), relies on $PATH by design like other CLI tool checks
             ['arpspoof', '-i', interface, '-t', target_ip, gateway_ip],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        proc_to_gateway = subprocess.Popen(
+        proc_to_gateway = subprocess.Popen(  # nosec B603, B607 - arpspoof invoked as list-form args (no shell=True), relies on $PATH by design like other CLI tool checks
             ['arpspoof', '-i', interface, '-t', gateway_ip, target_ip],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -261,7 +261,7 @@ def check_arp_capture(target_ip: str = '', gateway_ip: str = '', interface: str 
     required_tools=[],
     description='Where a device\'s traffic goes via the router + destination suspiciousness scoring. Sees ALL of the device\'s traffic.',
 )
-def check_mikrotik_sniffer(router: str = '192.168.88.1', user: str = 'admin',
+def check_mikrotik_sniffer(router: str = '192.168.88.1', user: str = 'admin',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                            password: str = '', target_ip: str = '', port: int = 22,
                            analyze_threats: str = 'да') -> dict:
     if paramiko is None:

@@ -1085,7 +1085,7 @@ def audit_nginx_hardening(ssh: SSHExecutor) -> dict:
                 'docs/checks/nginx_hardening.md (16 controls: 9 Tier-1 + 7 Tier-2, '
                 '0-100 hardening score). Read-only.',
 )
-def check_nginx_hardening(host='', user='root', port=22, key_path='', password='') -> dict:
+def check_nginx_hardening(host='', user='root', port=22, key_path='', password='') -> dict:  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
     """Public registry entrypoint - opens its own SSH session when run
     standalone, then delegates to audit_nginx_hardening(). Callers that
     already hold an open SSHExecutor (e.g. a future combined nginx run

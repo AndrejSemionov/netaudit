@@ -131,7 +131,7 @@ def _check_disk_space(ssh: SSHExecutor, directory: str) -> tuple[int | None, str
                 '2 media types, 1 off-site) — a healthy count here does not by itself confirm '
                 'an off-site or cross-media copy exists.',
 )
-def check_backup(host='', user='root', port=22, key_path='', password='',
+def check_backup(host='', user='root', port=22, key_path='', password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                   directories='/var/backups', max_age_hours=26, min_copies=2) -> dict:
     if paramiko is None:
         return {'error': 'paramiko not installed'}

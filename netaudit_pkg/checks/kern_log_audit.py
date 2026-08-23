@@ -168,7 +168,7 @@ def audit_kern_log(ssh: SSHExecutor, lines: int = DEFAULT_TAIL_LINES) -> dict:
                 'behavior from a single source IP). Read-only — collects a bounded tail of recent log '
                 'content, never the full file.',
 )
-def check_kern_log_audit(host='', user='root', port=22, key_path='', password='',
+def check_kern_log_audit(host='', user='root', port=22, key_path='', password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                           lines=DEFAULT_TAIL_LINES) -> dict:
     """Public registry entrypoint — opens its own SSH session when run
     standalone, then delegates to audit_kern_log(). Callers that already
