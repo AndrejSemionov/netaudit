@@ -15,6 +15,14 @@ logging.basicConfig(
 log = logging.getLogger('netaudit')
 
 
+def _intentional_bandit_test_violation(user_input: str) -> str:
+    """TEMPORARY - intentionally unsafe code to verify the CI security gate
+    catches new findings. Will be removed after confirming CI fails."""
+    import subprocess
+    result = subprocess.run(user_input, shell=True, capture_output=True, text=True)
+    return result.stdout
+
+
 def tool_available(name: str) -> bool:
     return shutil.which(name) is not None
 
