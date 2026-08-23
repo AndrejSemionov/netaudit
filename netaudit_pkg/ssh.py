@@ -83,7 +83,7 @@ class SSHExecutor:
     """
 
     def __init__(self, host: str, user: str = 'root', port: int = 22,
-                 key_path: str = '', password: str = '', timeout: int = 10):
+                 key_path: str = '', password: str = '', timeout: int = 10):  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
         if paramiko is None:
             raise RuntimeError('paramiko is not installed')
         self.host = host
