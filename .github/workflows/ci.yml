@@ -44,3 +44,31 @@ jobs:
 
       - name: Run tests
         run: python -m pytest tests/ -v
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install runtime dependencies
+        run: pip install -r requirements.txt
+      - name: Install security tools
+        run: pip install bandit pip-audit
+      - name: Bandit (LOW+ severity, project code excluding tests)
+        # Baseline as of 2026-08-23: 0 unexplained findings. Every previously
+        # reviewed finding has a point-in-place `# nosec TEST_ID - reason`
+        # annotation in the code itself (see git log for the review). This
+        # scan intentionally has NO blanket skips/exclusions by test ID -
+        # any new finding not yet reviewed and annotated fails CI, which is
+        # the point: it catches new potentially-risky patterns as they're
+        # introduced, without re-litigating the already-reviewed baseline.
+        run: bandit -r . --exclude ./tests,./.venv
+      - name: pip-audit (fail on any known vulnerability)
+        # Baseline as of 2026-08-23: 0 known vulnerabilities. No allowlist -
+        # if a real CVE ever appears in a dependency, it must be triaged and
+        # fixed (or the dependency pinned/replaced), not silently ignored.
+        run: pip-audit -r requirements.txt
