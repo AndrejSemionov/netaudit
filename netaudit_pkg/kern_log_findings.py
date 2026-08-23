@@ -186,4 +186,41 @@ def build_kern_log_findings(detection_result: KernLogDetectionResult) -> list[Fi
     returns [] when there are simply no signals (e.g. coverage=EMPTY, or
     COMPLETE/PARTIAL coverage with no src_ip crossing either threshold).
     """
-    raise NotImplementedError
+    if not detection_result.detection_succeeded:
+        return []
+
+    if not detection_result.signals:
+        return []
+
+    confidence = _confidence(detection_result.coverage)
+    threshold_by_type = {
+        KernLogSignalType.HIGH_DROP_RATE: HIGH_DROP_RATE_THRESHOLD,
+        KernLogSignalType.PORT_SCAN: PORT_SCAN_DISTINCT_PORTS_THRESHOLD,
+    }
+
+    findings = []
+    for signal in detection_result.signals:
+        threshold = threshold_by_type[signal.signal_type]
+        if signal.signal_type == KernLogSignalType.HIGH_DROP_RATE:
+            detail = (
+                f"IP {signal.src_ip} generated {signal.event_count} dropped "
+                f"packets in the collected slice (threshold: {threshold})."
+            )
+        else:
+            detail = (
+                f"IP {signal.src_ip} attempted {signal.event_count} distinct "
+                f"destination ports in the collected slice (threshold: {threshold})."
+            )
+
+        findings.append(
+            Finding(
+                finding_type=signal.signal_type.value,
+                severity=_SEVERITIES[signal.signal_type],
+                confidence=confidence,
+                detail=detail,
+                recommendation=_RECOMMENDATIONS[signal.signal_type],
+                event_count=signal.event_count,
+                raw_evidence=signal.raw_evidence,
+            )
+        )
+    return findings
