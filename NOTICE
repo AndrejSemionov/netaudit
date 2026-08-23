@@ -1,0 +1,20 @@
+NetAudit
+Copyright (C) 2026 Andrey Semionov
+
+NetAudit is an independent, modular network and server security auditing
+tool. Its architecture — the plugin-based check registry, the SSH-based
+audit collectors, the layered Logs Audit pipeline (Discovery → Collection
+→ Parsing → Detection → Findings), the scoring and hardening model, and
+the associated web interface — is designed and maintained by Andrey
+Semionov.
+
+Repository: https://github.com/AndrejSemionov/netaudit
+
+This software is licensed under the GNU Affero General Public License
+v3.0 (AGPL-3.0). See the LICENSE file for the full license text. Under
+AGPL-3.0, any modified version of this software that is made available
+to users over a network must also make its complete corresponding source
+code available under the same license.
+
+If you use, fork, or build upon NetAudit, please retain this notice and
+attribute the original project.
