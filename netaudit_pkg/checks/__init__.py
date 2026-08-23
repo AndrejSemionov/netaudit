@@ -9,6 +9,7 @@ from . import (
     dns_audit,  # noqa: F401
     docker_audit,  # noqa: F401
     fail2ban_logs_audit,  # noqa: F401
+    kern_log_audit,  # noqa: F401
     kernel_hardening,  # noqa: F401
     log_discovery_audit,  # noqa: F401
     lynis_audit,  # noqa: F401
