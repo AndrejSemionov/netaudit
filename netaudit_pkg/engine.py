@@ -25,6 +25,7 @@ def run_checks(selected: list[dict]) -> dict:
         'results': {},
         'timing': {},
         'meta': {},
+        'execution_context': {},
     }
 
     for item in selected:
@@ -57,6 +58,14 @@ def run_checks(selected: list[dict]) -> dict:
         report['results'][check_id] = result
         report['timing'][check_id] = elapsed
         report['meta'][check_id] = {'label': spec.label, 'category': spec.category}
+        # execution_context records the fact of the attempt (params actually
+        # passed to spec.func), independent of whether the call succeeded -
+        # a check that raised still had its params recorded here, matching
+        # the frozen Report Identity / Execution Context Contract v1 (see
+        # docs/research/ai_analysis_17_research_summary.md for why this
+        # exists: params were previously discarded after spec.func() consumed
+        # them, making history/trend features across reports impossible).
+        report['execution_context'][check_id] = params
 
     report['total_time'] = round(sum(report['timing'].values()), 2)
     return report
@@ -196,6 +205,7 @@ def run_checks_multi(selected: list[dict]) -> dict:
         'results': {},
         'timing': {},
         'meta': {},
+        'execution_context': {},
     }
 
     check_max_elapsed = []  # per-check max elapsed, for total_time
@@ -231,12 +241,25 @@ def run_checks_multi(selected: list[dict]) -> dict:
             result, elapsed = _run_one_instance(check_id, spec, instances[0])
             report['results'][check_id] = result
             report['timing'][check_id] = elapsed
+            # Flat shape, matching run_checks() - single instance means
+            # execution_context[check_id] is the params dict directly, not
+            # a {key: params} map (see Contract v1 docstring above).
+            report['execution_context'][check_id] = instances[0]
             check_max_elapsed.append(elapsed)
             continue
 
         by_host, by_host_timing = run_instances(check_id, spec, instances)
         report['results'][check_id] = {'_multi_host': True, 'by_host': by_host}
         report['timing'][check_id] = by_host_timing
+        # execution_context uses the SAME dedup keying run_instances() uses
+        # internally for by_host (host value, '#2'/'#3' suffixed on repeats)
+        # - computed independently here via the same _dedupe_key() helper,
+        # in the same instances-list order, so keys line up 1:1 with by_host
+        # without depending on dict ordering across the two calls.
+        seen_counts: dict = {}
+        report['execution_context'][check_id] = {
+            _dedupe_key(inst.get('host', ''), seen_counts): inst for inst in instances
+        }
         if by_host_timing:
             check_max_elapsed.append(max(by_host_timing.values()))
 
