@@ -22,11 +22,14 @@ import threading
 import time
 from datetime import datetime
 
+from . import (
+    checks,  # noqa: F401 - registration
+    storage,
+    timing,
+)
+from .engine import run_instances
 from .registry import registry
 from .utils import log
-from . import checks  # noqa: F401 - registration
-from . import timing, storage
-from .engine import run_instances
 
 # Checks with a live stream: id -> (command builder, incremental line parser)
 STREAMING_IDS = {'mtr', 'ping', 'tcptraceroute'}
@@ -244,8 +247,8 @@ def run_stream(task: StreamTask):
             if not (isinstance(result, dict) and result.get('error')):
                 try:
                     timing.record(check_id, params, elapsed)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug('streaming: timing.record failed for %s: %s: %s', check_id, type(e).__name__, e)
             report['results'][check_id] = result
             report['timing'][check_id] = elapsed
             report['meta'][check_id] = {'label': spec.label, 'category': spec.category}

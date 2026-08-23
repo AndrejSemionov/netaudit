@@ -20,7 +20,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from . import storage, threat
-from .ssh import SSHExecutor, HostKeyMismatchError
+from .ssh import HostKeyMismatchError, SSHExecutor
+from .utils import log
 
 try:
     import paramiko
@@ -142,8 +143,8 @@ def _watch_loop() -> None:
         try:
             cutoff = (datetime.now() - timedelta(hours=s['retention_hours'])).isoformat()
             storage.traffic_history_prune(cutoff)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug('history_capture: prune failed: %s: %s', type(e).__name__, e)
 
         _stop_event.wait(max(10, s['interval_sec']))
 
