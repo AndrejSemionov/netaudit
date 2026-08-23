@@ -311,7 +311,7 @@ python3 netaudit.py run aide_check --host 1.2.3.4 --user root --mode check
 
 ## Checks
 
-34 checks across 7 categories: network (mtr, tcptraceroute, ping, dig, arping),
+35 checks across 7 categories: network (mtr, tcptraceroute, ping, dig, arping, speedtest),
 site (ssl, http, security headers, external web audit, SQL injection, DNS audit,
 Certificate Transparency monitoring), security (open ports, firewall, CVE audit,
 data breach check), hardening (nginx config hardening, SSH hardening, kernel sysctl

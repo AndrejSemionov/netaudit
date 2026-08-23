@@ -324,11 +324,11 @@ python3 netaudit.py run aide_check --host 1.2.3.4 --user root --mode check
 
 ## Доступные проверки
 
-34 проверки в 7 категориях.
+35 проверок в 7 категориях.
 
 | Категория | Проверки |
 |---|---|
-| Сеть | mtr (ICMP), tcptraceroute (TCP), ping, dig, arping |
+| Сеть | mtr (ICMP), tcptraceroute (TCP), ping, dig, arping, speedtest (Ookla, реальная скорость download/upload) |
 | Сайт | ssl, http (curl-тайминги по фазам), security_headers, web_security_external (внешний аудит сайта), sql_injection, dns_audit, cert_transparency (мониторинг Certificate Transparency) |
 | Безопасность | ports (ss), firewall (ufw/nft), cve_audit (CVE установленного ПО), breach_check (утечки email) |
 | Харденинг | nginx_hardening, ssh_hardening, kernel_hardening (sysctl-харденинг ядра) |
