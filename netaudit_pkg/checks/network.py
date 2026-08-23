@@ -1,7 +1,8 @@
-"""Network check plugins: mtr, tcptraceroute, ping, dig, arping."""
+"""Network check plugins: mtr, tcptraceroute, ping, dig, arping, speedtest."""
 
 from __future__ import annotations
 
+import json
 import re
 
 from ..registry import register
@@ -221,4 +222,51 @@ def check_arping(target: str = '192.168.88.1', count: int = 5) -> dict:
         'sent': int(sent_m.group(1)) if sent_m else None,
         'received': int(recv_m.group(1)) if recv_m else None,
         'raw': out.strip(),
+    }
+
+
+@register(
+    id='speedtest', label='Speed Test (Ookla)', category='network', risk_level='PASSIVE',
+    required_tools=['speedtest'],
+    description='Real download/upload throughput and latency to the nearest Ookla server. '
+                'Takes ~25-30 sec to run.',
+)
+def check_speedtest() -> dict:
+    if not tool_available('speedtest'):
+        return {'error': 'speedtest is not installed '
+                          '(download from https://www.speedtest.net/apps/cli)'}
+
+    code, out, err = run_cmd(
+        ['speedtest', '--accept-license', '--accept-gdpr', '--format=json'],
+        timeout=60,
+    )
+    if code != 0:
+        return {'error': err.strip() or out.strip()[-300:] or 'speedtest error'}
+
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return {'error': f'failed to parse speedtest JSON: {out.strip()[-300:]}'}
+
+    download_bw = data['download']['bandwidth']
+    upload_bw = data['upload']['bandwidth']
+    server = data.get('server', {})
+
+    return {
+        'download_mbps': round(download_bw * 8 / 1_000_000, 2),
+        'upload_mbps': round(upload_bw * 8 / 1_000_000, 2),
+        'bandwidth_bytes_per_sec': {
+            'download': download_bw,
+            'upload': upload_bw,
+        },
+        'ping_ms': data['ping']['latency'],
+        'jitter_ms': data['ping']['jitter'],
+        'packet_loss_pct': data.get('packetLoss'),
+        'isp': data.get('isp'),
+        'server': {
+            'id': server.get('id'),
+            'name': server.get('name'),
+            'location': server.get('location'),
+            'country': server.get('country'),
+        },
     }
