@@ -23,9 +23,16 @@ from netaudit_pkg.history import save_report, list_reports, load_report, ai_anal
 from netaudit_pkg import timing, storage, tools
 from netaudit_pkg import streaming
 from netaudit_pkg import history_capture
+from netaudit_pkg import deployment
 from netaudit_pkg.web_auth import BasicAuthMiddleware, ensure_auth_configured
 
 app = FastAPI(title='NetAudit', version='2.0')
+
+# Real process start time - computed once at import (module load = uvicorn
+# process start), not per-request. Lets /api/health detect a stale process
+# (old service_started_at surviving past a failed restart).
+from datetime import datetime, timezone as _timezone
+_SERVICE_STARTED_AT = datetime.now(_timezone.utc).isoformat()
 STATIC_DIR = Path(__file__).resolve().parent / 'static'
 
 # host is set to its real value in cmd_web() (netaudit.py) before uvicorn starts -
@@ -140,6 +147,30 @@ def index() -> str:
 @app.get('/api/checks')
 def api_checks() -> list[dict]:
     return list_available()
+
+
+# --- Health / version ---
+@app.get('/api/health')
+def api_health() -> dict:
+    manifest = deployment.read_manifest()
+    return {
+        'status': 'ok',
+        'service_started_at': _SERVICE_STARTED_AT,
+        'version': {
+            'commit': manifest['commit'],
+            'deployed_at': manifest['deployed_at'],
+        },
+    }
+
+
+@app.get('/api/version')
+def api_version() -> dict:
+    manifest = deployment.read_manifest()
+    return {
+        'commit': manifest['commit'],
+        'deployed_at': manifest['deployed_at'],
+        'service_started_at': _SERVICE_STARTED_AT,
+    }
 
 
 @app.post('/api/estimate')
