@@ -324,7 +324,7 @@ python3 netaudit.py run aide_check --host 1.2.3.4 --user root --mode check
 
 ## Доступные проверки
 
-35 проверок в 7 категориях.
+37 проверок в 7 категориях.
 
 | Категория | Проверки |
 |---|---|
@@ -333,7 +333,7 @@ python3 netaudit.py run aide_check --host 1.2.3.4 --user root --mode check
 | Безопасность | ports (ss), firewall (ufw/nft), cve_audit (CVE установленного ПО), breach_check (утечки email) |
 | Харденинг | nginx_hardening, ssh_hardening, kernel_hardening (sysctl-харденинг ядра) |
 | Производительность | performance (CPU/RAM/диск), iperf (пропускная способность) |
-| Сервер (SSH) | ssh_audit, server_audit (полный SSH-аудит), lynis_audit, systemd_hardening (sandboxing systemd-юнита), rootkit_check, aide_check, backup_check, docker_audit, log_discovery, nginx_logs_audit, ssh_auth_audit — три последних см. раздел «Logs Audit» ниже |
+| Сервер (SSH) | ssh_audit, server_audit (полный SSH-аудит), lynis_audit, systemd_hardening (sandboxing systemd-юнита), rootkit_check, aide_check, backup_check, docker_audit, log_discovery, nginx_logs_audit, ssh_auth_audit, fail2ban_logs_audit, kern_log_audit — пять последних см. раздел «Logs Audit» ниже |
 | Захват трафика | tshark_capture, mikrotik_sniffer — с оценкой угроз для каждого назначения |
 
 **tcptraceroute** — ключевой для споров с ISP: идёт TCP SYN-пакетами (как веб-трафик),
@@ -494,10 +494,10 @@ filtering, защиту от SYN flood и безопасность core dump'о�
 
 ### Logs Audit
 
-Многослойный конвейер (discovery → сбор → парсинг → детекция → findings), сейчас с логами
-Nginx (access/error) как эталонной реализацией и SSH-аутентификацией как вторым, независимо
-построенным источником логов. Каждый слой read-only и собирает ограниченный «хвост» последних
-строк лога — никогда не читает файл целиком.
+Многослойный конвейер (discovery → сбор → парсинг → детекция → findings), с логами
+Nginx (access/error) как эталонной реализацией и SSH-аутентификацией, Fail2Ban и ядром
+(nftables) как независимо построенными источниками логов. Каждый слой read-only и собирает
+ограниченный «хвост» последних строк лога — никогда не читает файл целиком.
 
 **Обнаружение источников логов** (`log_discovery`, SSH) — выясняет, какие источники логов
 вообще есть на хосте и в каком они состоянии (существует/читаем/ротирован/активен), не читая
@@ -541,10 +541,32 @@ python3 netaudit.py run nginx_logs_audit --host 1.2.3.4 --user root
 python3 netaudit.py run ssh_auth_audit --host 1.2.3.4 --user root
 ```
 
-Оба аудита используют один и тот же подход — read-only, ограниченный «хвост» — и одну и ту же
-явную семантику покрытия, но построены независимо друг от друга: у каждого свои внутренние
+**Fail2Ban Logs Audit** (`fail2ban_logs_audit`, SSH) — анализирует `fail2ban.log` на предмет
+реальной активности банов (какие IP были забанены и в каком jail), а не текущего статуса
+конфигурации jail'ов. Требует sudo (лог принадлежит root). Это отдельная проверка от секции
+`fail2ban` внутри `server_audit`, которая показывает текущий *статус* jail'ов через
+`fail2ban-client` — эта же проверка показывает, что fail2ban реально *сделал* за собранный
+период по логу.
+
+```bash
+python3 netaudit.py run fail2ban_logs_audit --host 1.2.3.4 --user root
+```
+
+**Kernel (nftables) Log Audit** (`kern_log_audit`, SSH) — анализирует `kern.log` на предмет
+пакетов, отброшенных файрволом (nftables), выявляя высокую частоту дропов и паттерн
+port-сканирования (один source IP обращается к множеству различных портов назначения) в
+разрезе по source IP. Поддерживает два реальных формата логирования nftables (объединённые
+vs раздельные поля MAC-адресов) через структурное определение полей, а не сопоставление по
+буквальному тексту префикса строки лога.
+
+```bash
+python3 netaudit.py run kern_log_audit --host 1.2.3.4 --user root
+```
+
+Все проверки в этом контуре используют один и тот же подход — read-only, ограниченный «хвост» — и одну и ту же
+явную семантику покрытия, но построены независимо друг от друга: у каждой свои внутренние
 модели событий и своё определение «неопределённости покрытия», подходящее конкретно под
-формат его логов. Это расхождение сейчас намеренное: общая абстракция между источниками логов
+формат её логов. Это расхождение сейчас намеренное: общая абстракция между источниками логов
 вводится только тогда, когда реальная необходимость в ней подтверждается третьим независимым
 источником, а не заранее «про запас».
 

@@ -311,7 +311,7 @@ python3 netaudit.py run aide_check --host 1.2.3.4 --user root --mode check
 
 ## Checks
 
-35 checks across 7 categories: network (mtr, tcptraceroute, ping, dig, arping, speedtest),
+37 checks across 7 categories: network (mtr, tcptraceroute, ping, dig, arping, speedtest),
 site (ssl, http, security headers, external web audit, SQL injection, DNS audit,
 Certificate Transparency monitoring), security (open ports, firewall, CVE audit,
 data breach check), hardening (nginx config hardening, SSH hardening, kernel sysctl
@@ -399,10 +399,10 @@ for the full control list and scoring rationale. Read-only.
 
 ### Logs Audit
 
-A layered pipeline (discovery → collection → parsing → detection → findings), currently with
-Nginx access/error logs as the reference implementation and SSH authentication logs as a
-second, independently-built log source. Each layer is read-only and collects a bounded tail
-of recent log content — never a full file.
+A layered pipeline (discovery → collection → parsing → detection → findings), with Nginx
+access/error logs as the reference implementation and SSH authentication, Fail2Ban, and kernel
+(nftables) logs as independently-built log sources. Each layer is read-only and collects a
+bounded tail of recent log content — never a full file.
 
 **Log source discovery** (`log_discovery`, SSH) — figures out what log sources exist on a
 host and their state (exists/readable/rotated/active), without reading any log content or
@@ -446,11 +446,31 @@ result.
 python3 netaudit.py run ssh_auth_audit --host 1.2.3.4 --user root
 ```
 
-Both audits share the same read-only, bounded-tail collection approach and the same explicit
-coverage semantics, but were built independently — they use different internal event models
-and a different definition of "coverage uncertainty" suited to each log format. That
-divergence is intentional for now: a common abstraction across log sources is only introduced
-once a third independent source shows an actual need for one, not preemptively.
+**Fail2Ban Logs Audit** (`fail2ban_logs_audit`, SSH) — analyzes `fail2ban.log` for ban activity
+(which IPs were actually banned, in which jail) rather than jail configuration state. Requires
+sudo (the log is root-owned). This is distinct from the `fail2ban` section of `server_audit`,
+which reports current jail *status* via `fail2ban-client` — this check reports what fail2ban's
+log shows it actually *did* over the collected window.
+
+```bash
+python3 netaudit.py run fail2ban_logs_audit --host 1.2.3.4 --user root
+```
+
+**Kernel (nftables) Log Audit** (`kern_log_audit`, SSH) — analyzes `kern.log` for
+firewall-dropped packets logged by nftables, detecting a high drop rate and port-scan patterns
+(one source IP hitting many distinct destination ports) per source IP. Handles two different
+real-world nftables logging formats (concatenated vs. separate MAC address fields) via
+structural field detection rather than matching on the log line's literal prefix text.
+
+```bash
+python3 netaudit.py run kern_log_audit --host 1.2.3.4 --user root
+```
+
+Every audit in this pipeline shares the same read-only, bounded-tail collection approach and
+the same explicit coverage semantics, but each was built independently — they use different
+internal event models and a different definition of "coverage uncertainty" suited to each log
+format. That divergence is intentional for now: a common abstraction across log sources is only
+introduced once a third independent source shows an actual need for one, not preemptively.
 
 ## Security
 
