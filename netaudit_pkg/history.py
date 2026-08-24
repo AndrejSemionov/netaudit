@@ -93,8 +93,19 @@ def _resolve_ai_language(explicit: str | None = None) -> str:
     return lang if lang in _PROMPT_INSTRUCTIONS else DEFAULT_AI_LANGUAGE
 
 
-def ai_analyze(report: dict, api_key: str | None = None, language: str | None = None) -> dict:
-    """AI analysis: problems + recommendations on what to do."""
+def ai_analyze(report: dict, api_key: str | None = None, language: str | None = None,
+                history: list[dict] | None = None) -> dict:
+    """AI analysis: problems + recommendations on what to do.
+
+    history: optional list of past reports about the same object (see
+    storage.find_related_reports()), each shaped {'timestamp', 'checks',
+    'results'}. When None or empty, behavior is unchanged from before this
+    parameter existed - the prompt is built from `report` alone. When
+    given, a "PREVIOUS REPORTS" section is appended to the prompt so the
+    model can compare trends; `report` itself is never mutated to include
+    history - the history list is used only for prompt construction here,
+    not merged into the object the caller will save/display.
+    """
     api_key = _resolve_api_key(api_key)
     if not api_key:
         return {'error': 'API key not set (Settings -> Anthropic API key, or ANTHROPIC_API_KEY env var)'}
@@ -114,6 +125,19 @@ def ai_analyze(report: dict, api_key: str | None = None, language: str | None = 
     # '{"summary"...}' text. .replace() only touches the exact
     # '{report_json}' substring and leaves the rest of the template alone.
     prompt = _PROMPT_INSTRUCTIONS[lang].replace('{report_json}', report_json)
+
+    if history:
+        # Appended after the current report, not interleaved into the
+        # {report_json} placeholder itself - keeps the existing prompt
+        # (and every no-history call) byte-for-byte unchanged, and keeps
+        # find_related_reports()'s output format (a list of reduced
+        # {timestamp, checks, results} dicts) as the only thing this
+        # function needs to know about "history" - no separate schema.
+        history_json = json.dumps(history, ensure_ascii=False, indent=2)
+        prompt += (
+            f'\n\nPREVIOUS REPORTS FOR THE SAME OBJECT (most recent first, '
+            f'for trend comparison):\n{history_json}'
+        )
 
     try:
         resp = httpx.post(
