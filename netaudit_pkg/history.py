@@ -106,7 +106,14 @@ def ai_analyze(report: dict, api_key: str | None = None, language: str | None = 
 
     lang = _resolve_ai_language(language)
     report_json = json.dumps(report, ensure_ascii=False, indent=2)
-    prompt = _PROMPT_INSTRUCTIONS[lang].format(report_json=report_json)
+    # .replace(), not .format() - _PROMPT_INSTRUCTIONS itself contains a
+    # literal JSON example of the expected response format (e.g.
+    # '{"summary": "...", "problems": [...]}'), and str.format() parses
+    # EVERY brace-delimited token in the string as a placeholder, not just
+    # the intended {report_json} one - raising KeyError on the literal
+    # '{"summary"...}' text. .replace() only touches the exact
+    # '{report_json}' substring and leaves the rest of the template alone.
+    prompt = _PROMPT_INSTRUCTIONS[lang].replace('{report_json}', report_json)
 
     try:
         resp = httpx.post(
