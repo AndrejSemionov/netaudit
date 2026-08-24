@@ -247,7 +247,8 @@ def api_analyze(req: AnalyzeRequest) -> dict:
             raise HTTPException(404, 'report not found')
     else:
         raise HTTPException(400, 'report or report_id is required')
-    return ai_analyze(report, language=req.language)
+    related = storage.find_related_reports(report, limit=3)
+    return ai_analyze(report, language=req.language, history=related)
 
 
 # --- Settings ---

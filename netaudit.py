@@ -33,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from netaudit_pkg import storage
 from netaudit_pkg.engine import list_available, run_checks
 from netaudit_pkg.history import save_report, list_reports, load_report, ai_analyze
 from netaudit_pkg.utils import log
@@ -112,7 +113,8 @@ def cmd_run(args):
 
     if args.ai:
         log.info('Running AI analysis...')
-        analysis = ai_analyze(report)
+        related = storage.find_related_reports(report, limit=3)
+        analysis = ai_analyze(report, history=related)
         print('\n=== AI ANALYSIS ===')
         print(json.dumps(analysis, ensure_ascii=False, indent=2))
 
@@ -131,7 +133,8 @@ def cmd_analyze(args):
     if report is None:
         print(f'Report #{args.id} not found.')
         return
-    analysis = ai_analyze(report)
+    related = storage.find_related_reports(report, limit=3)
+    analysis = ai_analyze(report, history=related)
     print(json.dumps(analysis, ensure_ascii=False, indent=2))
 
 

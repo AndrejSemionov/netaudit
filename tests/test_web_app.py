@@ -10,11 +10,13 @@ is required, matching how the test suite runs elsewhere without a live server.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from fastapi.testclient import TestClient
 
+from netaudit_pkg.registry import CheckSpec, registry
 from web.app import app
-from netaudit_pkg.registry import registry, CheckSpec
 
 
 @pytest.fixture
@@ -206,6 +208,7 @@ def test_stream_start_actually_runs_multi_host_end_to_end(client, temp_check, is
     StreamTask object (belt-and-suspenders on top of the unit-level check
     above, exercising the real run_stream() thread)."""
     import time as _time
+
     from web.app import _stream_tasks
 
     temp_check('__test_stream_e2e__', lambda host='': {'seen': host})
@@ -273,3 +276,61 @@ def test_preset_round_trips_legacy_params(client, isolated_db):
     listed = client.get('/api/presets').json()
     saved = next(p for p in listed if p['name'] == 'legacy-preset')
     assert saved['checks'][0]['params'] == {'target': '8.8.8.8'}
+
+
+# ===========================================================================
+# /api/analyze - AI Analysis #17 history caller integration
+# ===========================================================================
+# Contract under test: api_analyze() must call
+# storage.find_related_reports(report, limit=3) and pass its result as the
+# history= argument to ai_analyze(), instead of calling
+# ai_analyze(report, language=...) with no history at all (the
+# pre-integration behavior).
+
+SAMPLE_REPORT = {
+    'timestamp': 't1',
+    'results': {'ping': {'loss_pct': 0}},
+    'execution_context': {'ping': {'host': '1.2.3.4'}},
+}
+
+FAKE_RELATED = [
+    {'timestamp': 't0', 'checks': ['ping'], 'results': {'ping': {'loss_pct': 5}}},
+]
+
+
+def test_api_analyze_passes_history_to_ai_analyze_inline_report(client, isolated_db):
+    """report is sent inline in the request body (req.report)."""
+    with patch('web.app.storage.find_related_reports', return_value=FAKE_RELATED) as mock_find, \
+         patch('web.app.ai_analyze', return_value={'summary': 'ok'}) as mock_analyze:
+        resp = client.post('/api/analyze', json={'report': SAMPLE_REPORT})
+
+    assert resp.status_code == 200
+    mock_find.assert_called_once_with(SAMPLE_REPORT, limit=3)
+    mock_analyze.assert_called_once()
+    assert mock_analyze.call_args.args[0] == SAMPLE_REPORT
+    assert mock_analyze.call_args.kwargs.get('history') == FAKE_RELATED
+
+
+def test_api_analyze_passes_history_to_ai_analyze_by_report_id(client, isolated_db):
+    """report is looked up via req.report_id (load_report path)."""
+    with patch('web.app.load_report', return_value=SAMPLE_REPORT), \
+         patch('web.app.storage.find_related_reports', return_value=FAKE_RELATED) as mock_find, \
+         patch('web.app.ai_analyze', return_value={'summary': 'ok'}) as mock_analyze:
+        resp = client.post('/api/analyze', json={'report_id': 1})
+
+    assert resp.status_code == 200
+    mock_find.assert_called_once_with(SAMPLE_REPORT, limit=3)
+    mock_analyze.assert_called_once()
+    assert mock_analyze.call_args.kwargs.get('history') == FAKE_RELATED
+
+
+def test_api_analyze_still_forwards_language_param(client, isolated_db):
+    """language= must keep flowing through unchanged alongside the new
+    history= argument - the existing contract isn't broken by the
+    addition."""
+    with patch('web.app.storage.find_related_reports', return_value=[]), \
+         patch('web.app.ai_analyze', return_value={'summary': 'ok'}) as mock_analyze:
+        resp = client.post('/api/analyze', json={'report': SAMPLE_REPORT, 'language': 'ru'})
+
+    assert resp.status_code == 200
+    assert mock_analyze.call_args.kwargs.get('language') == 'ru'
