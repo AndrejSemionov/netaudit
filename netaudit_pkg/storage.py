@@ -244,6 +244,93 @@ def query_reports(check_id: str | None = None, since: str | None = None, limit: 
     return [dict(r) for r in rows]
 
 
+# Params under these keys are treated as object identity for
+# find_related_reports() matching (AI Analysis #17 History v1). Keys not in
+# this set (count, timeout, port, interface, duration, etc.) are execution
+# parameters, not identity, and are ignored - matching on them produces
+# false positives (e.g. ping's count=3 coinciding with mtr's duration_sec=3
+# does not mean the two reports are about the same object). See
+# docs/research/ai_analysis_17_research_summary.md for why a single
+# universal "host" field can't cover all 37 checks - target/url/hostname/
+# host/server/domain are five genuinely different identity namespaces
+# (audit subject vs network destination vs web endpoint), not synonyms.
+IDENTITY_PARAM_KEYS = frozenset({'target', 'url', 'hostname', 'host', 'server', 'domain'})
+
+# How many of the most recent reports find_related_reports() will scan
+# looking for matches. Not "all history" by design - a fixed window keeps
+# the search cost bounded regardless of how large the reports table grows,
+# without requiring an index or a different storage strategy up front. 200
+# is generous relative to today's ~280 total rows (near-full-scan now) but
+# the contract itself doesn't promise more than this window; a future
+# change in storage/indexing strategy can revisit the number without
+# changing the function's external behavior.
+RELATED_REPORTS_SEARCH_WINDOW = 200
+
+
+def find_related_reports(report: dict, limit: int = 3) -> list[dict]:
+    """
+    Finds past reports that appear to be about the same object as `report`,
+    using its execution_context (see netaudit_pkg/engine.py's Report
+    Identity / Execution Context Contract v1).
+
+    Matching rule: a candidate report matches if at least one (key, value)
+    pair from `report`'s execution_context - restricted to
+    IDENTITY_PARAM_KEYS - is also present under the SAME key with the SAME
+    value in the candidate's own execution_context, for any of the
+    candidate's checks. The check_id does not need to match (e.g.
+    server_audit.host and ssh_audit.host describing the same server DO
+    match) - identity is about the value under a shared key, not about
+    which check produced it. A different key with a coincidentally equal
+    value (target=8.8.8.8 vs host=8.8.8.8) does NOT match.
+
+    Returns at most `limit` matches (default 3, per the frozen contract),
+    most recent first, each reduced to {'timestamp', 'checks', 'results'} -
+    execution_context/meta/timing are dropped; execution_context has
+    already done its job for matching and the rest adds no value to an AI
+    prompt.
+
+    If `report`'s own execution_context has no identity-like keys at all
+    (e.g. speedtest/performance/firewall/ports, which have no execution
+    params, or a check whose only params are non-identity ones like
+    count/timeout), there is nothing to match against and this returns []
+    - not an error, just no history.
+    """
+    current_identity_pairs = {
+        (key, value)
+        for ctx in report.get('execution_context', {}).values()
+        for key, value in ctx.items()
+        if key in IDENTITY_PARAM_KEYS
+    }
+    if not current_identity_pairs:
+        return []
+
+    conn = _conn()
+    rows = conn.execute(
+        'SELECT timestamp, checks, data FROM reports ORDER BY timestamp DESC LIMIT ?',
+        (RELATED_REPORTS_SEARCH_WINDOW,),
+    ).fetchall()
+
+    matches = []
+    for row in rows:
+        data = json.loads(row['data'])
+        candidate_pairs = {
+            (key, value)
+            for ctx in data.get('execution_context', {}).values()
+            for key, value in ctx.items()
+            if key in IDENTITY_PARAM_KEYS
+        }
+        if current_identity_pairs & candidate_pairs:
+            matches.append({
+                'timestamp': row['timestamp'],
+                'checks': row['checks'].split(',') if row['checks'] else [],
+                'results': data.get('results', {}),
+            })
+        if len(matches) >= limit:
+            break
+
+    return matches
+
+
 def timeseries_mtr_loss(target: str, limit: int = 100) -> list[dict]:
     """
     mtr loss trend for a specific target over time.
