@@ -231,3 +231,81 @@ def test_compute_trend_score_delta_none_when_either_side_has_no_score():
 def test_compute_trend_no_latest_change_with_fewer_than_two_good_snapshots():
     assert compute_trend([_snap('t1')])['latest_change'] is None
     assert compute_trend([_snap('t1'), _snap('t2', error='x')])['latest_change'] is None
+
+
+# ===========================================================================
+# trend_for() / list_units() - storage-backed
+# ===========================================================================
+
+from netaudit_pkg.trends import list_units, trend_for  # noqa: E402
+
+
+def _ssh_report(ts, host, findings, score=None):
+    result = {'findings': findings}
+    if score is not None:
+        result['hardening'] = {'score': score, 'max': 100, 'components': []}
+    return _report(ts, {'ssh_hardening': result}, {'ssh_hardening': {'host': host}})
+
+
+def test_trend_for_collects_unit_chronologically(isolated_db):
+    isolated_db.save_report(_ssh_report('2026-01-02 00:00:00', '10.0.0.1', [], score=90))
+    isolated_db.save_report(_ssh_report('2026-01-01 00:00:00', '10.0.0.1', [_f('high', 'A')], score=60))
+    isolated_db.save_report(_ssh_report('2026-01-03 00:00:00', '10.0.0.9', [_f('high', 'Z')]))
+
+    trend = trend_for('ssh_hardening', 'host', '10.0.0.1')
+
+    assert [p['timestamp'] for p in trend['points']] == ['2026-01-01 00:00:00', '2026-01-02 00:00:00']
+    assert trend['latest_change']['resolved'] == ['A']
+    assert trend['latest_change']['score_delta'] == 30
+
+
+def test_trend_for_unknown_unit_returns_none(isolated_db):
+    isolated_db.save_report(_ssh_report('2026-01-01 00:00:00', '10.0.0.1', []))
+
+    assert trend_for('ssh_hardening', 'host', '10.9.9.9') is None
+    assert trend_for('nginx_hardening', 'host', '10.0.0.1') is None
+
+
+def test_trend_for_respects_window(isolated_db):
+    for day in range(1, 5):
+        isolated_db.save_report(_ssh_report(f'2026-01-0{day} 00:00:00', '10.0.0.1', []))
+
+    trend = trend_for('ssh_hardening', 'host', '10.0.0.1', window=2)
+
+    assert [p['timestamp'] for p in trend['points']] == ['2026-01-03 00:00:00', '2026-01-04 00:00:00']
+
+
+def test_trend_for_includes_multi_host_reports(isolated_db):
+    isolated_db.save_report(_report('2026-01-01 00:00:00', {
+        'ssh_hardening': {'_multi_host': True, 'by_host': {
+            '10.0.0.1': {'findings': [_f('high', 'A')]},
+            '10.0.0.2': {'findings': []},
+        }},
+    }, {'ssh_hardening': {'10.0.0.1': {'host': '10.0.0.1'}, '10.0.0.2': {'host': '10.0.0.2'}}}))
+    isolated_db.save_report(_ssh_report('2026-01-02 00:00:00', '10.0.0.1', []))
+
+    trend = trend_for('ssh_hardening', 'host', '10.0.0.1')
+
+    assert len(trend['points']) == 2
+    assert trend['latest_change']['resolved'] == ['A']
+
+
+def test_list_units_runs_and_last_timestamp_most_recent_first(isolated_db):
+    isolated_db.save_report(_ssh_report('2026-01-01 00:00:00', '10.0.0.1', []))
+    isolated_db.save_report(_ssh_report('2026-01-02 00:00:00', '10.0.0.1', []))
+    isolated_db.save_report(_ssh_report('2026-01-05 00:00:00', '10.0.0.2', []))
+    isolated_db.save_report(_report('2026-01-06 00:00:00', {'ping': {'loss_pct': 0}},
+                                    {'ping': {'target': '8.8.8.8'}}))
+
+    units = list_units()
+
+    assert units == [
+        {'check_id': 'ssh_hardening', 'key': 'host', 'value': '10.0.0.2',
+         'runs': 1, 'last_timestamp': '2026-01-05 00:00:00'},
+        {'check_id': 'ssh_hardening', 'key': 'host', 'value': '10.0.0.1',
+         'runs': 2, 'last_timestamp': '2026-01-02 00:00:00'},
+    ]
+
+
+def test_list_units_empty_db(isolated_db):
+    assert list_units() == []

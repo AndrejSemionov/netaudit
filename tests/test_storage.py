@@ -455,3 +455,34 @@ def test_find_related_reports_multi_host_dedup_suffix_is_not_identity(isolated_d
     ))
     current = _report('2026-01-02 00:00:00', {'ssh_hardening': {'host': '10.0.0.1'}})
     assert len(isolated_db.find_related_reports(current)) == 1
+
+
+# ===========================================================================
+# recent_report_data() - Trend Layer Contract v1 read path
+# ===========================================================================
+
+def test_recent_report_data_most_recent_first_full_reports(isolated_db):
+    isolated_db.save_report(_report('2026-01-01 00:00:00', {'ping': {'target': 'a'}}))
+    isolated_db.save_report(_report('2026-01-03 00:00:00', {'ping': {'target': 'c'}}))
+    isolated_db.save_report(_report('2026-01-02 00:00:00', {'ping': {'target': 'b'}}))
+
+    data = isolated_db.recent_report_data()
+
+    assert [d['timestamp'] for d in data] == [
+        '2026-01-03 00:00:00', '2026-01-02 00:00:00', '2026-01-01 00:00:00',
+    ]
+    # full report, execution_context included (unlike find_related_reports)
+    assert data[0]['execution_context'] == {'ping': {'target': 'c'}}
+
+
+def test_recent_report_data_respects_window(isolated_db):
+    for day in range(1, 6):
+        isolated_db.save_report(_report(f'2026-01-0{day} 00:00:00', {}))
+
+    data = isolated_db.recent_report_data(window=2)
+
+    assert [d['timestamp'] for d in data] == ['2026-01-05 00:00:00', '2026-01-04 00:00:00']
+
+
+def test_recent_report_data_empty_db(isolated_db):
+    assert isolated_db.recent_report_data() == []
