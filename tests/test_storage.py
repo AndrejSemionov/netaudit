@@ -401,3 +401,57 @@ def test_find_related_reports_safe_when_current_report_already_saved(isolated_db
     saved = isolated_db.load_report(saved_id)
     related = isolated_db.find_related_reports(saved)
     assert isinstance(related, list)
+
+
+# ---------------------------------------------------------------------------
+# find_related_reports() - multi-host execution_context shape
+#
+# engine.run_multi_host() stores execution_context[check_id] as
+# {host_key: params, ...} (host_key deduped as '10.0.0.1', '10.0.0.1#2', ...)
+# rather than the flat params dict a single-instance run stores. Identity
+# matching must see through both shapes - see
+# docs/research/trend_layer_research_summary.md, Finding 3.
+# ---------------------------------------------------------------------------
+
+def _multi_host_ctx(check_id, hosts):
+    return {check_id: {h: {'host': h, 'port': 22} for h in hosts}}
+
+
+def test_find_related_reports_multi_host_saved_matches_single_host_current(isolated_db):
+    isolated_db.save_report(_report(
+        '2026-01-01 00:00:00', _multi_host_ctx('ssh_hardening', ['10.0.0.1', '10.0.0.2']),
+    ))
+    current = _report('2026-01-02 00:00:00', {'ssh_hardening': {'host': '10.0.0.2', 'port': 22}})
+    assert len(isolated_db.find_related_reports(current)) == 1
+
+
+def test_find_related_reports_single_host_saved_matches_multi_host_current(isolated_db):
+    isolated_db.save_report(_report(
+        '2026-01-01 00:00:00', {'ssh_hardening': {'host': '10.0.0.1', 'port': 22}},
+    ))
+    current = _report(
+        '2026-01-02 00:00:00', _multi_host_ctx('ssh_hardening', ['10.0.0.1', '10.0.0.3']),
+    )
+    assert len(isolated_db.find_related_reports(current)) == 1
+
+
+def test_find_related_reports_multi_host_disjoint_hosts_do_not_match(isolated_db):
+    isolated_db.save_report(_report(
+        '2026-01-01 00:00:00', _multi_host_ctx('ssh_hardening', ['10.0.0.1']),
+    ))
+    current = _report(
+        '2026-01-02 00:00:00', _multi_host_ctx('ssh_hardening', ['10.0.0.9']),
+    )
+    assert isolated_db.find_related_reports(current) == []
+
+
+def test_find_related_reports_multi_host_dedup_suffix_is_not_identity(isolated_db):
+    """The '#2' dedup suffix exists only in the by_host key, not in the
+    params - identity comes from the params' own 'host' value, so a
+    repeated host still matches by its real address."""
+    isolated_db.save_report(_report(
+        '2026-01-01 00:00:00',
+        {'ssh_hardening': {'10.0.0.1': {'host': '10.0.0.1'}, '10.0.0.1#2': {'host': '10.0.0.1'}}},
+    ))
+    current = _report('2026-01-02 00:00:00', {'ssh_hardening': {'host': '10.0.0.1'}})
+    assert len(isolated_db.find_related_reports(current)) == 1
