@@ -122,3 +122,32 @@ def compute_trend(snapshots: list[dict]) -> dict:
         'points': [_point(s) for s in snapshots],
         'latest_change': _change(good[-2], good[-1]) if len(good) >= 2 else None,
     }
+
+
+def _all_snapshots(window: int) -> list[dict]:
+    """Snapshots from the latest `window` reports, oldest first."""
+    snaps = []
+    for report in reversed(storage.recent_report_data(window)):
+        snaps.extend(snapshots_from_report(report))
+    return snaps
+
+
+def trend_for(check_id: str, key: str, value, window: int = storage.RELATED_REPORTS_SEARCH_WINDOW) -> dict | None:
+    """Trend of one unit over the latest `window` reports; None if the unit
+    has no snapshots in that window."""
+    snaps = [s for s in _all_snapshots(window)
+             if (s['check_id'], s['key'], s['value']) == (check_id, key, value)]
+    return compute_trend(snaps) if snaps else None
+
+
+def list_units(window: int = storage.RELATED_REPORTS_SEARCH_WINDOW) -> list[dict]:
+    """Every trend unit seen in the latest `window` reports, with its run
+    count and last run timestamp - most recently run first."""
+    units: dict[tuple, dict] = {}
+    for s in _all_snapshots(window):
+        unit = units.setdefault((s['check_id'], s['key'], s['value']), {
+            'check_id': s['check_id'], 'key': s['key'], 'value': s['value'], 'runs': 0,
+        })
+        unit['runs'] += 1
+        unit['last_timestamp'] = s['timestamp']
+    return sorted(units.values(), key=lambda u: u['last_timestamp'] or '', reverse=True)

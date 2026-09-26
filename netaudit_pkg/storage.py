@@ -348,6 +348,18 @@ def find_related_reports(report: dict, limit: int = 3) -> list[dict]:
     return matches
 
 
+def recent_report_data(window: int = RELATED_REPORTS_SEARCH_WINDOW) -> list[dict]:
+    """Full report dicts of the latest `window` reports, most recent first.
+    Read path for the trend layer (netaudit_pkg/trends.py) - bounded by the
+    same fixed window as find_related_reports(), for the same reason."""
+    conn = _conn()
+    rows = conn.execute(
+        'SELECT data FROM reports ORDER BY timestamp DESC, id DESC LIMIT ?',
+        (window,),
+    ).fetchall()
+    return [json.loads(r['data']) for r in rows]
+
+
 def timeseries_mtr_loss(target: str, limit: int = 100) -> list[dict]:
     """
     mtr loss trend for a specific target over time.
