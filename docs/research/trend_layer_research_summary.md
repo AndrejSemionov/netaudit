@@ -1,6 +1,6 @@
 # Trend Layer — Research Phase Summary
 
-Status: **Research CLOSED. Contract v1 PROPOSED (awaiting approval).**
+Status: **Research CLOSED. Contract v1 APPROVED (2026-09-26, option: finding diff by `id` only).**
 Date: 2026-09-26
 
 ## Goal
@@ -86,6 +86,33 @@ two more checks simply passed. Problem counts must use only
    testable); storage only collects the snapshots.
 5. **First consumer: CLI** (`netaudit trend ...`). Web UI and feeding the
    deterministic diff into the AI prompt are later steps, not v1.
+
+## Contract v1 — precise shapes (frozen before RED tests)
+
+`netaudit_pkg/trends.py`:
+
+- `PROBLEM_SEVERITIES = ('critical', 'high', 'medium', 'low')`.
+- `snapshots_from_report(report) -> list[dict]` — one snapshot per
+  (check_id, identity pair) in the report. Flat context -> result is
+  `results[check_id]`; multi-host context -> result is
+  `results[check_id]['by_host'][host_key]`. Params with no identity key
+  produce no snapshot; params with several identity keys produce one
+  snapshot per pair. A result is trendable only if it has a `findings` list
+  or a `hardening.score`, or is an error (`{'error': ...}`) — ping/mtr-style
+  metric results are out of scope. Snapshot shape:
+  `{check_id, key, value, timestamp, error, counts, hardening_score, finding_ids}`
+  where `counts` is `{sev: n}` over PROBLEM_SEVERITIES only (None when
+  `error`), and `finding_ids` maps `id -> severity` for problem findings
+  that carry an `id`.
+- `compute_trend(snapshots) -> dict` — snapshots of ONE unit, oldest
+  first. Returns `{check_id, key, value, points, latest_change}`;
+  `points[i] = {timestamp, error, counts, total, hardening_score}`.
+  `latest_change` compares the last two **non-error** snapshots:
+  `{from, to, counts_delta, total_delta, score_delta, new, resolved,
+  persisting}` (id lists sorted; `score_delta` None unless both sides have a
+  score); `None` when fewer than two non-error snapshots exist.
+- `trend_for(check_id, key, value, window=200)` and `list_units(window=200)`
+  read the latest `window` reports via `storage.recent_report_data()`.
 
 ## Out of scope for v1
 
