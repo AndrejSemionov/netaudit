@@ -33,7 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from netaudit_pkg import storage
+from netaudit_pkg import storage, trends
 from netaudit_pkg.engine import list_available, run_checks
 from netaudit_pkg.history import save_report, list_reports, load_report, ai_analyze
 from netaudit_pkg.utils import log
@@ -51,6 +51,7 @@ https://github.com/AndrejSemionov/netaudit
   netaudit run --quick --url https://example.com
   netaudit run --quick --host 1.2.3.4 --user root
   netaudit list
+  netaudit trend ssh_hardening 1.2.3.4
   netaudit web
 
 Full flag list: netaudit --detailed / netaudit <command> -h
@@ -136,6 +137,74 @@ def cmd_analyze(args):
     related = storage.find_related_reports(report, limit=3)
     analysis = ai_analyze(report, history=related)
     print(json.dumps(analysis, ensure_ascii=False, indent=2))
+
+
+def _signed(n) -> str:
+    return f'+{n}' if n > 0 else str(n)
+
+
+def _print_trend(trend: dict) -> None:
+    runs = len(trend['points'])
+    print(f"{trend['check_id']}  {trend['key']}={trend['value']}  ({runs} run{'s' if runs != 1 else ''})\n")
+    print(f"  {'timestamp':<20} {'crit':>4} {'high':>4} {'med':>4} {'low':>4} {'total':>6} {'score':>6}")
+    for p in trend['points']:
+        if p['error']:
+            print(f"  {p['timestamp']:<20} ERROR: {p['error']}")
+            continue
+        c = p['counts']
+        score = p['hardening_score'] if p['hardening_score'] is not None else '-'
+        print(f"  {p['timestamp']:<20} {c['critical']:>4} {c['high']:>4} {c['medium']:>4} "
+              f"{c['low']:>4} {p['total']:>6} {score:>6}")
+
+    ch = trend['latest_change']
+    if ch is None:
+        print('\nNot enough successful runs to compare.')
+        return
+    good = {p['timestamp']: p for p in trend['points'] if not p['error']}
+    prev, cur = good[ch['from']], good[ch['to']]
+    print(f"\nLatest change ({ch['from']} -> {ch['to']}):")
+    print(f"  problems: {prev['total']} -> {cur['total']} ({_signed(ch['total_delta'])})")
+    if ch['score_delta'] is not None:
+        print(f"  hardening score: {prev['hardening_score']} -> {cur['hardening_score']} "
+              f"({_signed(ch['score_delta'])})")
+    for label in ('new', 'resolved', 'persisting'):
+        print(f"  {label}: {', '.join(ch[label]) or '-'}")
+
+
+def cmd_trend(args):
+    if not args.check_id:
+        units = trends.list_units()
+        if args.json:
+            print(json.dumps(units, ensure_ascii=False, indent=2))
+        elif not units:
+            print('No trend history yet.')
+        else:
+            for u in units:
+                print(f"{u['check_id']:<22} {u['key']}={u['value']:<30} "
+                      f"{u['runs']} run{'s' if u['runs'] != 1 else ''}, last {u['last_timestamp']}")
+        return
+
+    if args.value is None:
+        print('Usage: netaudit trend <check_id> <value> [--key KEY]')
+        return
+
+    key = args.key
+    if key is None:
+        keys = sorted({u['key'] for u in trends.list_units()
+                       if u['check_id'] == args.check_id and u['value'] == args.value})
+        if len(keys) > 1:
+            print(f"{args.check_id} {args.value} matches several identity keys ({', '.join(keys)}) "
+                  f"- pass --key.")
+            return
+        key = keys[0] if keys else None
+
+    trend = trends.trend_for(args.check_id, key, args.value) if key else None
+    if args.json:
+        print(json.dumps(trend, ensure_ascii=False, indent=2))
+    elif trend is None:
+        print(f'No trend history for {args.check_id} {args.value}.')
+    else:
+        _print_trend(trend)
 
 
 def cmd_tools(args):
@@ -243,6 +312,13 @@ def build_parser(detailed: bool = True):
     p_an = sub.add_parser('analyze', help='AI analysis of a report by id (see history)')
     p_an.add_argument('id', help='Report ID from history')
     p_an.set_defaults(func=cmd_analyze)
+
+    p_trend = sub.add_parser('trend', help='Finding/score trend of one audited object over saved reports')
+    p_trend.add_argument('check_id', nargs='?', help='Check ID; omit to list objects with history')
+    p_trend.add_argument('value', nargs='?', help='Identity value (host, url, domain, ...)')
+    p_trend.add_argument('--key', help='Identity key (host, url, domain, ...) if the value is ambiguous')
+    p_trend.add_argument('--json', action='store_true', help='Machine-readable output')
+    p_trend.set_defaults(func=cmd_trend)
 
     p_tools = sub.add_parser('tools', help='Status of external tools')
     p_tools.set_defaults(func=cmd_tools)

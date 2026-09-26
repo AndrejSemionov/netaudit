@@ -1,6 +1,6 @@
 # Trend Layer — Research Phase Summary
 
-Status: **Research CLOSED. Contract v1 APPROVED (2026-09-26, option: finding diff by `id` only).**
+Status: **Research CLOSED. Contract v1 APPROVED (2026-09-26, option: finding diff by `id` only) and IMPLEMENTED (`netaudit_pkg/trends.py`, `netaudit trend`).**
 Date: 2026-09-26
 
 ## Goal
