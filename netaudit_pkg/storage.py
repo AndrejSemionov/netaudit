@@ -267,6 +267,33 @@ IDENTITY_PARAM_KEYS = frozenset({'target', 'url', 'hostname', 'host', 'server', 
 RELATED_REPORTS_SEARCH_WINDOW = 200
 
 
+def identity_pairs(execution_context: dict) -> set[tuple[str, object]]:
+    """
+    (key, value) identity pairs from a report's execution_context,
+    restricted to IDENTITY_PARAM_KEYS.
+
+    Handles both shapes engine.py stores per check: the flat params dict of
+    a single-instance run ({'host': ..., 'port': ...}) and the
+    {host_key: params} map of a multi-host run - a check context whose
+    values are all dicts is the multi-host shape. Identity is read from the
+    params themselves, never from the by_host key (which may carry a '#2'
+    dedup suffix).
+    """
+    pairs = set()
+    for ctx in (execution_context or {}).values():
+        if not isinstance(ctx, dict):
+            continue
+        if ctx and all(isinstance(v, dict) for v in ctx.values()):
+            param_dicts = ctx.values()
+        else:
+            param_dicts = [ctx]
+        for params in param_dicts:
+            for key, value in params.items():
+                if key in IDENTITY_PARAM_KEYS:
+                    pairs.add((key, value))
+    return pairs
+
+
 def find_related_reports(report: dict, limit: int = 3) -> list[dict]:
     """
     Finds past reports that appear to be about the same object as `report`,
@@ -295,12 +322,7 @@ def find_related_reports(report: dict, limit: int = 3) -> list[dict]:
     count/timeout), there is nothing to match against and this returns []
     - not an error, just no history.
     """
-    current_identity_pairs = {
-        (key, value)
-        for ctx in report.get('execution_context', {}).values()
-        for key, value in ctx.items()
-        if key in IDENTITY_PARAM_KEYS
-    }
+    current_identity_pairs = identity_pairs(report.get('execution_context', {}))
     if not current_identity_pairs:
         return []
 
@@ -313,12 +335,7 @@ def find_related_reports(report: dict, limit: int = 3) -> list[dict]:
     matches = []
     for row in rows:
         data = json.loads(row['data'])
-        candidate_pairs = {
-            (key, value)
-            for ctx in data.get('execution_context', {}).values()
-            for key, value in ctx.items()
-            if key in IDENTITY_PARAM_KEYS
-        }
+        candidate_pairs = identity_pairs(data.get('execution_context', {}))
         if current_identity_pairs & candidate_pairs:
             matches.append({
                 'timestamp': row['timestamp'],
