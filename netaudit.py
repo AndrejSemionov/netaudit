@@ -160,8 +160,10 @@ def _print_trend(trend: dict) -> None:
     if ch is None:
         print('\nNot enough successful runs to compare.')
         return
-    good = {p['timestamp']: p for p in trend['points'] if not p['error']}
-    prev, cur = good[ch['from']], good[ch['to']]
+    # By position, not by timestamp: two different reports can share a
+    # timestamp (seconds resolution). latest_change compares exactly the last
+    # two non-error points, so those are the ones to print.
+    prev, cur = [p for p in trend['points'] if not p['error']][-2:]
     print(f"\nLatest change ({ch['from']} -> {ch['to']}):")
     print(f"  problems: {prev['total']} -> {cur['total']} ({_signed(ch['total_delta'])})")
     if ch['score_delta'] is not None:
@@ -193,9 +195,13 @@ def cmd_trend(args):
         keys = sorted({u['key'] for u in trends.list_units()
                        if u['check_id'] == args.check_id and u['value'] == args.value})
         if len(keys) > 1:
-            print(f"{args.check_id} {args.value} matches several identity keys ({', '.join(keys)}) "
-                  f"- pass --key.")
-            return
+            if args.json:
+                print(json.dumps({'error': 'ambiguous_key', 'check_id': args.check_id,
+                                  'value': args.value, 'keys': keys}, ensure_ascii=False))
+            else:
+                print(f"{args.check_id} {args.value} matches several identity keys ({', '.join(keys)}) "
+                      f"- pass --key.")
+            sys.exit(2)
         key = keys[0] if keys else None
 
     trend = trends.trend_for(args.check_id, key, args.value) if key else None
