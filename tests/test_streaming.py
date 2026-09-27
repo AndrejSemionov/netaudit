@@ -368,3 +368,24 @@ def test_ec_saved_web_report_is_found_by_find_related_reports(temp_check, isolat
 
     assert len(related) == 1
     assert '__test_st_ec_hist__' in related[0]['results']
+
+
+def test_ec_never_contains_password_in_report_or_sse(temp_check, isolated_db):
+    """SECURITY (2026-09-27): the all_done SSE event carries the report to
+    the browser before it is saved - secret params must already be gone."""
+    seen = []
+
+    def ssh_like(host='', password=''):
+        seen.append(password)
+        return {'ok': True}
+
+    temp_check('__test_st_ec_pw__', ssh_like)
+    events = _run_and_drain([
+        {'id': '__test_st_ec_pw__', 'params': {'host': 'a', 'password': 'FAKE-TEST-PW'}},
+        {'id': '__test_st_ec_pw__', 'instances': [{'host': 'a', 'password': 'FAKE-TEST-PW'},
+                                                   {'host': 'b', 'password': 'FAKE-TEST-PW'}]},
+    ])
+
+    assert seen and all(pw == 'FAKE-TEST-PW' for pw in seen)
+    import json as _json
+    assert 'FAKE-TEST-PW' not in _json.dumps(events)
