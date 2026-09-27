@@ -22,6 +22,8 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+from .redaction import redact_report
+
 DB_PATH = Path.home() / '.netaudit' / 'netaudit.db'
 
 _local = threading.local()
@@ -204,7 +206,9 @@ def save_report(report: dict) -> int:
     checks = ','.join(report.get('results', {}).keys())
     cur = conn.execute(
         'INSERT INTO reports (timestamp, checks, total_time, data) VALUES (?,?,?,?)',
-        (report.get('timestamp'), checks, report.get('total_time'), json.dumps(report, ensure_ascii=False)),
+        # last barrier: whatever the caller built, secrets never reach SQLite
+        (report.get('timestamp'), checks, report.get('total_time'),
+         json.dumps(redact_report(report), ensure_ascii=False)),
     )
     conn.commit()
     return cur.lastrowid
@@ -224,7 +228,9 @@ def list_reports(limit: int = 50) -> list[dict]:
 def load_report(report_id: int) -> dict | None:
     conn = _conn()
     row = conn.execute('SELECT data FROM reports WHERE id=?', (report_id,)).fetchone()
-    return json.loads(row['data']) if row else None
+    # rows saved before redaction existed may still hold a password - the DB
+    # is not rewritten, so redact on the way out
+    return redact_report(json.loads(row['data'])) if row else None
 
 
 def query_reports(check_id: str | None = None, since: str | None = None, limit: int = 200) -> list[dict]:
