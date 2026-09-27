@@ -28,6 +28,7 @@ from . import (
     timing,
 )
 from .engine import _dedupe_key, run_instances
+from .redaction import redact_params
 from .registry import registry
 from .utils import log
 
@@ -210,7 +211,7 @@ def run_stream(task: StreamTask):
                 # as engine.run_checks_multi() does
                 seen_counts: dict = {}
                 report['execution_context'][check_id] = {
-                    _dedupe_key(inst.get('host', ''), seen_counts): inst for inst in instances
+                    _dedupe_key(inst.get('host', ''), seen_counts): redact_params(inst) for inst in instances
                 }
                 report['meta'][check_id] = {'label': spec.label, 'category': spec.category}
                 task.emit({'type': 'check_group_done', 'id': check_id,
@@ -222,8 +223,9 @@ def run_stream(task: StreamTask):
             # 'params', unchanged)
             params = instances[0] if instances else item.get('params', {})
             # every path below attempts the check with these params (live
-            # stream, stopped stream, regular call, exception)
-            report['execution_context'][check_id] = params
+            # stream, stopped stream, regular call, exception); secrets are
+            # never recorded - the report goes to the browser via SSE
+            report['execution_context'][check_id] = redact_params(params)
 
             task.emit({'type': 'check_start', 'id': check_id,
                        'label': spec.label, 'streaming': check_id in STREAMING_IDS})
