@@ -273,3 +273,98 @@ def test_multi_host_records_timing_via_run_instances(temp_check, isolated_db, mo
         {'id': '__test_st_timing__', 'instances': [{'host': 'a'}, {'host': 'b'}]},
     ])
     assert sorted(recorded) == ['a', 'b']
+
+
+# ===========================================================================
+# execution_context (Report Identity / Execution Context Contract v1)
+#
+# The Web UI runs checks through /api/stream/start -> run_stream(), not
+# engine.run_checks(). run_stream() must record execution_context under the
+# SAME Contract v1 as the engine (see tests/test_engine.py, "execution_context"
+# section), or Web reports are invisible to find_related_reports() and the
+# trend layer:
+#   unknown check id                 -> no execution_context entry
+#   spec.func invoked (ok or raises) -> execution_context[check_id] = params
+#   multi-host (2+ instances)        -> execution_context[check_id][key] = params,
+#                                       keys identical to by_host (incl. '#2')
+# ===========================================================================
+
+def _final_report(events):
+    return next(e for e in events if e['type'] == 'all_done')['report']
+
+
+def test_ec_single_host_params_form(temp_check, isolated_db):
+    temp_check('__test_st_ec_single__', lambda host='', port=22: {'seen': host})
+    report = _final_report(_run_and_drain([
+        {'id': '__test_st_ec_single__', 'params': {'host': 'a', 'port': 2222}},
+    ]))
+    assert report['execution_context'] == {'__test_st_ec_single__': {'host': 'a', 'port': 2222}}
+
+
+def test_ec_single_instance_form_is_flat(temp_check, isolated_db):
+    temp_check('__test_st_ec_one__', lambda host='': {'seen': host})
+    report = _final_report(_run_and_drain([
+        {'id': '__test_st_ec_one__', 'instances': [{'host': 'solo'}]},
+    ]))
+    assert report['execution_context'] == {'__test_st_ec_one__': {'host': 'solo'}}
+
+
+def test_ec_check_that_raises_still_recorded(temp_check, isolated_db):
+    def boom(host=''):
+        raise RuntimeError('boom')
+    temp_check('__test_st_ec_boom__', boom)
+    report = _final_report(_run_and_drain([
+        {'id': '__test_st_ec_boom__', 'params': {'host': 'a'}},
+    ]))
+    assert 'error' in report['results']['__test_st_ec_boom__']
+    assert report['execution_context'] == {'__test_st_ec_boom__': {'host': 'a'}}
+
+
+def test_ec_unknown_check_has_no_entry(isolated_db):
+    report = _final_report(_run_and_drain([{'id': '__nonexistent_stream_ec__', 'params': {'host': 'a'}}]))
+    assert '__nonexistent_stream_ec__' not in report.get('execution_context', {})
+
+
+def test_ec_multi_host_keys_match_by_host_including_duplicates(temp_check, isolated_db):
+    temp_check('__test_st_ec_multi__', lambda host='': {'seen': host})
+    report = _final_report(_run_and_drain([
+        {'id': '__test_st_ec_multi__', 'instances': [{'host': 'a'}, {'host': 'b'}, {'host': 'a'}]},
+    ]))
+    ctx = report['execution_context']['__test_st_ec_multi__']
+    assert ctx == {'a': {'host': 'a'}, 'b': {'host': 'b'}, 'a#2': {'host': 'a'}}
+    assert set(ctx) == set(report['results']['__test_st_ec_multi__']['by_host'])
+
+
+def test_ec_live_streaming_check_recorded(isolated_db, monkeypatch):
+    """mtr/ping/tcptraceroute go through STREAM_FUNCS + spec.func; they are
+    invoked with params too, so they get an entry."""
+    import netaudit_pkg.streaming as streaming_mod
+    monkeypatch.setitem(streaming_mod.STREAM_FUNCS, 'ping', lambda task, params, out: None)
+    monkeypatch.setattr(registry.get('ping'), 'func', lambda **p: {'loss_pct': 0})
+    report = _final_report(_run_and_drain([{'id': 'ping', 'params': {'target': '8.8.8.8', 'count': 3}}]))
+    assert report['execution_context'] == {'ping': {'target': '8.8.8.8', 'count': 3}}
+
+
+def test_ec_live_streaming_check_stopped_still_recorded(isolated_db, monkeypatch):
+    """A live stream the user stopped was still attempted with these params."""
+    import netaudit_pkg.streaming as streaming_mod
+
+    def stopped(task, params, out):
+        task.cancelled.set()
+    monkeypatch.setitem(streaming_mod.STREAM_FUNCS, 'ping', stopped)
+    task = StreamTask('test-task-stop', [{'id': 'ping', 'params': {'target': '1.1.1.1'}}])
+    run_stream(task)
+    saved = isolated_db.load_report(isolated_db.list_reports()[0]['id'])
+    assert saved['execution_context'] == {'ping': {'target': '1.1.1.1'}}
+
+
+def test_ec_saved_web_report_is_found_by_find_related_reports(temp_check, isolated_db):
+    """The user-visible effect: a Web report is history for the next one."""
+    temp_check('__test_st_ec_hist__', lambda host='': {'findings': []})
+    _run_and_drain([{'id': '__test_st_ec_hist__', 'params': {'host': '10.0.0.1'}}])
+    current = {'results': {}, 'execution_context': {'__test_st_ec_hist__': {'host': '10.0.0.1'}}}
+
+    related = isolated_db.find_related_reports(current)
+
+    assert len(related) == 1
+    assert '__test_st_ec_hist__' in related[0]['results']
