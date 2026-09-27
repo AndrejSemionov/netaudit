@@ -114,6 +114,41 @@ two more checks simply passed. Problem counts must use only
 - `trend_for(check_id, key, value, window=200)` and `list_units(window=200)`
   read the latest `window` reports via `storage.recent_report_data()`.
 
+## Contract v1.1 amendment — repeated unit within one report (2026-09-27)
+
+Found in review (pass 1): one report can hold several instances of the same
+unit `(check_id, key, value)` — a host listed twice (`h`, `h#2`), or one host
+audited on two ports (`h:22`, `h:2222`: two different sshd, one `host`
+identity). v1 emitted a snapshot per instance, so `compute_trend()` compared
+instances of the SAME report as if they were two runs — a false
+"resolved" with `from == to`.
+
+Taking the first instance is not acceptable: it hides a finding or a
+successful run of the second instance. Merging instances is not acceptable
+either: counts of findings without `id` cannot be combined honestly (sum
+double-counts identical duplicates, max under-counts different ports).
+
+Rule (approved by USER, agreed by both agents):
+
+- `snapshots_from_report()` returns **at most one snapshot per unit per
+  report**.
+- Instances are compared on their normalised snapshot fields: `error`,
+  `counts`, `hardening_score`, `finding_ids`.
+  - All equal → one ordinary snapshot (the common "host listed twice" case).
+  - Any difference → one **ambiguous** snapshot:
+    `error = "ambiguous: N instances of this unit with different results in one report"`,
+    `counts = None`, `hardening_score = None`, `finding_ids = {}`.
+- An ambiguous snapshot is non-comparable, exactly like an errored run: it
+  appears in `points` and is excluded from `latest_change`. It does not claim
+  the check failed; it states the run cannot be represented as one state.
+  Per-instance details stay in the saved report; the trend does not show them.
+- Consumers tell ambiguity from a check failure by the `ambiguous:` prefix of
+  `error`; no new field in v1.
+
+CLI (same amendment): `netaudit trend <check_id>` without a value is a usage
+error — exit status 2; with `--json` it prints
+`{"error": "missing_value", "check_id": ...}` instead of text.
+
 ## Out of scope for v1
 
 - Title-based finding matching / fuzzy matching.
