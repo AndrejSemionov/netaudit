@@ -589,6 +589,11 @@ def test_list_available_returns_all_real_checks():
 # exactly what was passed to spec.func(**params), unmodified, regardless of
 # which family of check this is. That interpretation is future work.
 #
+# Amendment (SECURITY, 2026-09-27): EXCEPT secret params - names in
+# netaudit_pkg.redaction.SECRET_PARAM_NAMES ('password') are passed to
+# spec.func but never recorded (see tests at the end of this section and
+# tests/test_redaction.py).
+#
 # Contract v1 (frozen before these tests were written):
 #   spec is None (unknown check id)   -> no execution_context entry
 #   required tool missing             -> no execution_context entry
