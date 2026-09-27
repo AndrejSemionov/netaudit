@@ -1,6 +1,6 @@
 # Stable finding IDs — Research Phase Summary
 
-Status: **Research CLOSED. Contract PROPOSED rev.2 (GPT/Codex review 1 addressed) — awaiting GPT/Codex re-review and USER approval.**
+Status: **Research CLOSED. Contract PROPOSED rev.3 (GPT/Codex reviews 1–2 addressed) — awaiting USER approval.**
 Date: 2026-09-27
 
 ## Goal
@@ -66,7 +66,7 @@ For kind C the same control fires once per subject. Options:
    trend shows the id as *persisting* — the fix is invisible. Counts stay
    correct.
 2. **Control id + subject**: `DCK-PRIV-001:web`, `SYS-SBX-001:nginx.service`,
-   `BKP-AGE-001:/var/backups/db`. Per-subject new / resolved / persisting.
+   `BKP-AGE-001:%2Fvar%2Fbackups%2Fdb`. Per-subject new / resolved / persisting.
    A renamed subject (container recreated under another name) shows as
    resolved + new — which is what actually happened to that subject.
 3. **Hash of the title.** Rejected: titles carry volatile numbers
@@ -89,6 +89,10 @@ For kind C the same control fires once per subject. Options:
   unambiguous and reversible (`unquote` per part); two different subjects
   can never encode to the same id. No other normalisation — nothing that
   could merge two objects.
+  An **empty** part is valid and encodes to the empty string (`quote('') == ''`):
+  an external `Set-Cookie: =value` yields a cookie with an empty name, and the
+  check must still get an id (`WEB-COOKIE-001:`) without changing its
+  title/severity (review 2).
 - Parts are the object the check itself names (container name, unit name,
   directory path, host path, DKIM selector, subdomain, cookie name). Values
   that change between runs while the problem persists (ages, sizes, counts,
@@ -127,7 +131,7 @@ For kind C the same control fires once per subject. Options:
    - per module: each finding of kind A–D carries an id, and the ids match
      the catalogue;
    - a project-wide guard: every id emitted by the in-scope modules matches
-     `^[A-Z][A-Z0-9]{1,3}(-[A-Z]+)?-\d{3}(:[A-Za-z0-9%._~-]+)*$`, its control
+     `^[A-Z][A-Z0-9]{1,3}(-[A-Z]+)?-\d{3}(:[A-Za-z0-9%._~-]*)*$` (a part may be empty), its control
      id is in the catalogue, and its severity is in the control's allowed set.
      The regex test includes one positive example per prefix (`KRN-001`,
      `NGX-TLS-002`, `SSH-AUTH-005`, `F2B-001`, `FW-UFW-001`, `SQL-BIND-001`,
@@ -136,6 +140,8 @@ For kind C the same control fires once per subject. Options:
      a subject);
    - encoding: a subject containing `:`, `/`, space and newline round-trips
      through quote/unquote and yields a regex-valid id;
+   - empty subject part: `Set-Cookie: =value` → finding with id `WEB-COOKIE-001:`,
+     regex-valid, round-trips to `['']`; title and severity unchanged;
    - kind C: two subjects → two distinct ids; fixing one subject → the
      trend reports it resolved and the other persisting — including **two
      dangerous mounts in one container, one removed**;
