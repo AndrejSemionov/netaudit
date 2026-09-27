@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from ..registry import register
-from ..findings import finding as _finding
+from ..findings import finding as _finding, subject_id
 from ..utils import run_cmd, tool_available
 
 DNSStatus = Literal['NOERROR', 'NXDOMAIN', 'SERVFAIL', 'REFUSED', 'TIMEOUT', 'TOOL_ERROR', 'UNKNOWN_STATUS']
@@ -195,12 +195,14 @@ def _check_spf(domain: str) -> list[dict]:
 
     if not spf_records:
         findings.append(_finding('high', 'no SPF record',
-                                 f'domain {domain} doesn\'t publish SPF — emails are easy to spoof'))
+                                 f'domain {domain} doesn\'t publish SPF — emails are easy to spoof',
+                                 id='DNS-SPF-001'))
         return findings
 
     if len(spf_records) > 1:
         findings.append(_finding('high', 'multiple SPF records',
-                                 'RFC allows only one spf1 TXT — receivers should ignore all of them, mail may not go through'))
+                                 'RFC allows only one spf1 TXT — receivers should ignore all of them, mail may not go through',
+                                 id='DNS-SPF-002'))
 
     spf = spf_records[0]
     # rough count of DNS-lookup mechanisms (include/a/mx/exists/redirect
@@ -209,18 +211,22 @@ def _check_spf(domain: str) -> list[dict]:
     lookup_count = len(lookup_mechanisms)
     if lookup_count > 10:
         findings.append(_finding('high', f'SPF exceeds the DNS-lookup limit ({lookup_count}/10)',
-                                 'RFC 7208: >10 lookups — receivers must treat SPF as an error, all protection is disabled'))
+                                 'RFC 7208: >10 lookups — receivers must treat SPF as an error, all protection is disabled',
+                                 id='DNS-SPF-003'))
     elif lookup_count > 7:
         findings.append(_finding('medium', f'SPF is close to the lookup limit ({lookup_count}/10)',
-                                 'not much headroom left — adding one more include could break SPF'))
+                                 'not much headroom left — adding one more include could break SPF',
+                                 id='DNS-SPF-004'))
 
     if not spf.rstrip().endswith(('-all', '~all')):
         if spf.rstrip().endswith('?all') or spf.rstrip().endswith('+all'):
             findings.append(_finding('high', 'SPF ends with +all/?all',
-                                     'effectively allows sending as this domain from anywhere — SPF is useless'))
+                                     'effectively allows sending as this domain from anywhere — SPF is useless',
+                                     id='DNS-SPF-005'))
         else:
             findings.append(_finding('low', 'SPF has no explicit all mechanism at the end',
-                                     'without -all/~all the policy is undefined for the receiver'))
+                                     'without -all/~all the policy is undefined for the receiver',
+                                     id='DNS-SPF-006'))
 
     if not findings:
         findings.append(_finding('ok', 'SPF is configured correctly', spf))
@@ -254,7 +260,8 @@ def _check_dkim(domain: str) -> list[dict]:
         if checked_selectors:
             findings.append(_finding('medium', 'no DKIM found (checked common selectors)',
                              'checked standard names: ' + ', '.join(checked_selectors) +
-                             ' — the real selector may differ, ask your mail provider'))
+                             ' — the real selector may differ, ask your mail provider',
+                             id='DNS-DKIM-001'))
         return findings
 
     for selector, txt in found:
@@ -267,7 +274,8 @@ def _check_dkim(domain: str) -> list[dict]:
         # `p=` with nothing after it at all.
         if 'p=' in txt and re.search(r'p=\s*(?:;|$)', txt):
             findings.append(_finding('high', f'DKIM selector {selector} is revoked (empty p=)',
-                                     'the key was revoked or hasn\'t been generated yet — signing isn\'t working'))
+                                     'the key was revoked or hasn\'t been generated yet — signing isn\'t working',
+                                     id=subject_id('DNS-DKIM-002', selector)))
         else:
             findings.append(_finding('ok', f'DKIM selector {selector} found and active'))
     return findings
@@ -290,7 +298,8 @@ def _check_dmarc(domain: str) -> list[dict]:
 
     if not dmarc_txt:
         return [_finding('high', 'no DMARC record',
-                         'without DMARC, receivers don\'t know what to do with emails that fail SPF/DKIM')]
+                         'without DMARC, receivers don\'t know what to do with emails that fail SPF/DKIM',
+                         id='DNS-DMARC-001')]
 
     findings = []
     policy_m = re.search(r'p=(\w+)', dmarc_txt)
@@ -300,14 +309,16 @@ def _check_dmarc(domain: str) -> list[dict]:
         has_rua = 'rua=' in dmarc_txt
         if has_rua:
             findings.append(_finding('low', 'DMARC p=none (monitoring only)',
-                                     'reports are being collected (rua is set), but there\'s no real spoofing protection — plan a move to quarantine/reject'))
+                                     'reports are being collected (rua is set), but there\'s no real spoofing protection — plan a move to quarantine/reject',
+                                     id='DNS-DMARC-002'))
         else:
             findings.append(_finding('medium', 'DMARC p=none with no reporting (rua)',
-                                     'neither protection nor visibility — DMARC is effectively useless in this state'))
+                                     'neither protection nor visibility — DMARC is effectively useless in this state',
+                                     id='DNS-DMARC-003'))
     elif policy in ('quarantine', 'reject'):
         findings.append(_finding('ok', f'DMARC is active: p={policy}', dmarc_txt))
     else:
-        findings.append(_finding('medium', 'DMARC has no recognized p= policy', dmarc_txt))
+        findings.append(_finding('medium', 'DMARC has no recognized p= policy', dmarc_txt, id='DNS-DMARC-004'))
 
     return findings
 
@@ -326,7 +337,8 @@ def _check_dnssec(domain: str) -> list[dict]:
 
     if not dnskey_result.records:
         return [_finding('medium', 'DNSSEC is not enabled',
-                         'the zone is unsigned — DNS responses can be forged (cache poisoning), especially on open resolvers')]
+                         'the zone is unsigned — DNS responses can be forged (cache poisoning), especially on open resolvers',
+                         id='DNS-SEC-001')]
 
     ds_result = _dig_query('DS', domain)
 
@@ -339,7 +351,8 @@ def _check_dnssec(domain: str) -> list[dict]:
     if ds_result.records:
         return [_finding('ok', 'DNSSEC is enabled, a DS record is present at the parent zone')]
     return [_finding('medium', 'DNSKEY exists but no DS record at the registrar',
-                     'the zone is signed, but the chain of trust isn\'t closed — add a DS record at the domain registrar')]
+                     'the zone is signed, but the chain of trust isn\'t closed — add a DS record at the domain registrar',
+                     id='DNS-SEC-002')]
 
 # ===========================================================================
 # Dangling CNAME (subdomain takeover risk)
@@ -388,7 +401,8 @@ def _check_dangling_cnames(domain: str, subdomains: list[str]) -> list[dict]:
             severity = 'high' if hint else 'medium'
             findings.append(_finding(severity, f'dangling CNAME: {full} → {cname}',
                                      'the target doesn\'t resolve — subdomain takeover risk if the platform freely gives out such names'
-                                     + (f' (looks like {hint})' if hint else '')))
+                                     + (f' (looks like {hint})' if hint else ''),
+                                     id=subject_id('DNS-CNAME-001', full)))
 
     if unresolved:
         findings.append(_finding('info', f'{len(unresolved)} subdomain(s) could not be checked for dangling CNAME',
@@ -424,7 +438,8 @@ def _check_discovered_services(domain: str) -> list[dict]:
     findings = []
     for label in sorted(set(found)):
         findings.append(_finding('low', f'service detected: {label}',
-                                 'a verification token in a TXT record — reveals infrastructure in use'))
+                                 'a verification token in a TXT record — reveals infrastructure in use',
+                                 id=subject_id('DNS-TXT-001', label)))
     return findings
 
 # ===========================================================================

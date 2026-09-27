@@ -29,7 +29,7 @@ from __future__ import annotations
 import re
 
 from ..registry import register
-from ..findings import finding as _finding
+from ..findings import finding as _finding, subject_id
 from ..ssh import SSHExecutor, HostKeyMismatchError
 
 try:
@@ -163,14 +163,16 @@ def check_backup(host='', user='root', port=22, key_path='', password='',  # nos
             if files is None:
                 entry['error'] = 'directory does not exist'
                 all_findings.append(_finding('high', f'{directory}: backup directory does not exist',
-                                              'check the path or the whole backup job — it might be writing elsewhere'))
+                                              'check the path or the whole backup job — it might be writing elsewhere',
+                                              id=subject_id('BKP-DIR-001', directory)))
                 results.append(entry)
                 continue
 
             if not files:
                 entry['file_count'] = 0
                 all_findings.append(_finding('high', f'{directory}: no backup files found',
-                                              'the directory is empty — the backup either never ran, or everything gets deleted too soon'))
+                                              'the directory is empty — the backup either never ran, or everything gets deleted too soon',
+                                              id=subject_id('BKP-DIR-002', directory)))
                 results.append(entry)
                 continue
 
@@ -186,20 +188,23 @@ def check_backup(host='', user='root', port=22, key_path='', password='',  # nos
             if age_hours > max_age_hours:
                 all_findings.append(_finding(
                     'high', f'{directory}: the latest backup is stale ({age_hours:.0f}h, expected ≤{max_age_hours}h)',
-                    f'file {latest["name"]}, check the cron/systemd timer and the last run log on the server'
+                    f'file {latest["name"]}, check the cron/systemd timer and the last run log on the server',
+                    id=subject_id('BKP-AGE-001', directory),
                 ))
 
             if 0 < latest['size'] < MIN_SANE_BACKUP_BYTES:
                 all_findings.append(_finding(
                     'high', f'{directory}: the latest backup is suspiciously small ({latest["size"]} bytes)',
-                    f'file {latest["name"]} — the script likely failed midway, or the database was empty at dump time'
+                    f'file {latest["name"]} — the script likely failed midway, or the database was empty at dump time',
+                    id=subject_id('BKP-SIZE-001', directory),
                 ))
 
             if len(files) < min_copies:
                 all_findings.append(_finding(
                     'medium', f'{directory}: fewer local backup copies than expected ({len(files)}, need ≥{min_copies})',
                     'this only counts files in this one directory on this one server — it does not confirm '
-                    'an off-site or cross-media copy exists (the actual 3-2-1 rule), only that local retention is thin'
+                    'an off-site or cross-media copy exists (the actual 3-2-1 rule), only that local retention is thin',
+                    id=subject_id('BKP-COPY-001', directory),
                 ))
 
             if ARCHIVE_EXT_RE.search(latest['name']):
@@ -208,7 +213,8 @@ def check_backup(host='', user='root', port=22, key_path='', password='',  # nos
                 if integrity_error:
                     all_findings.append(_finding(
                         'high', f'{directory}: the latest backup fails the integrity check',
-                        f'{latest["name"]}: {integrity_error}'
+                        f'{latest["name"]}: {integrity_error}',
+                        id=subject_id('BKP-INT-001', directory),
                     ))
 
             disk_pct, disk_err = _check_disk_space(ssh, directory)
@@ -217,7 +223,8 @@ def check_backup(host='', user='root', port=22, key_path='', password='',  # nos
                 if disk_pct >= 90:
                     all_findings.append(_finding(
                         'medium', f'{directory}: partition is {disk_pct}% full',
-                        'the next backup risks not fitting — free up space or move backups to another disk'
+                        'the next backup risks not fitting — free up space or move backups to another disk',
+                        id=subject_id('BKP-DISK-001', directory),
                     ))
 
             results.append(entry)
