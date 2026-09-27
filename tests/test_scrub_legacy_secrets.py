@@ -17,7 +17,8 @@ SECRET = 'FAKE-TEST-PW-ONLY'
 
 def _db(tmp_path: Path, *reports: dict | str) -> Path:
     path = tmp_path / 'reports.db'
-    with sqlite3.connect(path) as conn:
+    conn = sqlite3.connect(path)
+    try:
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('CREATE TABLE reports (id INTEGER PRIMARY KEY, timestamp TEXT, '
                      'checks TEXT, total_time REAL, data TEXT NOT NULL)')
@@ -25,6 +26,9 @@ def _db(tmp_path: Path, *reports: dict | str) -> Path:
             payload = report if isinstance(report, str) else json.dumps(report)
             conn.execute('INSERT INTO reports (timestamp, checks, total_time, data) VALUES (?,?,?,?)',
                          ('2026-01-01', 'ssh_hardening', 1.0, payload))
+        conn.commit()
+    finally:
+        conn.close()
     return path
 
 
@@ -34,8 +38,11 @@ def _report(context: dict, *, results: dict | None = None) -> dict:
 
 
 def _raw(path: Path) -> list[str]:
-    with sqlite3.connect(f'{path.as_uri()}?mode=ro', uri=True) as conn:
+    conn = sqlite3.connect(f'{path.as_uri()}?mode=ro', uri=True)
+    try:
         return [r[0] for r in conn.execute('SELECT data FROM reports ORDER BY id')]
+    finally:
+        conn.close()
 
 
 def test_dry_run_counts_without_mutation_or_backup(tmp_path):
@@ -60,12 +67,15 @@ def test_apply_scrubs_flat_and_multi_host_preserving_other_data(tmp_path):
     rows = [json.loads(raw) for raw in _raw(db)]
     assert rows[0] == _report({'host': 'a'})
     assert rows[1] == _report({'a': {'host': 'a'}, 'b': {'host': 'b'}})
-    with sqlite3.connect(db) as conn:
+    conn = sqlite3.connect(db)
+    try:
         assert conn.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
         assert conn.execute('SELECT id, timestamp, checks, total_time FROM reports ORDER BY id').fetchall() == [
             (1, '2026-01-01', 'ssh_hardening', 1.0),
             (2, '2026-01-01', 'ssh_hardening', 1.0),
         ]
+    finally:
+        conn.close()
 
 
 def test_noop_does_not_create_backup_and_is_repeatable(tmp_path):
@@ -91,6 +101,27 @@ def test_unsupported_context_shape_fails_closed(tmp_path):
     report = {'results': {}, 'execution_context': {'x': [{'password': SECRET}]}}
     db = _db(tmp_path, report)
     assert scrub.scan_database(db).eligible is False
+    with pytest.raises(scrub.ScrubError):
+        scrub.apply_scrub(db, tmp_path / 'backup.db')
+
+
+def test_scalar_execution_context_is_unsupported_even_without_visible_key(tmp_path):
+    db = _db(tmp_path, {'results': {}, 'execution_context': 'legacy-unstructured-data'})
+    assert scrub.scan_database(db).unsupported == 1
+    with pytest.raises(scrub.ScrubError):
+        scrub.apply_scrub(db, tmp_path / 'backup.db')
+
+
+def test_non_text_report_data_fails_closed(tmp_path):
+    db = _db(tmp_path, _report({'host': 'a', 'password': SECRET}))
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute('INSERT INTO reports (timestamp, checks, total_time, data) VALUES (?,?,?,?)',
+                     ('2026-01-01', 'ssh_hardening', 0, sqlite3.Binary(b'\xff')))
+        conn.commit()
+    finally:
+        conn.close()
+    assert scrub.scan_database(db).malformed == 1
     with pytest.raises(scrub.ScrubError):
         scrub.apply_scrub(db, tmp_path / 'backup.db')
 
@@ -147,6 +178,41 @@ def test_locked_database_fails_without_backup_or_update(tmp_path):
     assert not (tmp_path / 'backup.db').exists()
 
 
+def test_non_wal_database_is_refused_before_backup(tmp_path):
+    db = _db(tmp_path, _report({'host': 'a', 'password': SECRET}))
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute('PRAGMA journal_mode=DELETE')
+    finally:
+        conn.close()
+    with pytest.raises(scrub.ScrubError, match='WAL'):
+        scrub.apply_scrub(db, tmp_path / 'backup.db')
+    assert SECRET in _raw(db)[0]
+    assert not (tmp_path / 'backup.db').exists()
+
+
+def test_database_symlink_and_existing_backup_are_rejected(tmp_path):
+    db = _db(tmp_path, _report({'host': 'a', 'password': SECRET}))
+    alias = tmp_path / 'alias.db'
+    alias.symlink_to(db)
+    with pytest.raises(scrub.ScrubError):
+        scrub.scan_database(alias)
+    backup = tmp_path / 'backup.db'
+    backup.write_bytes(b'existing user data')
+    with pytest.raises(scrub.ScrubError):
+        scrub.apply_scrub(db, backup)
+    assert backup.read_bytes() == b'existing user data'
+
+
+def test_source_database_sidecar_cannot_be_backup_path(tmp_path):
+    db = _db(tmp_path, _report({'host': 'a', 'password': SECRET}))
+    for suffix in ('-journal', '-wal', '-shm'):
+        candidate = Path(f'{db}{suffix}')
+        with pytest.raises(scrub.ScrubError):
+            scrub.apply_scrub(db, candidate)
+    assert SECRET in _raw(db)[0]
+
+
 def test_failure_before_commit_rolls_back_and_keeps_private_backup(tmp_path, monkeypatch):
     db = _db(tmp_path, _report({'host': 'a', 'password': SECRET}))
     backup = tmp_path / 'backup.db'
@@ -183,6 +249,22 @@ def test_checkpoint_busy_is_incomplete(tmp_path, monkeypatch):
     monkeypatch.setattr(scrub, '_checkpoint', lambda conn: (1, 1, 0))
     result = scrub.apply_scrub(db, tmp_path / 'backup.db')
     assert result.status == 'incomplete' and result.stage == 'checkpoint'
+
+
+def test_preflight_warns_when_free_space_is_low(tmp_path, monkeypatch):
+    db = _db(tmp_path, _report({'host': 'a', 'password': SECRET}))
+    monkeypatch.setattr(scrub.shutil, 'disk_usage', lambda path: type('Usage', (), {'free': 0})())
+    assert scrub.scan_database(db).space_warning is True
+
+
+def test_cli_apply_uses_only_aggregate_output(tmp_path, capsys):
+    db = _db(tmp_path, _report({'host': 'a', 'password': SECRET}))
+    backup = tmp_path / 'backup.db'
+    assert scrub.main(['--database', str(db), '--apply', '--backup', str(backup)]) == 0
+    captured = capsys.readouterr()
+    assert SECRET not in captured.out + captured.err
+    assert 'affected=1' in captured.out
+    assert SECRET not in _raw(db)[0]
 
 
 def test_cli_requires_explicit_path_and_never_prints_secret(tmp_path, capsys):

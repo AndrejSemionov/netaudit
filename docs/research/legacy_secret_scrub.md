@@ -1,6 +1,6 @@
 # Legacy report secret scrub — proposed contract
 
-Status: PROPOSED; implementation must wait for Claude review and USER approval.
+Status: APPROVED by USER on 2026-09-27 for implementation/testing on temporary databases only; Claude review approved the contract.
 Date: 2026-09-27
 Owner: GPT/Codex (implementation); reviewer: Claude.
 
@@ -29,7 +29,8 @@ python -m netaudit_pkg.scrub_legacy_secrets --database ABSOLUTE_PATH --apply --b
 - Both modes require an explicit absolute database path; never default to
   `storage.DB_PATH`. No glob, directory, symlink, or nonexistent source is
   accepted. The backup path is explicit and must not exist, equal the DB,
-  resolve inside the DB path, or be a symlink. Its parent must exist.
+  name one of the source database's `-wal`/`-shm`/`-journal` sidecars, or be
+  a symlink. Its parent must exist.
 - Without `--apply`, run a preflight scan only. Print aggregate report and
   affected-row counts, malformed-row count, and whether this DB is eligible
   for apply. Separately count rows with a `SECRET_PARAM_NAMES` key outside
