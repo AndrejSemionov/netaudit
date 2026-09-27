@@ -1,6 +1,6 @@
 # Stable finding IDs — Research Phase Summary
 
-Status: **Research CLOSED. Contract PROPOSED — awaiting GPT/Codex review and USER approval.**
+Status: **Research CLOSED. Contract PROPOSED rev.2 (GPT/Codex review 1 addressed) — awaiting GPT/Codex re-review and USER approval.**
 Date: 2026-09-27
 
 ## Goal
@@ -75,18 +75,35 @@ For kind C the same control fires once per subject. Options:
 
 **Proposed: option 2**, with rules:
 
-- Format `CONTROL_ID:subject`; `:` is not used inside control ids, so the
-  control id is always recoverable (`id.split(':', 1)[0]`).
-- The subject is the object the check itself names in the title (container
-  name, unit name, directory path, selector, subdomain, cookie name), taken
-  verbatim — no normalisation that could merge two subjects.
-- Values that change between runs (ages, sizes, counts, percentages) are
-  never part of the id.
+- Format `CONTROL_ID:part[:part...]`. `:` is not used inside control ids, so
+  the control id is always recoverable (`id.split(':', 1)[0]`).
+- **The subject is defined per control, not per check** (review 1, item 2):
+  it is the tuple of every value that distinguishes two findings of that
+  control in one run. Example: `docker_audit` emits one "sensitive host path
+  mounted" finding per dangerous bind, so its subject is
+  `(container, host_path)`, not just the container — otherwise two mounts in
+  one container collapse into one id and fixing one of them is invisible.
+- **Encoding** (review 1, remark): each part is percent-encoded with
+  `urllib.parse.quote(part, safe='')` and parts are joined with `:`. Paths,
+  cookie names or anything with `:`, `/`, spaces or newlines become
+  unambiguous and reversible (`unquote` per part); two different subjects
+  can never encode to the same id. No other normalisation — nothing that
+  could merge two objects.
+- Parts are the object the check itself names (container name, unit name,
+  directory path, host path, DKIM selector, subdomain, cookie name). Values
+  that change between runs while the problem persists (ages, sizes, counts,
+  percentages, **and the CNAME target** — it can change while the subdomain
+  stays dangling) are never part of the id.
+- Known limit: two `Set-Cookie` lines with the same cookie name (different
+  `Path`/`Domain`) get the same id; their findings still count separately,
+  only the id diff can't tell them apart. Parsing `Path`/`Domain` into the
+  subject is possible later but is behaviour the check does not have today.
 
 ## Proposed contract
 
-1. **Format.** `PREFIX-GROUP-NNN`, uppercase, three-digit number;
-   `CONTROL_ID:subject` for kind C. Proposed prefixes (new): `F2B`
+1. **Format.** `PREFIX-GROUP-NNN`, uppercase, three-digit number; the
+   prefix may contain digits after its first letter (`F2B`);
+   `CONTROL_ID:part[:part...]` for kind C (encoding above). Proposed prefixes (new): `F2B`
    (fail2ban), `FW` (firewall: ufw / nftables / iptables), `SQL`, `WEB`
    (`web_security_external`), `DCK` (docker), `SYS` (systemd), `BKP`
    (backup), `DNS`. Existing `KRN`, `NGX`, `SSH` unchanged.
@@ -97,16 +114,32 @@ For kind C the same control fires once per subject. Options:
    retires its number. If a control's meaning changes materially, it gets a
    new number. Rationale: the trend layer diffs by id — a rename reads as
    "fixed + new problem".
-4. **Catalogue.** Every id is listed in `docs/checks/finding_ids.md` (one
-   table per module: id, severity, control, title) — the same role the
-   existing per-check catalogues play for `KRN`/`NGX`/`SSH`.
+4. **Catalogue.** Every control id is listed in `docs/checks/finding_ids.md`
+   (one table per module: control id, **allowed severities**, subject parts,
+   control, title) — the same role the existing per-check catalogues play for
+   `KRN`/`NGX`/`SSH`. Severity is a set, not one value (review 1, item 3):
+   one control may legitimately emit different severities (dangling CNAME:
+   `high` for a known takeover platform, `medium` otherwise; cookie flags:
+   `high` when both Secure and HttpOnly are missing, `medium` otherwise). The
+   rule stays in the check; the catalogue lists the allowed set and the tests
+   check membership.
 5. **Tests.**
    - per module: each finding of kind A–D carries an id, and the ids match
      the catalogue;
    - a project-wide guard: every id emitted by the in-scope modules matches
-     `^[A-Z]{2,4}(-[A-Z]+)?-\d{3}(:.+)?$` and is listed in the catalogue;
+     `^[A-Z][A-Z0-9]{1,3}(-[A-Z]+)?-\d{3}(:[A-Za-z0-9%._~-]+)*$`, its control
+     id is in the catalogue, and its severity is in the control's allowed set.
+     The regex test includes one positive example per prefix (`KRN-001`,
+     `NGX-TLS-002`, `SSH-AUTH-005`, `F2B-001`, `FW-UFW-001`, `SQL-BIND-001`,
+     `WEB-COOKIE-001`, `DCK-PRIV-001`, `SYS-SBX-001`, `BKP-AGE-001`,
+     `DNS-SPF-001`) and negatives (lowercase, no number, raw `/` or newline in
+     a subject);
+   - encoding: a subject containing `:`, `/`, space and newline round-trips
+     through quote/unquote and yields a regex-valid id;
    - kind C: two subjects → two distinct ids; fixing one subject → the
-     trend reports it resolved and the other persisting.
+     trend reports it resolved and the other persisting — including **two
+     dangerous mounts in one container, one removed**;
+   - dangling CNAME: same subdomain, changed target, still dangling → same id.
 6. **No behaviour change** besides the added `id` key: severities, titles,
    details, ordering unchanged (existing tests must pass untouched).
 
