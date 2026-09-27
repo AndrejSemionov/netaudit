@@ -537,3 +537,17 @@ def test_find_related_reports_still_matches_after_redaction(isolated_db):
     isolated_db.save_report(_report('2026-01-01 00:00:00', {'ssh_hardening': {'host': 'h', 'password': 'FAKE-TEST-PW'}}))
     current = _report('2026-01-02 00:00:00', {'ssh_hardening': {'host': 'h'}})
     assert len(isolated_db.find_related_reports(current)) == 1
+
+
+def test_recent_report_data_redacts_legacy_row_saved_before_fix(isolated_db):
+    """SECURITY (2026-09-27): the trend read path returns full reports too."""
+    legacy = _report('2026-01-01 00:00:00', {'ssh_hardening': {'host': 'h', 'password': 'FAKE-TEST-PW'}})
+    conn = isolated_db._conn()
+    conn.execute('INSERT INTO reports (timestamp, checks, total_time, data) VALUES (?,?,?,?)',
+                 (legacy['timestamp'], 'ssh_hardening', 0, json.dumps(legacy)))
+    conn.commit()
+
+    (data,) = isolated_db.recent_report_data()
+
+    assert data['execution_context'] == {'ssh_hardening': {'host': 'h'}}
+    assert 'FAKE-TEST-PW' not in json.dumps(data)
