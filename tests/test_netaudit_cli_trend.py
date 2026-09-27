@@ -205,3 +205,19 @@ def test_trend_missing_value_json_is_json_error_exit_2(isolated_db, capsys):
 
     assert exc.value.code == 2
     assert json.loads(capsys.readouterr().out) == {'error': 'missing_value', 'check_id': 'ssh_hardening'}
+
+
+def test_trend_ambiguous_point_is_not_labelled_as_error(isolated_db, capsys):
+    """Contract v1.1: an ambiguous point does not claim the check failed."""
+    isolated_db.save_report({
+        'timestamp': '2026-01-01 00:00:00', 'total_time': 0,
+        'results': {'ssh_hardening': {'_multi_host': True, 'by_host': {
+            'h': {'findings': [_f('high')]}, 'h#2': {'findings': []}}}},
+        'execution_context': {'ssh_hardening': {'h': {'host': 'h'}, 'h#2': {'host': 'h'}}},
+    })
+
+    netaudit.cmd_trend(_ns('ssh_hardening', 'h'))
+
+    out = capsys.readouterr().out
+    assert 'AMBIGUOUS: 2 instances of this unit with different results in one report' in out
+    assert 'ERROR' not in out
