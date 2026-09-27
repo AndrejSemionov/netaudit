@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 from argparse import Namespace
 
+import pytest
+
 import netaudit
 from netaudit_pkg import trends
 
@@ -133,11 +135,28 @@ def test_trend_unit_ambiguous_key_asks_for_key(isolated_db, capsys):
     _save(isolated_db, '2026-01-01 00:00:00', 'x', {'host': 'a.example', 'domain': 'a.example'},
           {'findings': []})
 
-    netaudit.cmd_trend(_ns('x', 'a.example'))
+    with pytest.raises(SystemExit) as exc:
+        netaudit.cmd_trend(_ns('x', 'a.example'))
 
+    assert exc.value.code == 2
     out = capsys.readouterr().out
     assert '--key' in out
     assert 'domain' in out and 'host' in out
+
+
+def test_trend_unit_ambiguous_key_json_is_json_error_exit_2(isolated_db, capsys):
+    """REVIEW pass 1, defect 3: --json must stay machine-readable even when
+    the identity key is ambiguous, and signal failure via the exit status."""
+    _save(isolated_db, '2026-01-01 00:00:00', 'x', {'host': 'a.example', 'domain': 'a.example'},
+          {'findings': []})
+
+    with pytest.raises(SystemExit) as exc:
+        netaudit.cmd_trend(_ns('x', 'a.example', as_json=True))
+
+    assert exc.value.code == 2
+    assert json.loads(capsys.readouterr().out) == {
+        'error': 'ambiguous_key', 'check_id': 'x', 'value': 'a.example', 'keys': ['domain', 'host'],
+    }
 
 
 def test_trend_unit_explicit_key(isolated_db, capsys):
@@ -154,3 +173,18 @@ def test_trend_is_registered_in_parser():
 
     assert args.func is netaudit.cmd_trend
     assert (args.check_id, args.value, args.key, args.json) == ('ssh_hardening', '10.0.0.1', 'host', True)
+
+
+def test_trend_unit_text_change_uses_run_order_not_timestamp(isolated_db, capsys):
+    """REVIEW pass 1, defect 2: two different reports saved in the same second
+    must not collapse - the printed from/to numbers must match the JSON diff."""
+    _save(isolated_db, '2026-09-26 10:00:00', 'ssh_hardening', {'host': 'h'},
+          {'findings': [_f('high')], 'hardening': {'score': 50, 'max': 100, 'components': []}})
+    _save(isolated_db, '2026-09-26 10:00:00', 'ssh_hardening', {'host': 'h'},
+          {'findings': [], 'hardening': {'score': 90, 'max': 100, 'components': []}})
+
+    netaudit.cmd_trend(_ns('ssh_hardening', 'h'))
+
+    out = capsys.readouterr().out
+    assert '1 -> 0 (-1)' in out
+    assert '50 -> 90 (+40)' in out
