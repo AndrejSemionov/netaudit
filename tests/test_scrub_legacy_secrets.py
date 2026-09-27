@@ -267,6 +267,39 @@ def test_cli_apply_uses_only_aggregate_output(tmp_path, capsys):
     assert SECRET not in _raw(db)[0]
 
 
+def test_cli_apply_warns_about_space_at_backup_location(tmp_path, capsys, monkeypatch):
+    db = _db(tmp_path, _report({'host': 'a', 'password': SECRET}))
+    backup = tmp_path / 'backup.db'
+    monkeypatch.setattr(scrub, '_space_warning', lambda source, destination=None: destination == backup)
+    assert scrub.main(['--database', str(db), '--apply', '--backup', str(backup)]) == 0
+    assert 'space_warning=True' in capsys.readouterr().out
+
+
+def test_cli_warns_of_sensitive_backup_after_precommit_failure(tmp_path, capsys, monkeypatch):
+    db = _db(tmp_path, _report({'host': 'a', 'password': SECRET}))
+    backup = tmp_path / 'backup.db'
+
+    def fail_updates(conn, updates):
+        raise RuntimeError(SECRET)
+
+    monkeypatch.setattr(scrub, '_perform_updates', fail_updates)
+    assert scrub.main(['--database', str(db), '--apply', '--backup', str(backup)]) == 2
+    output = capsys.readouterr()
+    assert str(backup) in output.err
+    assert 'may contain original secrets' in output.err
+    assert SECRET not in output.err
+    assert backup.exists() and SECRET in _raw(backup)[0]
+
+
+def test_cli_no_backup_warning_when_backup_reservation_fails(tmp_path, capsys, monkeypatch):
+    db = _db(tmp_path, _report({'host': 'a', 'password': SECRET}))
+    backup = tmp_path / 'backup.db'
+    monkeypatch.setattr(scrub, '_reserve_backup', lambda path: (_ for _ in ()).throw(scrub.ScrubError('reserve failed')))
+    assert scrub.main(['--database', str(db), '--apply', '--backup', str(backup)]) == 2
+    assert 'may contain original secrets' not in capsys.readouterr().err
+    assert not backup.exists()
+
+
 def test_cli_requires_explicit_path_and_never_prints_secret(tmp_path, capsys):
     assert scrub.main([]) != 0
     db = _db(tmp_path, _report({'host': 'a', 'password': SECRET}))

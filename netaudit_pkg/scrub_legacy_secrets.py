@@ -23,6 +23,10 @@ from .redaction import SECRET_PARAM_NAMES, redact_report
 class ScrubError(Exception):
     """Safe-to-display scrub failure. Never include report data or SQL errors."""
 
+    def __init__(self, message: str, sensitive_backup: Path | None = None):
+        super().__init__(message)
+        self.sensitive_backup = sensitive_backup
+
 
 @dataclass
 class ScanResult:
@@ -175,7 +179,6 @@ def _private_backup_files(path: Path) -> bool:
 
 
 def _make_backup(database: Path, backup: Path, expected_rows: int) -> None:
-    _reserve_backup(backup)
     source = destination = None
     try:
         source = _connect_ro(database)  # separate from the writer-lock connection
@@ -216,6 +219,7 @@ def apply_scrub(database: str | Path, backup: str | Path) -> ScrubResult:
     old_umask = os.umask(0o077)
     conn: sqlite3.Connection | None = None
     committed = False
+    backup_reserved = False
     try:
         preflight = scan_database(path)
         if not preflight.eligible:
@@ -230,6 +234,8 @@ def apply_scrub(database: str | Path, backup: str | Path) -> ScrubResult:
             locked = _scan_conn(conn)
             if not locked.eligible or locked.fingerprint != preflight.fingerprint:
                 raise ScrubError('database changed since preflight or has invalid report data')
+            _reserve_backup(backup_path)
+            backup_reserved = True
             _make_backup(path, backup_path, locked.total)
             conn.execute('PRAGMA secure_delete=ON')
             _perform_updates(conn, locked.updates)
@@ -238,10 +244,13 @@ def apply_scrub(database: str | Path, backup: str | Path) -> ScrubResult:
                 raise ScrubError('in-transaction verification failed')
             conn.commit()
             committed = True
-        except ScrubError:
+        except ScrubError as exc:
+            if backup_reserved:
+                exc.sensitive_backup = backup_path
             raise
         except Exception as exc:
-            raise ScrubError('apply failed before commit; source rolled back') from exc
+            raise ScrubError('apply failed before commit; source rolled back',
+                             backup_path if backup_reserved else None) from exc
         try:
             _run_vacuum(conn)
         except Exception:
@@ -291,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
             result = apply_scrub(args.database, args.backup)
             print(f'status={result.status} affected={result.affected} stage={result.stage or "done"}')
             if result.status != 'noop':
+                print(f'space_warning={_space_warning(Path(args.database), Path(args.backup))}')
                 print(f'Backup with original secrets: {args.backup} — protect and retain only as needed.')
             else:
                 print('No logical report keys need scrubbing. This does not prove a prior '
@@ -308,6 +318,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if scan.eligible else 2
     except ScrubError as exc:
         print(f'error: {exc}', file=sys.stderr)
+        if exc.sensitive_backup is not None:
+            print(f'Backup at {exc.sensitive_backup} may contain original secrets; '
+                  'protect it and follow your backup retention policy.', file=sys.stderr)
         return 2
     except Exception:
         # Unexpected OS/SQLite exception text may contain external report
