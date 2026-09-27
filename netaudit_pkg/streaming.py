@@ -27,7 +27,7 @@ from . import (
     storage,
     timing,
 )
-from .engine import run_instances
+from .engine import _dedupe_key, run_instances
 from .registry import registry
 from .utils import log
 
@@ -166,6 +166,10 @@ def run_stream(task: StreamTask):
     report = {
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'results': {}, 'timing': {}, 'meta': {},
+        # Same Execution Context Contract v1 as engine.run_checks()/
+        # run_checks_multi() - without it Web reports are invisible to
+        # storage.find_related_reports() and the trend layer.
+        'execution_context': {},
     }
     try:
         for item in task.selected:
@@ -202,6 +206,12 @@ def run_stream(task: StreamTask):
 
                 report['results'][check_id] = {'_multi_host': True, 'by_host': by_host}
                 report['timing'][check_id] = by_host_timing
+                # keyed exactly like by_host (same _dedupe_key, same order),
+                # as engine.run_checks_multi() does
+                seen_counts: dict = {}
+                report['execution_context'][check_id] = {
+                    _dedupe_key(inst.get('host', ''), seen_counts): inst for inst in instances
+                }
                 report['meta'][check_id] = {'label': spec.label, 'category': spec.category}
                 task.emit({'type': 'check_group_done', 'id': check_id,
                            'result': report['results'][check_id]})
@@ -211,6 +221,9 @@ def run_stream(task: StreamTask):
             # exactly one entry, or wasn't provided at all - falls back to
             # 'params', unchanged)
             params = instances[0] if instances else item.get('params', {})
+            # every path below attempts the check with these params (live
+            # stream, stopped stream, regular call, exception)
+            report['execution_context'][check_id] = params
 
             task.emit({'type': 'check_start', 'id': check_id,
                        'label': spec.label, 'streaming': check_id in STREAMING_IDS})
