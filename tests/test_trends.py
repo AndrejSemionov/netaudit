@@ -86,21 +86,119 @@ def test_multi_host_context_one_snapshot_per_host():
     assert snaps['10.0.0.2']['counts']['high'] == 0
 
 
-def test_multi_host_dedup_suffix_uses_real_host_value():
+# ---------------------------------------------------------------------------
+# Contract v1.1: repeated unit within one report (REVIEW pass 1, defect 1).
+# At most one snapshot per unit per report; identical instances collapse,
+# differing instances become one non-comparable "ambiguous:" snapshot.
+# ---------------------------------------------------------------------------
+
+def _dup_report(first, second, ts='2026-01-01 00:00:00'):
+    return _report(ts, {
+        'ssh_hardening': {'_multi_host': True, 'by_host': {'h': first, 'h#2': second}},
+    }, {'ssh_hardening': {'h': {'host': 'h'}, 'h#2': {'host': 'h'}}})
+
+
+def _assert_ambiguous(snap, n=2):
+    assert snap['error'] == f'ambiguous: {n} instances of this unit with different results in one report'
+    assert snap['counts'] is None
+    assert snap['hardening_score'] is None
+    assert snap['finding_ids'] == {}
+
+
+def test_repeated_unit_identical_instances_collapse_to_one_snapshot():
+    snaps = snapshots_from_report(_dup_report({'findings': [_f('high', 'A')]},
+                                              {'findings': [_f('high', 'A')]}))
+
+    (s,) = snaps
+    assert s['error'] is None
+    assert s['counts']['high'] == 1
+    assert s['finding_ids'] == {'A': 'high'}
+
+
+def test_repeated_unit_empty_then_finding_is_ambiguous():
+    (s,) = snapshots_from_report(_dup_report({'findings': []}, {'findings': [_f('high', 'A')]}))
+
+    _assert_ambiguous(s)
+
+
+def test_repeated_unit_finding_then_empty_is_ambiguous():
+    (s,) = snapshots_from_report(_dup_report({'findings': [_f('high', 'A')]}, {'findings': []}))
+
+    _assert_ambiguous(s)
+
+
+def test_repeated_unit_error_and_success_is_ambiguous():
+    (s,) = snapshots_from_report(_dup_report({'error': 'timeout'}, {'findings': [_f('high', 'A')]}))
+
+    _assert_ambiguous(s)
+
+
+def test_repeated_unit_identical_errors_collapse_to_one_error_snapshot():
+    (s,) = snapshots_from_report(_dup_report({'error': 'timeout'}, {'error': 'timeout'}))
+
+    assert s['error'] == 'timeout'
+
+
+def test_repeated_unit_differing_score_only_is_ambiguous():
+    (s,) = snapshots_from_report(_dup_report(
+        {'findings': [], 'hardening': {'score': 60, 'max': 100, 'components': []}},
+        {'findings': [], 'hardening': {'score': 80, 'max': 100, 'components': []}},
+    ))
+
+    _assert_ambiguous(s)
+
+
+def test_repeated_unit_counts_all_instances_in_message():
     report = _report('2026-01-01 00:00:00', {
         'ssh_hardening': {'_multi_host': True, 'by_host': {
-            '10.0.0.1': {'findings': []},
-            '10.0.0.1#2': {'findings': [_f('low')]},
+            'h': {'findings': []}, 'h#2': {'findings': []}, 'h#3': {'findings': [_f('low')]},
         }},
-    }, {'ssh_hardening': {
-        '10.0.0.1': {'host': '10.0.0.1'},
-        '10.0.0.1#2': {'host': '10.0.0.1'},
-    }})
+    }, {'ssh_hardening': {'h': {'host': 'h'}, 'h#2': {'host': 'h'}, 'h#3': {'host': 'h'}}})
 
-    snaps = snapshots_from_report(report)
+    (s,) = snapshots_from_report(report)
 
-    assert [s['value'] for s in snaps] == ['10.0.0.1', '10.0.0.1']
-    assert sorted(s['counts']['low'] for s in snaps) == [0, 1]
+    _assert_ambiguous(s, n=3)
+
+
+def test_repeated_unit_does_not_affect_other_hosts_in_same_report():
+    report = _report('2026-01-01 00:00:00', {
+        'ssh_hardening': {'_multi_host': True, 'by_host': {
+            'h': {'findings': []}, 'h#2': {'findings': [_f('low')]}, 'g': {'findings': [_f('high')]},
+        }},
+    }, {'ssh_hardening': {'h': {'host': 'h'}, 'h#2': {'host': 'h'}, 'g': {'host': 'g'}}})
+
+    snaps = {s['value']: s for s in snapshots_from_report(report)}
+
+    assert set(snaps) == {'h', 'g'}
+    _assert_ambiguous(snaps['h'])
+    assert snaps['g']['counts']['high'] == 1
+
+
+def test_repeated_unit_never_compared_within_one_report():
+    """The original defect: h/h#2 in one report gave latest_change with
+    from == to and a false 'resolved'."""
+    trend = compute_trend(snapshots_from_report(
+        _dup_report({'findings': [_f('high', 'A')]}, {'findings': []})))
+
+    assert len(trend['points']) == 1
+    assert trend['latest_change'] is None
+
+
+def test_ambiguous_point_is_skipped_by_latest_change_like_an_error():
+    snaps = []
+    snaps += snapshots_from_report(_dup_report({'findings': [_f('high', 'A')]},
+                                               {'findings': [_f('high', 'A')]}, ts='t1'))
+    snaps += snapshots_from_report(_dup_report({'findings': []}, {'findings': [_f('high', 'A')]}, ts='t2'))
+    snaps += snapshots_from_report(_dup_report({'findings': []}, {'findings': []}, ts='t3'))
+
+    trend = compute_trend(snaps)
+
+    assert [p['timestamp'] for p in trend['points']] == ['t1', 't2', 't3']
+    assert trend['points'][1]['error'].startswith('ambiguous:')
+    assert trend['points'][1]['total'] is None
+    ch = trend['latest_change']
+    assert (ch['from'], ch['to']) == ('t1', 't3')
+    assert ch['resolved'] == ['A']
 
 
 def test_error_result_is_error_snapshot_not_zero_problems():
@@ -309,3 +407,18 @@ def test_list_units_runs_and_last_timestamp_most_recent_first(isolated_db):
 
 def test_list_units_empty_db(isolated_db):
     assert list_units() == []
+
+
+def test_trend_for_repeated_host_in_one_report_gives_no_false_change(isolated_db):
+    isolated_db.save_report(_report('2026-01-01 00:00:00', {
+        'ssh_hardening': {'_multi_host': True, 'by_host': {
+            '10.0.0.1': {'findings': [_f('high', 'A')]},
+            '10.0.0.1#2': {'findings': []},
+        }},
+    }, {'ssh_hardening': {'10.0.0.1': {'host': '10.0.0.1'}, '10.0.0.1#2': {'host': '10.0.0.1'}}}))
+
+    trend = trend_for('ssh_hardening', 'host', '10.0.0.1')
+
+    assert len(trend['points']) == 1
+    assert trend['latest_change'] is None
+    assert list_units()[0]['runs'] == 1

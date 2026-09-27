@@ -188,3 +188,20 @@ def test_trend_unit_text_change_uses_run_order_not_timestamp(isolated_db, capsys
     out = capsys.readouterr().out
     assert '1 -> 0 (-1)' in out
     assert '50 -> 90 (+40)' in out
+
+
+def test_trend_missing_value_is_usage_error_exit_2(isolated_db, capsys):
+    """Contract v1.1: a check_id without a value is a usage error."""
+    with pytest.raises(SystemExit) as exc:
+        netaudit.cmd_trend(_ns('ssh_hardening'))
+
+    assert exc.value.code == 2
+    assert 'Usage: netaudit trend' in capsys.readouterr().out
+
+
+def test_trend_missing_value_json_is_json_error_exit_2(isolated_db, capsys):
+    with pytest.raises(SystemExit) as exc:
+        netaudit.cmd_trend(_ns('ssh_hardening', as_json=True))
+
+    assert exc.value.code == 2
+    assert json.loads(capsys.readouterr().out) == {'error': 'missing_value', 'check_id': 'ssh_hardening'}
