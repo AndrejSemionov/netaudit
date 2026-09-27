@@ -149,7 +149,10 @@ def _print_trend(trend: dict) -> None:
     print(f"  {'timestamp':<20} {'crit':>4} {'high':>4} {'med':>4} {'low':>4} {'total':>6} {'score':>6}")
     for p in trend['points']:
         if p['error']:
-            print(f"  {p['timestamp']:<20} ERROR: {p['error']}")
+            # Contract v1.1: 'ambiguous: ...' is not a failed check.
+            label = 'AMBIGUOUS: ' + p['error'][len('ambiguous: '):] \
+                if p['error'].startswith('ambiguous: ') else f"ERROR: {p['error']}"
+            print(f"  {p['timestamp']:<20} {label}")
             continue
         c = p['counts']
         score = p['hardening_score'] if p['hardening_score'] is not None else '-'
@@ -187,8 +190,11 @@ def cmd_trend(args):
         return
 
     if args.value is None:
-        print('Usage: netaudit trend <check_id> <value> [--key KEY]')
-        return
+        if args.json:
+            print(json.dumps({'error': 'missing_value', 'check_id': args.check_id}, ensure_ascii=False))
+        else:
+            print('Usage: netaudit trend <check_id> <value> [--key KEY]')
+        sys.exit(2)
 
     key = args.key
     if key is None:

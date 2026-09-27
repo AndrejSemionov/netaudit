@@ -62,11 +62,32 @@ def _snapshot(check_id: str, key: str, value, timestamp: str, result: dict) -> d
             'hardening_score': score, 'finding_ids': finding_ids}
 
 
+_COMPARED_FIELDS = ('error', 'counts', 'hardening_score', 'finding_ids')
+
+
+def _one_per_unit(instances: list[dict]) -> dict:
+    """Collapse several instances of one unit from the SAME report (a host
+    listed twice, or one host audited on two ports) into one snapshot.
+
+    Identical instances -> that snapshot. Differing ones -> an "ambiguous:"
+    snapshot with no counts/score/ids: picking one instance would hide the
+    other's result, and merging counts of findings without an id cannot be
+    done honestly. Like an errored run it is shown but never compared
+    (Contract v1.1)."""
+    first = instances[0]
+    if all(all(i[f] == first[f] for f in _COMPARED_FIELDS) for i in instances[1:]):
+        return first
+    return {**first,
+            'error': f'ambiguous: {len(instances)} instances of this unit '
+                     f'with different results in one report',
+            'counts': None, 'hardening_score': None, 'finding_ids': {}}
+
+
 def snapshots_from_report(report: dict) -> list[dict]:
-    """One snapshot per (check_id, identity pair) present in `report`."""
+    """At most one snapshot per (check_id, identity pair) in `report`."""
     results = report.get('results') or {}
     timestamp = report.get('timestamp')
-    out = []
+    by_unit: dict[tuple, list[dict]] = {}
     for check_id, ctx in (report.get('execution_context') or {}).items():
         for params, result in _result_param_pairs(check_id, ctx, results):
             for key, value in params.items():
@@ -74,8 +95,8 @@ def snapshots_from_report(report: dict) -> list[dict]:
                     continue
                 snap = _snapshot(check_id, key, value, timestamp, result)
                 if snap:
-                    out.append(snap)
-    return out
+                    by_unit.setdefault((check_id, key, value), []).append(snap)
+    return [_one_per_unit(instances) for instances in by_unit.values()]
 
 
 def _point(snap: dict) -> dict:
