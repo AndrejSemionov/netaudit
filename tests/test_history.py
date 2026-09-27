@@ -187,3 +187,34 @@ def test_ai_analyze_no_api_key_still_errors_before_touching_history():
 
     assert 'error' in result
 
+
+
+# ===========================================================================
+# ai_analyze() never sends secret params to the AI provider (SECURITY,
+# 2026-09-27). Covers a report posted straight from the browser
+# (/api/analyze with req.report) that never went through storage.
+# language='en' is passed so these tests don't read the user's settings DB.
+# ===========================================================================
+
+def test_ai_analyze_prompt_has_no_password_from_execution_context():
+    report = {'timestamp': 't', 'results': {'ssh_hardening': {'findings': []}},
+              'execution_context': {'ssh_hardening': {'host': 'h', 'password': 'FAKE-TEST-PW'}}}
+    with patch('httpx.post', return_value=_fake_response(SAMPLE_RESULT_JSON)) as mock_post:
+        ai_analyze(report, api_key='sk-test', language='en')
+
+    payload = json.dumps(mock_post.call_args.kwargs['json'])
+    assert 'FAKE-TEST-PW' not in payload
+    assert '"host": "h"' in mock_post.call_args.kwargs['json']['messages'][0]['content']
+    # the caller's report is not mutated
+    assert report['execution_context']['ssh_hardening']['password'] == 'FAKE-TEST-PW'
+
+
+def test_ai_analyze_prompt_has_no_password_multi_host_or_history():
+    report = {'timestamp': 't', 'results': {},
+              'execution_context': {'c': {'a': {'host': 'a', 'password': 'FAKE-TEST-PW'}}}}
+    history = [{'timestamp': 't0', 'checks': ['c'], 'results': {},
+                'execution_context': {'c': {'host': 'a', 'password': 'FAKE-TEST-PW'}}}]
+    with patch('httpx.post', return_value=_fake_response(SAMPLE_RESULT_JSON)) as mock_post:
+        ai_analyze(report, api_key='sk-test', language='en', history=history)
+
+    assert 'FAKE-TEST-PW' not in json.dumps(mock_post.call_args.kwargs['json'])
