@@ -363,7 +363,8 @@ def recent_report_data(window: int = RELATED_REPORTS_SEARCH_WINDOW) -> list[dict
         'SELECT data FROM reports ORDER BY timestamp DESC, id DESC LIMIT ?',
         (window,),
     ).fetchall()
-    return [json.loads(r['data']) for r in rows]
+    # same read-side redaction as load_report() - rows saved before it existed
+    return [redact_report(json.loads(r['data'])) for r in rows]
 
 
 def timeseries_mtr_loss(target: str, limit: int = 100) -> list[dict]:
