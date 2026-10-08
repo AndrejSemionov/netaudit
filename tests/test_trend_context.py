@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from netaudit_pkg.trends import trend_context
 
 
@@ -79,3 +81,10 @@ def test_caps_on_units_and_ids_with_omitted_counts(isolated_db):
     assert ch['resolved'] == ['ID-0', 'ID-1']
     assert ch['resolved_omitted'] == 3
     assert 'new_omitted' not in ch
+
+
+@pytest.mark.parametrize('cap', [0, -1])
+def test_non_positive_unit_cap_returns_nothing(isolated_db, cap):
+    """GPT/Codex review of 2b (pass 1): "at most max_units" includes zero."""
+    isolated_db.save_report(_report('2026-05-01 00:00:00', [_f('high', 'A')]))
+    assert trend_context(_report('2026-05-02 00:00:00', []), max_units=cap) == []

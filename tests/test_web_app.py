@@ -351,6 +351,20 @@ def test_api_analyze_anchors_on_posted_report_id_only_when_integer(client, isola
     assert mock_analyze.call_args.kwargs.get('trends') == [{'x': 1}]
 
 
+def test_api_analyze_explicit_report_id_wins_over_posted_report_id(client, isolated_db):
+    """GPT/Codex review of 2b (pass 1): contract 2b.1 - "/api/analyze ->
+    report_id, else an integer report['_report_id']"."""
+    report = {**SAMPLE_REPORT, '_report_id': 3}
+    with patch('web.app.storage.find_related_reports', return_value=[]) as mock_find, \
+         patch('web.app.trends.trend_context', return_value=[]) as mock_ctx, \
+         patch('web.app.ai_analyze', return_value={'summary': 'ok'}):
+        resp = client.post('/api/analyze', json={'report': report, 'report_id': 2})
+
+    assert resp.status_code == 200
+    assert mock_find.call_args.kwargs['report_id'] == 2
+    assert mock_ctx.call_args.kwargs['report_id'] == 2
+
+
 # ===========================================================================
 # /api/report never returns secret params (SECURITY, 2026-09-27) - including
 # rows saved before the fix (load_report redacts on read).
