@@ -30,7 +30,7 @@ def _ssl_stdlib(hostname: str, port: int = 443) -> dict:
                 return {'ok': True, 'expires': not_after.isoformat(),
                         'days_left': (not_after - datetime.now()).days,
                         'issuer': issuer.get('organizationName', issuer.get('commonName', '—'))}
-    except (socket.timeout, socket.gaierror, ssl.SSLError, ConnectionRefusedError, OSError) as e:
+    except (TimeoutError, socket.gaierror, ssl.SSLError, ConnectionRefusedError, OSError) as e:
         return {'ok': False, 'error': str(e)}
 
 

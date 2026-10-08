@@ -1073,7 +1073,7 @@ def _check_tls_version(hostname, version_name, ssl_version) -> bool:
         with socket.create_connection((hostname, 443), timeout=6) as sock:
             with ctx.wrap_socket(sock, server_hostname=hostname):
                 return True
-    except (ssl.SSLError, socket.error, OSError, ValueError):
+    except (ssl.SSLError, OSError, ValueError):
         return False
 
 def _parse_set_cookie_headers(head: str) -> list[str]:

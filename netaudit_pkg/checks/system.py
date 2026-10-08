@@ -144,13 +144,13 @@ def check_ssh_audit(host: str = '', user: str = 'root', port: int = 22,  # nosec
             try:
                 out, err = ssh.run(cmd, timeout=15)
                 results[name] = out.strip() or err.strip() or '(empty)'
-            except (paramiko.SSHException, socket.timeout) as e:
+            except (TimeoutError, paramiko.SSHException) as e:
                 results[name] = f'error: {e}'
         for name, cmd in REMOTE_SUDO_CHECKS.items():
             try:
                 out, err = ssh.sudo(cmd, timeout=15)
                 results[name] = out.strip() or err.strip() or '(empty)'
-            except (paramiko.SSHException, socket.timeout) as e:
+            except (TimeoutError, paramiko.SSHException) as e:
                 results[name] = f'error: {e}'
     finally:
         ssh.close()
