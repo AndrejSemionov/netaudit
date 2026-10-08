@@ -114,8 +114,10 @@ def cmd_run(args):
 
     if args.ai:
         log.info('Running AI analysis...')
-        related = storage.find_related_reports(report, limit=3)
-        analysis = ai_analyze(report, history=related)
+        # anchored on this run's id: history and trend are strictly before it
+        related = storage.find_related_reports(report, limit=3, report_id=saved)
+        analysis = ai_analyze(report, history=related,
+                              trends=trends.trend_context(report, report_id=saved))
         print('\n=== AI ANALYSIS ===')
         print(json.dumps(analysis, ensure_ascii=False, indent=2))
 
@@ -130,12 +132,14 @@ def cmd_history(args):
 
 
 def cmd_analyze(args):
-    report = load_report(int(args.id))
+    report_id = int(args.id)
+    report = load_report(report_id)
     if report is None:
         print(f'Report #{args.id} not found.')
         return
-    related = storage.find_related_reports(report, limit=3)
-    analysis = ai_analyze(report, history=related)
+    related = storage.find_related_reports(report, limit=3, report_id=report_id)
+    analysis = ai_analyze(report, history=related,
+                          trends=trends.trend_context(report, report_id=report_id))
     print(json.dumps(analysis, ensure_ascii=False, indent=2))
 
 

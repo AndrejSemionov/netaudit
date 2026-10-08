@@ -306,3 +306,42 @@ def list_units(window: int = storage.RELATED_REPORTS_SEARCH_WINDOW) -> list[dict
         unit['runs'] += 1
         unit['last_timestamp'] = s['timestamp']
     return sorted(units.values(), key=lambda u: u['last_timestamp'] or '', reverse=True)
+
+
+_CHANGE_ID_LISTS = ('new', 'resolved', 'persisting', 'not_evaluated')
+
+
+def trend_context(report: dict, report_id: int | None = None,
+                  window: int = storage.RELATED_REPORTS_SEARCH_WINDOW,
+                  max_units: int = 20, max_ids: int = 20) -> list[dict]:
+    """Deterministic change since the previous run of each object in `report`,
+    for the AI prompt (Contract v1.2, 2b.3).
+
+    History is only what was saved strictly before `report` (exact
+    `report_id` when known - storage.report_data_before()), and `report`'s own
+    snapshot is the `to` side. An object is included only when that gives a
+    previous -> this-run latest_change: an errored run, a first run and
+    event-log observations (latest_change is always None) are left out.
+    Id lists longer than `max_ids` are cut, with `<list>_omitted` counts."""
+    current = [s for s in snapshots_from_report(report) if s['error'] is None]
+    if not current:
+        return []
+    history = []
+    for past in reversed(storage.report_data_before(report, report_id, window)):
+        history.extend(snapshots_from_report(past))
+
+    items = []
+    for snap in current:
+        unit = (snap['check_id'], snap['key'], snap['value'])
+        change = compute_trend([s for s in history if (s['check_id'], s['key'], s['value']) == unit]
+                               + [snap])['latest_change']
+        if change is None:
+            continue
+        for name in _CHANGE_ID_LISTS:
+            if len(change[name]) > max_ids:
+                change[f'{name}_omitted'] = len(change[name]) - max_ids
+                change[name] = change[name][:max_ids]
+        items.append({'check_id': unit[0], 'key': unit[1], 'value': unit[2], 'latest_change': change})
+        if len(items) >= max_units:
+            break
+    return items

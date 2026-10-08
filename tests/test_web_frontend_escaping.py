@@ -339,6 +339,7 @@ def test_guard_notices_every_escaping_site_being_removed():
 CLASS_SAFE_EXPRS = {
     "h.loss_pct > 10 ? 'bad' : ''", 'lossClass(h.loss_pct)', 'lossClass(r.loss_pct||0)',
     'daysClass', 'scoreClass', 'pillClass', 'predClass', 'rowClass', 'AI_SEV_CLASS[p.severity] || \'\'',
+    "p.counts ? 'ok' : 'warn'",
 }
 
 

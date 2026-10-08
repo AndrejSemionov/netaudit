@@ -265,14 +265,20 @@ def api_trend(check_id: str = '', key: str = '', value: str = '') -> dict:
 def api_analyze(req: AnalyzeRequest) -> dict:
     if req.report is not None:
         report = req.report
+        # a run saved by /api/run or the stream (or opened from history)
+        # carries its DB id; anything else is anchored by timestamp (2b.1)
+        posted_id = report.get('_report_id')
+        report_id = posted_id if type(posted_id) is int else None
     elif req.report_id is not None:
         report = load_report(req.report_id)
         if report is None:
             raise HTTPException(404, 'report not found')
+        report_id = req.report_id
     else:
         raise HTTPException(400, 'report or report_id is required')
-    related = storage.find_related_reports(report, limit=3)
-    return ai_analyze(report, language=req.language, history=related)
+    related = storage.find_related_reports(report, limit=3, report_id=report_id)
+    return ai_analyze(report, language=req.language, history=related,
+                      trends=trends.trend_context(report, report_id=report_id))
 
 
 # --- Settings ---

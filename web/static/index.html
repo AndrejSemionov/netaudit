@@ -1665,6 +1665,14 @@ async function loadTrend() {
 
 // ---- Trend layer: finding/score changes per object (/api/trends, /api/trend) ----
 let TREND_UNITS = [];  // raw: used to build request URLs, never rendered as-is
+// observation labels produced by trends._observation() -> i18n keys
+const OBS_LABEL_KEYS = {
+  'coverage unknown': 'trends.obs.unknown', 'no usable source': 'trends.obs.no_source',
+  'bounded tail': 'trends.obs.tail', 'bounded tail, limit reached': 'trends.obs.tail_limit',
+  'neither contour usable': 'trends.obs.no_contour', 'partial, lower bound': 'trends.obs.partial',
+  'complete for collected slices': 'trends.obs.complete', 'complete for collected slice': 'trends.obs.complete',
+  'empty log': 'trends.obs.empty', 'collection failed': 'trends.obs.failed', 'collection unknown': 'trends.obs.unknown',
+};
 async function loadTrendUnits() {
   const res = await fetch('/api/trends');
   TREND_UNITS = (await res.json()).units || [];
@@ -1687,7 +1695,11 @@ async function openTrendUnit(i) {
 function renderTrendUnit(tr) {
   tr = escDeep(tr);
   const events = tr.kind === 'event_observation';  // log checks (2d): observations, never a diff
-  const status = p => !p.error ? `<span class="pill ok">${t('trends.status.ok')}</span>`
+  // log observation (2d): how the slice was collected; no counts = collection unusable
+  const obsLabel = o => t(OBS_LABEL_KEYS[o.label]) || o.label;
+  const status = p => !p.error ? (events && p.observation
+      ? `<span class="pill ${p.counts ? 'ok' : 'warn'}">${obsLabel(p.observation)}</span>`
+      : `<span class="pill ok">${t('trends.status.ok')}</span>`)
     : p.error.startsWith('ambiguous: ') ? `<span class="pill warn">${t('trends.status.ambiguous')}</span>`
     : `<span class="pill bad">${t('trends.status.error')}</span> <span class="timing">${p.error}</span>`;
   const n = v => v ?? '—';
