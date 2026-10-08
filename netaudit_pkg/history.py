@@ -7,6 +7,7 @@ import os
 
 from .utils import log
 from . import storage
+from .redaction import redact_report
 
 MODEL = 'claude-sonnet-4-6'
 DEFAULT_AI_LANGUAGE = 'en'
@@ -116,7 +117,9 @@ def ai_analyze(report: dict, api_key: str | None = None, language: str | None = 
         return {'error': 'httpx is not installed'}
 
     lang = _resolve_ai_language(language)
-    report_json = json.dumps(report, ensure_ascii=False, indent=2)
+    # the prompt leaves the machine: never include secret params, whatever
+    # path the report came from (storage, a fresh run, the browser)
+    report_json = json.dumps(redact_report(report), ensure_ascii=False, indent=2)
     # .replace(), not .format() - _PROMPT_INSTRUCTIONS itself contains a
     # literal JSON example of the expected response format (e.g.
     # '{"summary": "...", "problems": [...]}'), and str.format() parses
@@ -133,7 +136,7 @@ def ai_analyze(report: dict, api_key: str | None = None, language: str | None = 
         # find_related_reports()'s output format (a list of reduced
         # {timestamp, checks, results} dicts) as the only thing this
         # function needs to know about "history" - no separate schema.
-        history_json = json.dumps(history, ensure_ascii=False, indent=2)
+        history_json = json.dumps([redact_report(h) for h in history], ensure_ascii=False, indent=2)
         prompt += (
             f'\n\nPREVIOUS REPORTS FOR THE SAME OBJECT (most recent first, '
             f'for trend comparison):\n{history_json}'

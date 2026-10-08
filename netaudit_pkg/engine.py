@@ -11,6 +11,7 @@ from . import (
     checks,  # noqa: F401
     timing,
 )
+from .redaction import redact_params
 from .registry import registry
 from .utils import log, missing_tools
 
@@ -65,7 +66,8 @@ def run_checks(selected: list[dict]) -> dict:
         # docs/research/ai_analysis_17_research_summary.md for why this
         # exists: params were previously discarded after spec.func() consumed
         # them, making history/trend features across reports impossible).
-        report['execution_context'][check_id] = params
+        # secret params (password) are passed to the check but never recorded
+        report['execution_context'][check_id] = redact_params(params)
 
     report['total_time'] = round(sum(report['timing'].values()), 2)
     return report
@@ -244,7 +246,7 @@ def run_checks_multi(selected: list[dict]) -> dict:
             # Flat shape, matching run_checks() - single instance means
             # execution_context[check_id] is the params dict directly, not
             # a {key: params} map (see Contract v1 docstring above).
-            report['execution_context'][check_id] = instances[0]
+            report['execution_context'][check_id] = redact_params(instances[0])
             check_max_elapsed.append(elapsed)
             continue
 
@@ -258,7 +260,7 @@ def run_checks_multi(selected: list[dict]) -> dict:
         # without depending on dict ordering across the two calls.
         seen_counts: dict = {}
         report['execution_context'][check_id] = {
-            _dedupe_key(inst.get('host', ''), seen_counts): inst for inst in instances
+            _dedupe_key(inst.get('host', ''), seen_counts): redact_params(inst) for inst in instances
         }
         if by_host_timing:
             check_max_elapsed.append(max(by_host_timing.values()))
