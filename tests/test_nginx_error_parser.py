@@ -21,7 +21,7 @@ This gives 21 concrete assertions across the parametrized cases below.
 
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import UTC
 
 import pytest
 
@@ -228,7 +228,7 @@ def test_timestamp_is_always_timezone_aware_utc():
     line = "2026/08/19 10:15:03 [notice] 100#200: worker process started"
     result = parse_nginx_error_line(line)
     assert result.event_type == NginxErrorEventType.PARSED
-    assert result.timestamp.tzinfo == timezone.utc
+    assert result.timestamp.tzinfo == UTC
 
 
 def test_error_timestamp_is_mutually_comparable_with_aware_datetime():
@@ -245,7 +245,7 @@ def test_error_timestamp_is_mutually_comparable_with_aware_datetime():
 def datetime_now_utc_placeholder():
     from datetime import datetime as _dt
 
-    return _dt(2026, 8, 19, 12, 0, 0, tzinfo=timezone.utc)
+    return _dt(2026, 8, 19, 12, 0, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------

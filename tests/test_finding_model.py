@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from netaudit_pkg.findings import Finding, finding, SEVERITIES, CONFIDENCES
+from netaudit_pkg.findings import CONFIDENCES, SEVERITIES, Finding, finding
 
 
 def test_valid_severity_and_confidence_accepted():

@@ -7,8 +7,8 @@ per control, no finding on PASS, and the suid_dumpable three-way branch.
 
 from __future__ import annotations
 
-from netaudit_pkg.kernel_config import KernelConfig
 from netaudit_pkg.checks.kernel_hardening import _build_components, _build_findings
+from netaudit_pkg.kernel_config import KernelConfig
 
 
 def _all_pass_config() -> KernelConfig:

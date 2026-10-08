@@ -11,8 +11,7 @@ behavior, effective-config precedence over raw sshd_config parsing).
 
 from __future__ import annotations
 
-from netaudit_pkg.ssh_config import collect_ssh_config, _parse_sshd_t
-
+from netaudit_pkg.ssh_config import _parse_sshd_t, collect_ssh_config
 
 # A trimmed but representative slice of real sshd -T output - full field
 # coverage for everything SSHConfig extracts, without all 103 directives.

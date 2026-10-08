@@ -23,7 +23,7 @@ This gives 15+ concrete assertions across the parametrized cases below.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from netaudit_pkg.fail2ban_detection import (
     CoverageStatus,
@@ -34,7 +34,7 @@ from netaudit_pkg.fail2ban_detection import (
 from netaudit_pkg.fail2ban_findings import build_fail2ban_findings
 from netaudit_pkg.fail2ban_parser import Fail2BanEvent, Fail2BanEventType
 
-_TS = datetime(2026, 8, 21, 12, 0, 0, tzinfo=timezone.utc)
+_TS = datetime(2026, 8, 21, 12, 0, 0, tzinfo=UTC)
 
 
 def _ban_event(ip: str, jail: str) -> Fail2BanEvent:

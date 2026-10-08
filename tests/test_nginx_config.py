@@ -5,8 +5,7 @@ audit_nginx() (findings) and the future nginx_hardening (scoring) consume.
 
 from __future__ import annotations
 
-from netaudit_pkg.nginx_config import collect_nginx_config, _parse_nginx_config
-
+from netaudit_pkg.nginx_config import _parse_nginx_config, collect_nginx_config
 
 # ===========================================================================
 # _parse_nginx_config() — pure parsing, no I/O

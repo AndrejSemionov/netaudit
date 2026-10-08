@@ -19,11 +19,11 @@ too.
 
 from __future__ import annotations
 
-from netaudit_pkg.nginx_config_v2 import parse_nginx_config_v2
 from netaudit_pkg.checks.nginx_hardening import (
     _build_tier2_components,
     build_tier2_findings,
 )
+from netaudit_pkg.nginx_config_v2 import parse_nginx_config_v2
 
 
 def _find(findings: list[dict], finding_id: str) -> dict | None:

@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import pytest
 
-from netaudit_pkg.ssh_config import SSHConfig
 from netaudit_pkg.checks.ssh_hardening import _build_components
 from netaudit_pkg.scoring import weighted_score
+from netaudit_pkg.ssh_config import SSHConfig
 
 
 def _cfg(**kwargs) -> SSHConfig:

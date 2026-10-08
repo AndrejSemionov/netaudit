@@ -7,9 +7,10 @@ from __future__ import annotations
 import httpx
 
 from netaudit_pkg.checks.cert_transparency import (
-    _parse_crtsh_date, _extract_hostnames, check_cert_transparency,
+    _extract_hostnames,
+    _parse_crtsh_date,
+    check_cert_transparency,
 )
-
 
 # ===========================================================================
 # _parse_crtsh_date

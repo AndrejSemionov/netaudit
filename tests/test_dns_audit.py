@@ -31,7 +31,6 @@ from netaudit_pkg.checks.dns_audit import (
     check_dns_audit,
 )
 
-
 # ===========================================================================
 # _parse_answer_section() — raw dig output parsing
 # ===========================================================================

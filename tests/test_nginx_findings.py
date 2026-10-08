@@ -13,7 +13,7 @@ Every test traces back to a scenario in the frozen Scenario Table.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from netaudit_pkg.nginx_access_detection import (
     HIGH_4XX_RATE_THRESHOLD,
@@ -49,7 +49,7 @@ from netaudit_pkg.nginx_findings import (
     build_error_findings,
 )
 
-_BASE_TS = datetime(2026, 8, 19, 12, 0, 0, tzinfo=timezone.utc)
+_BASE_TS = datetime(2026, 8, 19, 12, 0, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------

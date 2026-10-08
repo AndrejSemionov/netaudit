@@ -18,7 +18,6 @@ import pytest
 
 from netaudit_pkg.scoring import Component, weighted_score
 
-
 # ===========================================================================
 # Component validation
 # ===========================================================================

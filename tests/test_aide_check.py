@@ -8,7 +8,6 @@ import pytest
 from netaudit_pkg.checks.aide_check import _parse_summary, check_aide
 from tests.conftest import FakeSSHExecutor
 
-
 # ===========================================================================
 # _parse_summary — pure function, no SSH needed
 # ===========================================================================

@@ -34,7 +34,6 @@ from netaudit_pkg.nginx_log_resolver import (
     resolve_error_log,
 )
 
-
 # ===========================================================================
 # 1. No directive anywhere -> UNCONFIGURED
 # ===========================================================================

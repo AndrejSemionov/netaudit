@@ -13,11 +13,13 @@ Covers:
 
 from __future__ import annotations
 
-from netaudit_pkg.ssh_config import SSHConfig
 from netaudit_pkg.checks.ssh_hardening import (
-    _build_findings, audit_ssh_hardening_score, check_ssh_hardening,
+    _build_findings,
+    audit_ssh_hardening_score,
+    check_ssh_hardening,
 )
 from netaudit_pkg.ssh import HostKeyMismatchError
+from netaudit_pkg.ssh_config import SSHConfig
 from tests.conftest import FakeSSHExecutor
 
 

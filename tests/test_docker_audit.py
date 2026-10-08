@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import json
 
-
 from netaudit_pkg.checks.docker_audit import (
-    _audit_one_container, check_docker_audit,
+    _audit_one_container,
+    check_docker_audit,
 )
 from tests.conftest import FakeSSHExecutor
 

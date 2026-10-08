@@ -16,9 +16,12 @@ from __future__ import annotations
 
 import pytest
 
+from netaudit_pkg.checks.nginx_hardening import (
+    _build_components,
+    _build_tier2_components,
+)
 from netaudit_pkg.nginx_config import NginxConfig
 from netaudit_pkg.nginx_config_v2 import parse_nginx_config_v2
-from netaudit_pkg.checks.nginx_hardening import _build_components, _build_tier2_components
 from netaudit_pkg.scoring import weighted_score
 
 

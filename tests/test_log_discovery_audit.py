@@ -22,7 +22,12 @@ from netaudit_pkg.checks.log_discovery_audit import (
     build_findings,
     build_report,
 )
-from netaudit_pkg.log_discovery import CommandResult, JournalEvidence, LogFileEvidence, NginxGlobEvidence
+from netaudit_pkg.log_discovery import (
+    CommandResult,
+    JournalEvidence,
+    LogFileEvidence,
+    NginxGlobEvidence,
+)
 
 
 def _cr(completed=True, exit_code=0, stdout='', command='') -> CommandResult:

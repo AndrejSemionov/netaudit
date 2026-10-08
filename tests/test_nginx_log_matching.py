@@ -27,7 +27,11 @@ from netaudit_pkg.nginx_log_matching import (
     dedupe_matches,
     match_log_directive,
 )
-from netaudit_pkg.nginx_log_resolver import LogDestination, LogDirectiveState, ResolvedLogDirective
+from netaudit_pkg.nginx_log_resolver import (
+    LogDestination,
+    LogDirectiveState,
+    ResolvedLogDirective,
+)
 
 
 def _log_source(path, available=True, readable=True) -> LogSource:

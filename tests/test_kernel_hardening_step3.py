@@ -12,7 +12,8 @@ test_kernel_hardening_step2.py for those). Covers:
 from __future__ import annotations
 
 from netaudit_pkg.checks.kernel_hardening import (
-    audit_kernel_hardening_score, check_kernel_hardening,
+    audit_kernel_hardening_score,
+    check_kernel_hardening,
 )
 from netaudit_pkg.ssh import HostKeyMismatchError
 from tests.conftest import FakeSSHExecutor
