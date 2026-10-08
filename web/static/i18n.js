@@ -86,7 +86,7 @@ const I18N = {
     'trends.no_history': 'Нет истории mtr. Запусти mtr-проверки, чтобы накопить данные для графика.',
     'trends.few_points': 'Мало точек для тренда — нужно несколько прогонов mtr до этой цели.',
     'trends.chart.label': 'Макс. потери %',
-    'trends.units.title': 'Изменения по объектам',
+    'trends.units.title': 'Изменения и наблюдения по объектам',
     'trends.units.hint': 'Как менялись находки и оценка защищённости объекта между прогонами. Считается без AI, по сохранённым отчётам.',
     'trends.units.empty': 'Пока нет объектов с историей находок. Запусти проверки с хостом или URL несколько раз.',
     'trends.col.check': 'Проверка',
@@ -122,6 +122,7 @@ const I18N = {
     'trends.obs.complete': 'собран полностью',
     'trends.obs.empty': 'лог пуст',
     'trends.obs.failed': 'сбор не удался',
+    'trends.obs.events': 'событий',
     // настройки — секции
     'settings.api.title': 'Anthropic API',
     'settings.api.hint': 'Ключ для AI-анализа отчётов. Хранится в локальной БД, обратно на экран не отдаётся.',
@@ -389,7 +390,7 @@ const I18N = {
     'trends.no_history': 'No mtr history yet. Run mtr checks to accumulate data for the chart.',
     'trends.few_points': 'Not enough points for a trend — needs a few mtr runs against this target.',
     'trends.chart.label': 'Max loss %',
-    'trends.units.title': 'Changes per object',
+    'trends.units.title': 'Changes and observations per object',
     'trends.units.hint': 'How an object\'s findings and hardening score changed between runs. Computed without AI, from saved reports.',
     'trends.units.empty': 'No objects with finding history yet. Run checks against a host or URL a few times.',
     'trends.col.check': 'Check',
@@ -425,6 +426,7 @@ const I18N = {
     'trends.obs.complete': 'complete for collected slice',
     'trends.obs.empty': 'empty log',
     'trends.obs.failed': 'collection failed',
+    'trends.obs.events': 'events',
     // settings — sections
     'settings.api.title': 'Anthropic API',
     'settings.api.hint': 'Key used for AI report analysis. Stored in the local DB, never sent back to the screen.',

@@ -239,7 +239,7 @@
       <div id="trendEmpty" style="color:var(--muted);font-size:15px"></div>
     </div>
     <div class="settings-group">
-      <h2 data-i18n="trends.units.title">Изменения по объектам</h2>
+      <h2 data-i18n="trends.units.title">Изменения и наблюдения по объектам</h2>
       <p class="hint" data-i18n="trends.units.hint">Как менялись находки и оценка защищённости объекта между прогонами. Считается без AI, по сохранённым отчётам.</p>
       <div id="trendUnits"></div>
       <div id="trendUnitDetail" style="margin-top:16px"></div>
@@ -1697,8 +1697,17 @@ function renderTrendUnit(tr) {
   const events = tr.kind === 'event_observation';  // log checks (2d): observations, never a diff
   // log observation (2d): how the slice was collected; no counts = collection unusable
   const obsLabel = o => t(OBS_LABEL_KEYS[o.label]) || o.label;
+  // what this slice actually covered - whatever the report recorded, nothing inferred
+  const obsDetails = o => [
+    o.source,
+    o.coverage ? `coverage=${o.coverage}` : '',
+    (o.access_coverage || o.error_coverage) ? `access=${o.access_coverage || '?'}, error=${o.error_coverage || '?'}` : '',
+    o.events_parsed != null ? `${t('trends.obs.events')}: ${o.events_parsed}${o.events_total != null ? '/' + o.events_total : ''}` : '',
+    o.requested_lines != null ? `lines=${o.requested_lines}` : '',
+    o.window_hours != null ? `window=${o.window_hours}h` : '',
+  ].filter(Boolean).join(' · ');
   const status = p => !p.error ? (events && p.observation
-      ? `<span class="pill ${p.counts ? 'ok' : 'warn'}">${obsLabel(p.observation)}</span>`
+      ? `<span class="pill ${p.counts ? 'ok' : 'warn'}">${obsLabel(p.observation)}</span> <span class="timing">${obsDetails(p.observation)}</span>`
       : `<span class="pill ok">${t('trends.status.ok')}</span>`)
     : p.error.startsWith('ambiguous: ') ? `<span class="pill warn">${t('trends.status.ambiguous')}</span>`
     : `<span class="pill bad">${t('trends.status.error')}</span> <span class="timing">${p.error}</span>`;
