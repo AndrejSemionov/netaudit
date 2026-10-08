@@ -102,7 +102,7 @@ def _check_archive_integrity(ssh: SSHExecutor, directory: str, filename: str) ->
 
 def _check_disk_space(ssh: SSHExecutor, directory: str) -> tuple[int | None, str | None]:
     """Returns (percent_used, error)."""
-    out, err = ssh.run(f"df -P {directory!r} 2>&1 | tail -1")
+    out, _err = ssh.run(f"df -P {directory!r} 2>&1 | tail -1")
     parts = out.split()
     if len(parts) >= 5 and parts[4].endswith('%'):
         try:
@@ -218,7 +218,7 @@ def check_backup(host='', user='root', port=22, key_path='', password='',  # nos
                         id=subject_id('BKP-INT-001', directory),
                     ))
 
-            disk_pct, disk_err = _check_disk_space(ssh, directory)
+            disk_pct, _disk_err = _check_disk_space(ssh, directory)
             if disk_pct is not None:
                 entry['disk_used_pct'] = disk_pct
                 if disk_pct >= 90:

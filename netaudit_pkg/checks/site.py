@@ -58,7 +58,7 @@ def check_ssl(url: str = 'https://example.com', method: str = 'auto') -> dict:
         res['tool_used'] = 'python'
         return res
 
-    code, out, err = run_cmd(['openssl', 's_client', '-connect', f'{hostname}:443',
+    _code, out, err = run_cmd(['openssl', 's_client', '-connect', f'{hostname}:443',
                               '-servername', hostname, '-brief'], timeout=15, input_text='Q\n')
     combined = out + err
     if 'CONNECTION ESTABLISHED' not in combined and 'CONNECTED' not in combined:
@@ -70,7 +70,7 @@ def check_ssl(url: str = 'https://example.com', method: str = 'auto') -> dict:
         elif line.startswith('Ciphersuite:'):
             cipher = line.split(':', 1)[1].strip()
     stdlib = _ssl_stdlib(hostname)
-    code2, out2, _ = run_cmd(['openssl', 's_client', '-connect', f'{hostname}:443',
+    _code2, out2, _ = run_cmd(['openssl', 's_client', '-connect', f'{hostname}:443',
                               '-servername', hostname, '-showcerts'], timeout=15, input_text='Q\n')
     return {'ok': True, 'hostname': hostname, 'protocol': protocol, 'cipher': cipher,
             'cert_chain_length': out2.count('BEGIN CERTIFICATE'),

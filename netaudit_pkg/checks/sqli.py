@@ -69,7 +69,7 @@ def _run_sqlmap(url: str, crawl: bool, level: int = 1, risk: int = 1) -> dict:
     if crawl:
         cmd += ['--crawl=1']
 
-    code, out, err = run_cmd(cmd, timeout=240)
+    _code, out, err = run_cmd(cmd, timeout=240)
     combined = out + '\n' + err
 
     findings = []

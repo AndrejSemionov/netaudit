@@ -67,7 +67,7 @@ def check_mtr(target: str = '8.8.8.8', duration_sec: float = 15) -> dict:
         )
         if not m:
             continue
-        hop_num, host, ip, loss, snt, last, avg, best, wrst, stdev = m.groups()
+        hop_num, host, ip, loss, _snt, _last, avg, _best, wrst, _stdev = m.groups()
         display_host = host if host != '???' else (ip or '???')
         if ip and host != ip:
             display_host = f'{host} ({ip})'

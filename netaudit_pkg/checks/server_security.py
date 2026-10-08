@@ -1113,7 +1113,7 @@ def _audit_cors(base: str) -> list[dict]:
     if not tool_available('curl'):
         return findings
     fake_origin = 'https://evil-attacker-test.example'
-    code, head, _ = run_cmd(['curl', '-s', '-I', '-L', '--max-time', '10',
+    _code, head, _ = run_cmd(['curl', '-s', '-I', '-L', '--max-time', '10',
                               '-H', f'Origin: {fake_origin}', base], timeout=15)
     hl = head.lower()
     acao_m = re.search(r'^access-control-allow-origin:\s*(.+)$', head, re.IGNORECASE | re.MULTILINE)
@@ -1137,7 +1137,7 @@ def _audit_error_page(base: str) -> list[dict]:
     if not tool_available('curl'):
         return findings
     probe_path = '/netaudit-probe-nonexistent-' + str(abs(hash(base)) % 10000)
-    code, body, _ = run_cmd(['curl', '-s', '-L', '--max-time', '10', base + probe_path], timeout=15)
+    _code, body, _ = run_cmd(['curl', '-s', '-L', '--max-time', '10', base + probe_path], timeout=15)
     if not body:
         return findings
     lower = body.lower()
@@ -1175,7 +1175,7 @@ def check_web_security_external(url='https://example.com') -> dict:
 
     # headers
     if tool_available('curl'):
-        code, head, _ = run_cmd(['curl', '-s', '-I', '-L', '--max-time', '10', base], timeout=15)
+        _code, head, _ = run_cmd(['curl', '-s', '-I', '-L', '--max-time', '10', base], timeout=15)
         hl = head.lower()
         server_m = re.search(r'server:\s*(.+)', head, re.IGNORECASE)
         if server_m and re.search(r'\d+\.\d+', server_m.group(1)):
@@ -1212,7 +1212,7 @@ def check_web_security_external(url='https://example.com') -> dict:
     exposed = []
     if tool_available('curl'):
         for path in SENSITIVE_PATHS:
-            code, out, _ = run_cmd(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}',
+            _code, out, _ = run_cmd(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}',
                                     '--max-time', '6', base + path], timeout=10)
             if out.strip() == '200':
                 exposed.append(path)
