@@ -334,3 +334,24 @@ def test_api_analyze_still_forwards_language_param(client, isolated_db):
 
     assert resp.status_code == 200
     assert mock_analyze.call_args.kwargs.get('language') == 'ru'
+
+
+# ===========================================================================
+# /api/report never returns secret params (SECURITY, 2026-09-27) - including
+# rows saved before the fix (load_report redacts on read).
+# ===========================================================================
+
+def test_api_report_redacts_password_from_legacy_row(client, isolated_db):
+    import json as _json
+    legacy = {'timestamp': '2026-01-01 00:00:00', 'results': {'ssh_hardening': {}},
+              'execution_context': {'ssh_hardening': {'host': 'h', 'password': 'FAKE-TEST-PW'}}}
+    conn = isolated_db._conn()
+    cur = conn.execute('INSERT INTO reports (timestamp, checks, total_time, data) VALUES (?,?,?,?)',
+                       (legacy['timestamp'], 'ssh_hardening', 0, _json.dumps(legacy)))
+    conn.commit()
+
+    resp = client.get('/api/report', params={'id': cur.lastrowid})
+
+    assert resp.status_code == 200
+    assert 'FAKE-TEST-PW' not in resp.text
+    assert resp.json()['execution_context'] == {'ssh_hardening': {'host': 'h'}}

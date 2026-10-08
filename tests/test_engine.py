@@ -11,6 +11,7 @@ tests or into the real check list.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 
@@ -588,6 +589,11 @@ def test_list_available_returns_all_real_checks():
 # exactly what was passed to spec.func(**params), unmodified, regardless of
 # which family of check this is. That interpretation is future work.
 #
+# Amendment (SECURITY, 2026-09-27): EXCEPT secret params - names in
+# netaudit_pkg.redaction.SECRET_PARAM_NAMES ('password') are passed to
+# spec.func but never recorded (see tests at the end of this section and
+# tests/test_redaction.py).
+#
 # Contract v1 (frozen before these tests were written):
 #   spec is None (unknown check id)   -> no execution_context entry
 #   required tool missing             -> no execution_context entry
@@ -760,3 +766,49 @@ def test_multi_one_instance_fails_others_still_have_execution_context(temp_check
     ec = result['execution_context']['__test_ec_multi_partial_fail__']
     assert ec == {'good': {'host': 'good'}, 'bad': {'host': 'bad'}}
     assert 'error' in result['results']['__test_ec_multi_partial_fail__']['by_host']['bad']
+
+
+# ---------------------------------------------------------------------------
+# execution_context never stores secret params (SECURITY, 2026-09-27).
+# Amends Contract v1: params are recorded as passed EXCEPT names in
+# redaction.SECRET_PARAM_NAMES ('password'); the check itself still receives
+# them unchanged.
+# ---------------------------------------------------------------------------
+
+def test_run_checks_execution_context_drops_password_but_check_gets_it(temp_check, isolated_db):
+    seen = {}
+
+    def ssh_like(host='', password=''):
+        seen['password'] = password
+        return {'ok': True}
+
+    temp_check('__test_ec_pw__', ssh_like)
+    result = run_checks([{'id': '__test_ec_pw__', 'params': {'host': 'h', 'password': 'FAKE-TEST-PW'}}])
+
+    assert seen['password'] == 'FAKE-TEST-PW'
+    assert result['execution_context']['__test_ec_pw__'] == {'host': 'h'}
+    assert 'FAKE-TEST-PW' not in json.dumps(result)
+
+
+def test_multi_execution_context_drops_password_all_instances(temp_check, isolated_db):
+    seen = []
+
+    def ssh_like(host='', password=''):
+        seen.append(password)
+        return {'ok': True}
+
+    temp_check('__test_ec_multi_pw__', ssh_like)
+    result = run_checks_multi([{'id': '__test_ec_multi_pw__', 'instances': [
+        {'host': 'a', 'password': 'FAKE-TEST-PW'}, {'host': 'b', 'password': 'FAKE-TEST-PW'},
+    ]}])
+
+    assert seen == ['FAKE-TEST-PW', 'FAKE-TEST-PW']
+    assert result['execution_context']['__test_ec_multi_pw__'] == {'a': {'host': 'a'}, 'b': {'host': 'b'}}
+    assert 'FAKE-TEST-PW' not in json.dumps(result)
+
+
+def test_multi_single_instance_drops_password(temp_check, isolated_db):
+    temp_check('__test_ec_multi_one_pw__', lambda host='', password='': {'ok': True})
+    result = run_checks_multi([{'id': '__test_ec_multi_one_pw__',
+                                'instances': [{'host': 'a', 'password': 'FAKE-TEST-PW'}]}])
+    assert result['execution_context']['__test_ec_multi_one_pw__'] == {'host': 'a'}
