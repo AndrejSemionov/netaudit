@@ -1709,8 +1709,8 @@ function renderTrendUnit(tr) {
     <td>${n(p.total)}</td><td>${n(p.hardening_score)}</td><td>${n(p.unverified)}</td><td>${status(p)}</td></tr>`).join('');
   let html = `<h3>${tr.check_id} · ${tr.key}=${tr.value}</h3>` +
     (events ? `<p class="hint">${t('trends.events.hint')}</p>` : '') +
-    `<table><tr><th>${t('trends.col.time')}</th><th>${t('res.severity.critical')}</th><th>${t('res.severity.high')}</th>` +
-    `<th>${t('res.severity.medium')}</th><th>${t('res.severity.low')}</th><th>${t('trends.col.total')}</th>` +
+    `<table><tr><th>${t('trends.col.time')}</th><th>${t('trends.col.critical')}</th><th>${t('trends.col.high')}</th>` +
+    `<th>${t('trends.col.medium')}</th><th>${t('trends.col.low')}</th><th>${t('trends.col.total')}</th>` +
     `<th>${t('trends.col.score')}</th><th>${t('trends.col.unverified')}</th><th>${t('trends.col.status')}</th></tr>${rows}</table>`;
   const ch = tr.latest_change;
   if (!events) {
