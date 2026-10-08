@@ -33,12 +33,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from netaudit_pkg import storage, trends
+from netaudit_pkg import __version__, storage, trends
 from netaudit_pkg.engine import list_available, run_checks
 from netaudit_pkg.history import ai_analyze, list_reports, load_report, save_report
 from netaudit_pkg.utils import log
-
-__version__ = '0.2.0'
 
 QUICK_BUNDLE_SITE = ['ssl', 'security_headers', 'web_security_external', 'dns_audit']
 QUICK_BUNDLE_SERVER = ['server_audit', 'ports', 'firewall', 'lynis_audit', 'cve_audit']
