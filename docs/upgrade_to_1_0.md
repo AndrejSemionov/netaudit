@@ -3,7 +3,15 @@
 Two install layouts are covered: **A** - a git checkout in `~/netaudit` run
 by the `netaudit` systemd service (README, "Full server install"); **B** - the
 `deploy.sh` layout, a git mirror `~/netaudit-git` copied into a runtime
-directory `~/netaudit`. The database is `~/.netaudit/netaudit.db` in both.
+directory `~/netaudit`.
+
+**Run every command below as the account the service runs as** (`User=` in
+the systemd unit - `netaudit` in the README example), e.g. `sudo -iu netaudit`.
+NetAudit keeps its database in *that* account's home,
+`~netaudit/.netaudit/netaudit.db`: from another account, `~` points at a
+different (or missing) database. The `sudo systemctl ...` lines need an account
+allowed to use sudo - run them from your admin shell if the service account
+cannot.
 
 What 1.0 does **not** change: no new Python dependencies, no database schema
 change, no automatic rewrite of saved reports. New modules: `redaction`,
@@ -15,10 +23,28 @@ provider, but they stay in the file until you run the optional scrub (step 4).
 
 ## 1. Before the upgrade
 
+First make sure you are looking at the service's database - read-only, works
+with the old version too:
+
 ```bash
-git -C ~/netaudit rev-parse HEAD             # A: the rollback point
-cat ~/netaudit/.deployed_manifest            # B: note DEPLOYED_COMMIT - the rollback point
+python3 -c "import sqlite3, os; p = os.path.expanduser('~/.netaudit/netaudit.db'); print(p, sqlite3.connect(f'file:{p}?mode=ro', uri=True).execute('SELECT count(*) FROM reports').fetchone()[0], 'reports')"
+```
+
+The count must match the history you expect (the web **History** page). If it
+says `unable to open database file` or shows far fewer reports, you are in the
+wrong account - stop here.
+
+Note the rollback point:
+
+```bash
+git -C ~/netaudit rev-parse HEAD             # A
+cat ~/netaudit/.deployed_manifest            # B: DEPLOYED_COMMIT
 cp -a ~/netaudit ~/netaudit-pre-1.0          # B only: runtime snapshot for rollback (step 5)
+```
+
+Back up the database (both layouts):
+
+```bash
 umask 077
 python3 -c "import sqlite3, os; s = sqlite3.connect(os.path.expanduser('~/.netaudit/netaudit.db')); d = sqlite3.connect(os.path.expanduser('~/netaudit-pre-1.0.db')); s.backup(d); d.close(); s.close()"
 ```
@@ -46,7 +72,11 @@ git pull
 ```
 
 `deploy.sh` copies the changed files, runs the full test suite in
-`~/netaudit` and only then restarts and verifies the service.
+`~/netaudit` and only then restarts and verifies the service. Its last step
+requests `http://127.0.0.1:8000/api/checks` without credentials: if the
+service listens beyond localhost, NetAudit's built-in Basic Auth answers 401
+even to local requests, and that step fails after a successful restart - check
+by hand with `curl -u user:pass`.
 
 Hard-refresh the browser afterwards (Ctrl+Shift+R): the page is cached.
 
@@ -68,7 +98,8 @@ show observations only, never resolved/new.
 ## 4. Optional: remove old passwords from the database file
 
 Dry run - reads only and prints counts, never report contents (SQLite may
-create empty `-wal`/`-shm` files next to the database):
+create empty `-wal`/`-shm` files next to the database). `reports=` must be the
+same count as in step 1:
 
 ```bash
 cd ~/netaudit

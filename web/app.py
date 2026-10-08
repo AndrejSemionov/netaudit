@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from netaudit_pkg import (
+    __version__,
     deployment,
     history_capture,
     storage,
@@ -50,7 +51,7 @@ async def _lifespan(_app: FastAPI):
         history_capture.stop()
 
 
-app = FastAPI(title='NetAudit', version='2.0', lifespan=_lifespan)
+app = FastAPI(title='NetAudit', version=__version__, lifespan=_lifespan)
 
 # Real process start time - computed once at import (module load = uvicorn
 # process start), not per-request. Lets /api/health detect a stale process
