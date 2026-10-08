@@ -1,11 +1,9 @@
 # Event-log observations in trends — research and contract proposal
 
-Status: **DRAFT rev.2, not approved for implementation** (2026-10-08).
-Owner proposal: GPT/Codex implements; Claude independently reviews the
-contract and code. Product decision and contract approval remain with USER.
-Claude reviewed rev.1 (`d7ca5ad`) and approved option 3 in principle;
-rev.2 incorporates his three pre-RED clarifications. Focused re-review is
-pending.
+Status: **APPROVED rev.2** (2026-10-08). USER chose event observations
+without diff and explicitly approved this contract. GPT/Codex implements;
+Claude independently reviews the code. Claude reviewed rev.2 before USER
+approval; its three pre-RED clarifications are incorporated here.
 
 ## Problem and evidence
 
@@ -108,9 +106,7 @@ sources, or windows also make raw counts hard to compare.
 7. SSH tail limit reached still shows observed findings and a bounded-slice
    warning, never a state-style delta; no-source/exit-nonzero shows no count.
 
-## Open product decision
+## Product decision
 
-USER must choose whether option 3 is sufficient for 1.0, or whether
-event-interval provenance and a separately scoped occurrence model are
-required before release. Claude's independent review should challenge
-the coverage mapping and backwards-compatibility claim before approval.
+USER selected option 3 for 1.0. Event-interval provenance and an occurrence
+model remain future work outside this contract.
