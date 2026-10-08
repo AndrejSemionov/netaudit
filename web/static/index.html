@@ -835,6 +835,28 @@ print(json.dumps(check_arp_capture(target_ip='192.168.88.3', gateway_ip='192.168
 let CHECKS = [];
 let LAST_REPORT = null;
 
+// Everything the server returns can carry attacker-controlled text (a scanned
+// site's Set-Cookie line, reverse-DNS hop names, AI output, saved targets), and
+// this page builds HTML with template literals. Escape it before it reaches
+// innerHTML: escDeep() at the top of each renderer, esc() for single values.
+// Keep the raw object for anything sent back to the server or put into a form.
+// Guarded by tests/test_web_frontend_escaping.py.
+function esc(v) {
+  if (v === null || v === undefined) return '';
+  return String(v).replace(/[&<>"']/g, ch =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+function escDeep(v) {
+  if (typeof v === 'string') return esc(v);
+  if (Array.isArray(v)) return v.map(escDeep);
+  if (v && typeof v === 'object') {
+    const out = {};
+    for (const [k, x] of Object.entries(v)) out[esc(k)] = escDeep(x);
+    return out;
+  }
+  return v;
+}
+
 async function loadChecks() {
   const res = await fetch('/api/checks');
   CHECKS = await res.json();
@@ -1116,7 +1138,7 @@ function finishStream(ev) {
       const mtrRes = report.results && report.results.mtr;
       if (mtrRes && mtrRes.hops && mtrRes.hops.length) {
         meta.innerHTML = t('run.avg_at_stop') + ' ' +
-          mtrRes.hops.map(hh => `${hh.hop}. ${hh.host}: ${hh.avg_ms}${t('unit.ms_short')}`).join(' · ');
+          mtrRes.hops.map(hh => `${esc(hh.hop)}. ${esc(hh.host)}: ${esc(hh.avg_ms)}${t('unit.ms_short')}`).join(' · ');
       }
     }
     STREAM_STATE = null;
@@ -1152,6 +1174,7 @@ let CHART_INSTANCES = [];
 function destroyCharts() { CHART_INSTANCES.forEach(c => { try { c.destroy(); } catch(e){} }); CHART_INSTANCES = []; }
 
 function renderReport(report) {
+  report = escDeep(report);  // display copy - callers keep the raw report (LAST_REPORT)
   destroyCharts();
   const root = document.getElementById('results');
   root.innerHTML = '';
@@ -1515,7 +1538,7 @@ function fmtBytes(b) {
 
 async function loadHistory() {
   const res = await fetch('/api/history');
-  const items = await res.json();
+  const items = escDeep(await res.json());
   const root = document.getElementById('results');
   if (!items.length) { root.innerHTML = `<div class="empty">${t('history.empty')}</div>`; return; }
   root.innerHTML = `<div class="card"><h2>${t('history.title')}</h2>` +
@@ -1549,6 +1572,7 @@ async function analyzeReport() {
 }
 
 function renderAnalysis(a) {
+  a = escDeep(a);
   const root = document.getElementById('results');
   if (a.error) {
     root.insertAdjacentHTML('afterbegin', `<div class="card ai-card"><h2>${t('ai.analyze')}</h2><span class="pill bad">${a.error}</span><div class="timing" style="margin-top:8px">${t('ai.need_key')}</div></div>`);
@@ -1609,7 +1633,7 @@ async function loadTrendTargets() {
   const res = await fetch('/api/timeseries/targets');
   const targets = await res.json();
   const sel = document.getElementById('trendTarget');
-  sel.innerHTML = targets.map(tg => `<option value="${tg}">${tg}</option>`).join('');
+  sel.innerHTML = escDeep(targets).map(tg => `<option value="${tg}">${tg}</option>`).join('');
   if (targets.length) loadTrend();
   else document.getElementById('trendEmpty').textContent = t('trends.no_history');
 }
@@ -1670,7 +1694,7 @@ async function loadHistoryCapture() {
   if (!s.enabled) {
     el.textContent = t('hc.status.off');
   } else if (st.last_error) {
-    el.innerHTML = `<span style="color:var(--bad)">${t('hc.status.error')}: ${st.last_error}</span>`;
+    el.innerHTML = `<span style="color:var(--bad)">${t('hc.status.error')}: ${esc(st.last_error)}</span>`;
   } else if (st.last_run) {
     el.textContent = `${t('hc.status.running')}: ${st.last_run.replace('T',' ').slice(0,19)} · ${t('hc.status.total_snapshots')}: ${st.snapshots_taken}`;
   } else {
@@ -1704,7 +1728,7 @@ async function queryHistoryCapture() {
   if (!ip) { root.innerHTML = `<div style="color:var(--muted);font-size:15px">${t('hc.query.need_ip')}</div>`; return; }
   root.innerHTML = `<div style="color:var(--muted);font-size:15px">${t('hc.query.loading')}</div>`;
   const res = await fetch(`/api/history_capture/query?target_ip=${encodeURIComponent(ip)}&hours=${hours}`);
-  const data = await res.json();
+  const data = escDeep(await res.json());
   if (!data.rows.length) { root.innerHTML = `<div style="color:var(--muted);font-size:15px">${t('hc.query.no_data').replace('{hours}', hours)}</div>`; return; }
   const sevPill = s => ({critical:'<span class="pill bad">critical</span>', high:'<span class="pill bad">high</span>', suspicious:'<span class="pill warn">suspicious</span>', ok:'<span class="pill ok">ok</span>'}[s] || (s||''));
   root.innerHTML = `<div style="color:var(--muted);font-size:14px;margin-bottom:8px">${data.total} ${t('hc.query.records')}</div>` +
@@ -1716,7 +1740,7 @@ async function queryHistoryCapture() {
 
 async function loadRep() {
   const res = await fetch('/api/reputation');
-  const items = await res.json();
+  const items = escDeep(await res.json());
   const root = document.getElementById('repList');
   if (!items.length) { root.innerHTML = `<div style="color:var(--muted);font-size:15px">${t('rep.empty')}</div>`; return; }
   root.innerHTML = items.map(x =>
@@ -1742,7 +1766,7 @@ async function delRep(id) {
 
 async function loadTools() {
   const res = await fetch('/api/tools');
-  const list = await res.json();
+  const list = escDeep(await res.json());
   const root = document.getElementById('toolsList');
   root.innerHTML = list.map(tool => {
     const status = tool.installed
@@ -1838,7 +1862,7 @@ async function saveWebAuth() {
 // ---- Цели ----
 async function loadTargets() {
   const res = await fetch('/api/targets');
-  const targets = await res.json();
+  const targets = escDeep(await res.json());
   const root = document.getElementById('targetsList');
   root.innerHTML = targets.length ? targets.map(tg =>
     `<div class="list-row"><span class="grow">${tg.label ? tg.label + ' — ' : ''}${tg.value} <span style="color:var(--muted)">[${tg.kind}]</span></span>
@@ -1867,8 +1891,8 @@ async function loadPresetBar() {
   const bar = document.getElementById('presetBar');
   if (!presets.length) { bar.innerHTML = ''; return; }
   bar.innerHTML = `<div style="font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);font-family:var(--mono);margin-bottom:6px">${t('presets.bar.title')}</div>` +
-    presets.map(p => `<span class="preset-chip" onclick="applyPreset(${p.id})">${trPresetName(p.name)}</span>`).join('');
-  window._presets = presets;
+    escDeep(presets).map(p => `<span class="preset-chip" onclick="applyPreset(${p.id})">${trPresetName(p.name)}</span>`).join('');
+  window._presets = presets;  // raw: applyPreset() puts these values into the form
 }
 async function applyPreset(id) {
   const p = (window._presets || []).find(x => x.id === id);
@@ -1900,7 +1924,7 @@ async function saveCurrentAsPreset() {
 }
 async function loadPresetsManage() {
   const res = await fetch('/api/presets');
-  const presets = await res.json();
+  const presets = escDeep(await res.json());
   const root = document.getElementById('presetsManage');
   root.innerHTML = presets.length ? presets.map(p =>
     `<div class="list-row"><span class="grow">${trPresetName(p.name)} <span style="color:var(--muted)">(${p.checks.map(c=>c.id).join(', ')})</span></span>
@@ -1914,7 +1938,7 @@ async function delPreset(id) {
 
 async function loadSavedTargetsDatalist() {
   const res = await fetch('/api/targets');
-  const targets = await res.json();
+  const targets = escDeep(await res.json());
   const dl = document.getElementById('savedTargets');
   dl.innerHTML = targets.map(tg => `<option value="${tg.value}">${tg.label || tg.value}</option>`).join('');
 }
