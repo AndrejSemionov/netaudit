@@ -400,9 +400,9 @@ def test_list_units_runs_and_last_timestamp_most_recent_first(isolated_db):
 
     assert units == [
         {'check_id': 'ssh_hardening', 'key': 'host', 'value': '10.0.0.2',
-         'runs': 1, 'last_timestamp': '2026-01-05 00:00:00'},
+         'runs': 1, 'last_timestamp': '2026-01-05 00:00:00', 'kind': 'state'},
         {'check_id': 'ssh_hardening', 'key': 'host', 'value': '10.0.0.1',
-         'runs': 2, 'last_timestamp': '2026-01-02 00:00:00'},
+         'runs': 2, 'last_timestamp': '2026-01-02 00:00:00', 'kind': 'state'},
     ]
 
 

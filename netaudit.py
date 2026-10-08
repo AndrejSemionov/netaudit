@@ -146,6 +146,30 @@ def _signed(n) -> str:
 def _print_trend(trend: dict) -> None:
     runs = len(trend['points'])
     print(f"{trend['check_id']}  {trend['key']}={trend['value']}  ({runs} run{'s' if runs != 1 else ''})\n")
+    if trend.get('kind') == 'event_observation':
+        print('Log observations (bounded collection slices; no state change inferred):')
+        for p in trend['points']:
+            if p['error']:
+                label = ('AMBIGUOUS: ' + p['error'][len('ambiguous: '):]
+                         if p['error'].startswith('ambiguous: ') else f"ERROR: {p['error']}")
+                print(f"  {p['timestamp']}  {label}")
+                continue
+            obs = p.get('observation') or {}
+            label = obs.get('label') or 'coverage unknown'
+            source = obs.get('source') or 'source unknown'
+            coverage = obs.get('coverage')
+            contours = (f"access={obs.get('access_coverage') or 'unknown'}, "
+                        f"error={obs.get('error_coverage') or 'unknown'}") if obs.get('access_coverage') or obs.get('error_coverage') else None
+            coverage_text = contours or (f'coverage={coverage}' if coverage else label)
+            count = p['total'] if p['total'] is not None else 'unknown'
+            c = p['counts']
+            severities = (f"critical={c['critical']}, high={c['high']}, medium={c['medium']}, low={c['low']}"
+                          if c is not None else 'severity counts unknown')
+            limits = ', '.join(f'{name}={obs[name]}' for name in ('requested_lines', 'window_hours')
+                               if obs.get(name) is not None)
+            print(f"  {p['timestamp']}  observed problems={count} ({severities})  "
+                  f"{source}; {coverage_text}; {label}" + (f'; {limits}' if limits else ''))
+        return
     print(f"  {'timestamp':<20} {'crit':>4} {'high':>4} {'med':>4} {'low':>4} {'total':>6} {'score':>6}")
     for p in trend['points']:
         if p['error']:
@@ -187,8 +211,9 @@ def cmd_trend(args):
             print('No trend history yet.')
         else:
             for u in units:
+                kind_label = ' (log observations)' if u.get('kind') == 'event_observation' else ''
                 print(f"{u['check_id']:<22} {u['key']}={u['value']:<30} "
-                      f"{u['runs']} run{'s' if u['runs'] != 1 else ''}, last {u['last_timestamp']}")
+                      f"{u['runs']} run{'s' if u['runs'] != 1 else ''}, last {u['last_timestamp']}{kind_label}")
         return
 
     if args.value is None:
