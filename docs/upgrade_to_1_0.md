@@ -1,7 +1,9 @@
 # Upgrading a server to NetAudit 1.0
 
-For the `deploy.sh` layout: git mirror `~/netaudit-git`, runtime copy
-`~/netaudit`, systemd service `netaudit`, database `~/.netaudit/netaudit.db`.
+Two install layouts are covered: **A** - a git checkout in `~/netaudit` run
+by the `netaudit` systemd service (README, "Full server install"); **B** - the
+`deploy.sh` layout, a git mirror `~/netaudit-git` copied into a runtime
+directory `~/netaudit`. The database is `~/.netaudit/netaudit.db` in both.
 
 What 1.0 does **not** change: no new Python dependencies, no database schema
 change, no automatic rewrite of saved reports. New modules: `redaction`,
@@ -14,8 +16,9 @@ provider, but they stay in the file until you run the optional scrub (step 4).
 ## 1. Before the upgrade
 
 ```bash
-cat ~/netaudit/.deployed_manifest          # note DEPLOYED_COMMIT - the rollback point
-cp -a ~/netaudit ~/netaudit-pre-1.0         # runtime snapshot for rollback (step 5)
+git -C ~/netaudit rev-parse HEAD             # A: the rollback point
+cat ~/netaudit/.deployed_manifest            # B: note DEPLOYED_COMMIT - the rollback point
+cp -a ~/netaudit ~/netaudit-pre-1.0          # B only: runtime snapshot for rollback (step 5)
 umask 077
 python3 -c "import sqlite3, os; s = sqlite3.connect(os.path.expanduser('~/.netaudit/netaudit.db')); d = sqlite3.connect(os.path.expanduser('~/netaudit-pre-1.0.db')); s.backup(d); d.close(); s.close()"
 ```
@@ -25,6 +28,17 @@ The database backup is a full copy, old passwords included. Keep it private
 
 ## 2. Upgrade
 
+A - git checkout:
+
+```bash
+cd ~/netaudit
+git pull
+find . -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null
+sudo systemctl restart netaudit
+```
+
+B - `deploy.sh`:
+
 ```bash
 cd ~/netaudit-git
 git pull
@@ -33,6 +47,8 @@ git pull
 
 `deploy.sh` copies the changed files, runs the full test suite in
 `~/netaudit` and only then restarts and verifies the service.
+
+Hard-refresh the browser afterwards (Ctrl+Shift+R): the page is cached.
 
 ## 3. Check it works
 
@@ -92,7 +108,15 @@ provider during AI analysis - rotate them.
 The database schema did not change, so the previous version reads the same
 database, including reports saved by 1.0.
 
-Do not roll back with `deploy.sh` alone: files added in 1.0 (tests included)
+A - git checkout:
+
+```bash
+cd ~/netaudit
+git checkout <commit from step 1>
+sudo systemctl restart netaudit
+```
+
+B - do not roll back with `deploy.sh` alone: files added in 1.0 (tests included)
 would stay in `~/netaudit`, and its test run would fail against the old code.
 Swap the runtime snapshot instead:
 

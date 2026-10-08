@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from netaudit_pkg import storage, trends
 from netaudit_pkg.engine import list_available, run_checks
-from netaudit_pkg.history import save_report, list_reports, load_report, ai_analyze
+from netaudit_pkg.history import ai_analyze, list_reports, load_report, save_report
 from netaudit_pkg.utils import log
 
 __version__ = '0.2.0'

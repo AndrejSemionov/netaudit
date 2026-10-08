@@ -176,6 +176,10 @@ sudo systemctl restart netaudit
 ```
 Then hard-refresh the browser (Ctrl+Shift+R), since the frontend is cached.
 
+Upgrading an existing install to 1.0? Back up the database first - see
+[docs/upgrade_to_1_0.md](docs/upgrade_to_1_0.md) (backup, checks, optional
+removal of old SSH passwords from the database, rollback).
+
 ### Service management
 
 ```bash

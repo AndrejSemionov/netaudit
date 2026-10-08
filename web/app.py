@@ -19,12 +19,23 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from netaudit_pkg import (
+    deployment,
+    history_capture,
+    storage,
+    streaming,
+    timing,
+    tools,
+    trends,
+)
 from netaudit_pkg.engine import list_available, run_checks_multi
-from netaudit_pkg.history import save_report, list_reports, load_report, ai_analyze, verify_api_key
-from netaudit_pkg import timing, storage, tools, trends
-from netaudit_pkg import streaming
-from netaudit_pkg import history_capture
-from netaudit_pkg import deployment
+from netaudit_pkg.history import (
+    ai_analyze,
+    list_reports,
+    load_report,
+    save_report,
+    verify_api_key,
+)
 from netaudit_pkg.web_auth import BasicAuthMiddleware, ensure_auth_configured
 
 
@@ -44,14 +55,16 @@ app = FastAPI(title='NetAudit', version='2.0', lifespan=_lifespan)
 # Real process start time - computed once at import (module load = uvicorn
 # process start), not per-request. Lets /api/health detect a stale process
 # (old service_started_at surviving past a failed restart).
-from datetime import datetime, timezone as _timezone
-_SERVICE_STARTED_AT = datetime.now(_timezone.utc).isoformat()
+from datetime import UTC, datetime
+
+_SERVICE_STARTED_AT = datetime.now(UTC).isoformat()
 STATIC_DIR = Path(__file__).resolve().parent / 'static'
 
 # host is set to its real value in cmd_web() (netaudit.py) before uvicorn starts -
 # we read it here from the env var that cmd_web itself sets, since at the time
 # this module is imported the host isn't always directly known otherwise.
 import os as _os
+
 _WEB_HOST = _os.environ.get('NETAUDIT_WEB_HOST', '127.0.0.1')
 ensure_auth_configured(_WEB_HOST)
 app.add_middleware(BasicAuthMiddleware, host=_WEB_HOST)
@@ -138,7 +151,7 @@ def _execute_task(task_id: str, selected: list[dict]) -> None:
         report['_report_id'] = rid
         with _tasks_lock:
             _tasks[task_id] = {'status': 'done', 'report': report}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - background task boundary: any failure becomes the task's error status
         with _tasks_lock:
             _tasks[task_id] = {'status': 'error', 'error': f'{type(e).__name__}: {e}'}
 
@@ -409,6 +422,7 @@ def api_delete_reputation(rep_id: int) -> dict:
 # --- Streaming execution (live chart + stop) ---
 import asyncio
 import json as _json
+import queue
 import uuid as _uuid
 
 _stream_tasks: dict[str, streaming.StreamTask] = {}
@@ -439,7 +453,7 @@ async def api_stream(task_id: str):
         while True:
             try:
                 event = await asyncio.to_thread(task.q.get, True, 30)
-            except Exception:
+            except queue.Empty:
                 # queue timeout - a heartbeat so the connection doesn't drop
                 yield ': keep-alive\n\n'
                 continue
@@ -497,7 +511,8 @@ def api_history_capture_status() -> dict:
 @app.get('/api/history_capture/query')
 def api_history_capture_query(target_ip: str, hours: float = 1.0) -> dict:
     from datetime import datetime, timedelta
-    since = (datetime.now() - timedelta(hours=hours)).isoformat()
+    # naive local time on purpose: storage.traffic_history_add() stores seen_at that way
+    since = (datetime.now() - timedelta(hours=hours)).isoformat()  # noqa: DTZ005
     rows = storage.traffic_history_query(target_ip, since)
     return {'target_ip': target_ip, 'since': since, 'total': len(rows), 'rows': rows}
 
