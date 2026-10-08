@@ -40,13 +40,16 @@ HTML_WRITERS = {
     'loadPresetBar': 'escapes',
     'loadPresetsManage': 'escapes',
     'loadSavedTargetsDatalist': 'escapes',
+    'loadTrendUnits': 'escapes',
+    'renderTrendUnit': 'escapes',
 }
 
 # Interpolations allowed inside inline on*="..." handlers: check/tool ids from
-# the code registry and integer DB ids. HTML escaping does not protect a JS
+# the code registry, integer DB ids and integer row indexes. HTML escaping does not protect a JS
 # string inside an attribute (the browser decodes entities first), so nothing
 # else may go there.
-HANDLER_SAFE_EXPRS = {'c.id', 'checkId', 'nextIdx', 'it.id', 'x.id', 'tool.tool', 'tg.id', 'p.id'}
+HANDLER_SAFE_EXPRS = {'c.id', 'checkId', 'nextIdx', 'it.id', 'x.id', 'tool.tool', 'tg.id', 'p.id',
+                      'i'}  # i: row index into a JS-side list
 
 HTML_SINK = re.compile(r'\.innerHTML\s*=|\.outerHTML\s*=|insertAdjacentHTML\(')
 TOP_FUNC = re.compile(r'^(?:async\s+)?function\s+(\w+)\s*\(', re.M)
