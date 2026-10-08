@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from netaudit_pkg.engine import list_available, run_checks_multi
 from netaudit_pkg.history import save_report, list_reports, load_report, ai_analyze, verify_api_key
-from netaudit_pkg import timing, storage, tools
+from netaudit_pkg import timing, storage, tools, trends
 from netaudit_pkg import streaming
 from netaudit_pkg import history_capture
 from netaudit_pkg import deployment
@@ -240,6 +240,24 @@ def api_timeseries_mtr(target: str) -> dict:
 def api_timeseries_targets() -> list[str]:
     """Targets that have mtr history."""
     return storage.distinct_mtr_targets()
+
+
+# --- Trend layer (docs/research/trend_layer_v1_2_web_ai.md, 2c) ---
+@app.get('/api/trends')
+def api_trends() -> dict:
+    """Every object with finding/score history."""
+    return {'units': trends.list_units()}
+
+
+@app.get('/api/trend')
+def api_trend(check_id: str = '', key: str = '', value: str = '') -> dict:
+    """Trend of one object: points + latest change. Same shape as `netaudit trend --json`."""
+    if not (check_id and key and value) or key not in storage.IDENTITY_PARAM_KEYS:
+        raise HTTPException(400, 'check_id, key (an identity key) and value are required')
+    trend = trends.trend_for(check_id, key, value)
+    if trend is None:
+        raise HTTPException(404, 'no trend data for this object')
+    return trend
 
 
 # --- AI analysis ---

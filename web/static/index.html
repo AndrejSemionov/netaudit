@@ -238,6 +238,12 @@
       <div class="chart-box" style="height:320px;margin-top:16px"><canvas id="trendChart"></canvas></div>
       <div id="trendEmpty" style="color:var(--muted);font-size:15px"></div>
     </div>
+    <div class="settings-group">
+      <h2 data-i18n="trends.units.title">Изменения по объектам</h2>
+      <p class="hint" data-i18n="trends.units.hint">Как менялись находки и оценка защищённости объекта между прогонами. Считается без AI, по сохранённым отчётам.</p>
+      <div id="trendUnits"></div>
+      <div id="trendUnitDetail" style="margin-top:16px"></div>
+    </div>
   </div>
 </div>
 
@@ -1551,6 +1557,7 @@ async function loadHistory() {
 async function openReport(id) {
   const res = await fetch('/api/report?id=' + id);
   const report = await res.json();
+  report._report_id = id;  // AI analysis anchors history/trend on the exact run (2b.1)
   LAST_REPORT = report;
   document.getElementById('aiBtn').disabled = false;
   setStatus(`#${id} · ${report.timestamp} · ${report.total_time}s`);
@@ -1627,7 +1634,7 @@ function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab-page').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
   if (name === 'settings') loadSettings();
-  if (name === 'trends') loadTrendTargets();
+  if (name === 'trends') { loadTrendTargets(); loadTrendUnits(); }
 }
 
 let TREND_CHART = null;
@@ -1654,6 +1661,61 @@ async function loadTrend() {
       borderColor: CHART_COLORS.bad, backgroundColor: 'rgba(255,92,108,.12)', fill: true, tension: .25, pointRadius: 3 }] },
     options: baseOpts({ scales: { x: baseOpts().scales.x, y: Object.assign(baseOpts().scales.y, { max: 100 }) } })
   });
+}
+
+// ---- Trend layer: finding/score changes per object (/api/trends, /api/trend) ----
+let TREND_UNITS = [];  // raw: used to build request URLs, never rendered as-is
+async function loadTrendUnits() {
+  const res = await fetch('/api/trends');
+  TREND_UNITS = (await res.json()).units || [];
+  const root = document.getElementById('trendUnits');
+  document.getElementById('trendUnitDetail').innerHTML = '';
+  if (!TREND_UNITS.length) { root.innerHTML = `<div style="color:var(--muted);font-size:15px">${t('trends.units.empty')}</div>`; return; }
+  root.innerHTML = `<table><tr><th>${t('trends.col.check')}</th><th>${t('trends.col.object')}</th><th>${t('trends.col.runs')}</th><th>${t('trends.col.last')}</th></tr>` +
+    escDeep(TREND_UNITS).map((u, i) => `<tr style="cursor:pointer" onclick="openTrendUnit(${i})">
+      <td>${u.check_id}</td><td>${u.key}=${u.value}</td><td>${u.runs}</td><td>${u.last_timestamp || '—'}</td></tr>`).join('') +
+    '</table>';
+}
+async function openTrendUnit(i) {
+  const u = TREND_UNITS[i];
+  if (!u) return;
+  const q = `check_id=${encodeURIComponent(u.check_id)}&key=${encodeURIComponent(u.key)}&value=${encodeURIComponent(u.value)}`;
+  const res = await fetch('/api/trend?' + q);
+  if (!res.ok) { document.getElementById('trendUnitDetail').textContent = t('trends.units.empty'); return; }
+  renderTrendUnit(await res.json());
+}
+function renderTrendUnit(tr) {
+  tr = escDeep(tr);
+  const events = tr.kind === 'event_observation';  // log checks (2d): observations, never a diff
+  const status = p => !p.error ? `<span class="pill ok">${t('trends.status.ok')}</span>`
+    : p.error.startsWith('ambiguous: ') ? `<span class="pill warn">${t('trends.status.ambiguous')}</span>`
+    : `<span class="pill bad">${t('trends.status.error')}</span> <span class="timing">${p.error}</span>`;
+  const n = v => v ?? '—';
+  const rows = tr.points.map(p => `<tr><td>${p.timestamp}</td>
+    <td>${n(p.counts && p.counts.critical)}</td><td>${n(p.counts && p.counts.high)}</td>
+    <td>${n(p.counts && p.counts.medium)}</td><td>${n(p.counts && p.counts.low)}</td>
+    <td>${n(p.total)}</td><td>${n(p.hardening_score)}</td><td>${n(p.unverified)}</td><td>${status(p)}</td></tr>`).join('');
+  let html = `<h3>${tr.check_id} · ${tr.key}=${tr.value}</h3>` +
+    (events ? `<p class="hint">${t('trends.events.hint')}</p>` : '') +
+    `<table><tr><th>${t('trends.col.time')}</th><th>${t('res.severity.critical')}</th><th>${t('res.severity.high')}</th>` +
+    `<th>${t('res.severity.medium')}</th><th>${t('res.severity.low')}</th><th>${t('trends.col.total')}</th>` +
+    `<th>${t('trends.col.score')}</th><th>${t('trends.col.unverified')}</th><th>${t('trends.col.status')}</th></tr>${rows}</table>`;
+  const ch = tr.latest_change;
+  if (!events) {
+    if (!ch) {
+      html += `<p class="hint" style="margin-top:10px">${t('trends.change.none')}</p>`;
+    } else {
+      const ids = list => (list && list.length) ? list.join(', ') : '—';
+      const signed = v => v > 0 ? '+' + v : String(v);
+      html += `<h4 style="margin:14px 0 6px">${t('trends.change.title')} (${ch.from} → ${ch.to})</h4>
+        <div>${t('trends.change.observed')}: ${signed(ch.total_delta)}${ch.score_delta != null ? ` · ${t('trends.col.score')}: ${signed(ch.score_delta)}` : ''}</div>
+        <div>${t('trends.change.new')}: ${ids(ch.new)}</div>
+        <div>${t('trends.change.resolved')}: ${ids(ch.resolved)}</div>
+        <div>${t('trends.change.not_evaluated')}: ${ids(ch.not_evaluated)}</div>
+        <div>${t('trends.change.persisting')}: ${ids(ch.persisting)}</div>`;
+    }
+  }
+  document.getElementById('trendUnitDetail').innerHTML = html;
 }
 
 // ---- Настройки ----

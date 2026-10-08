@@ -271,6 +271,9 @@ def _bindings(body: str) -> list[tuple[set[str], str, int]]:
     out = []
     for m in re.finditer(r'\b(?:const|let|var)\s+(\{[^}]*\}|\[[^\]]*\]|[A-Za-z_$][\w$]*)\s*=(?!=)', body):
         out.append((_names(m.group(1)), body[m.end():_statement_end(body, m.end())], m.start()))
+    # plain assignment at statement start, e.g. a module-level cache `X = await res.json()`
+    for m in re.finditer(r'(?m)^\s*([A-Za-z_$][\w$]*)\s*=(?![=>])', body):
+        out.append(({m.group(1)}, body[m.end():_statement_end(body, m.end())], m.start()))
     for m in re.finditer(r'\bfor\s*\(\s*(?:const|let|var)\s+(\{[^}]*\}|\[[^\]]*\]|[A-Za-z_$][\w$]*)'
                          r'\s+of\s+', body):
         out.append((_names(m.group(1)), body[m.end():_statement_end(body, m.end())], m.start()))
