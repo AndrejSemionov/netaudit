@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 
 from ..registry import register
-from ..findings import finding as _finding
+from ..findings import finding as _finding, subject_id
 from ..ssh import SSHExecutor, HostKeyMismatchError
 
 try:
@@ -73,7 +73,8 @@ def _audit_one_container(info: dict) -> list[dict]:
         findings.append(_finding(
             'medium', f'{name}: the process inside the container runs as root',
             f'image {image} — on container escape, the attacker immediately gets root access '
-            'to the host; set USER in the Dockerfile or --user at run time if root isn\'t needed'
+            'to the host; set USER in the Dockerfile or --user at run time if root isn\'t needed',
+            id=subject_id('DCK-USER-001', name),
         ))
 
     # --- privileged ---
@@ -81,7 +82,8 @@ def _audit_one_container(info: dict) -> list[dict]:
         findings.append(_finding(
             'high', f'{name}: running with --privileged',
             'near-full host access (devices, kernel) - rarely justified '
-            '(Docker-in-Docker, low-level monitoring); check whether it\'s really needed'
+            '(Docker-in-Docker, low-level monitoring); check whether it\'s really needed',
+            id=subject_id('DCK-PRIV-001', name),
         ))
 
     # --- dangerous capabilities ---
@@ -90,7 +92,8 @@ def _audit_one_container(info: dict) -> list[dict]:
     if dangerous:
         findings.append(_finding(
             'high', f'{name}: risky capabilities added: {", ".join(dangerous)}',
-            f'full CapAdd list: {", ".join(cap_add)} — make sure each one is actually needed by the app'
+            f'full CapAdd list: {", ".join(cap_add)} — make sure each one is actually needed by the app',
+            id=subject_id('DCK-CAP-001', name),
         ))
 
     # --- public ports ---
@@ -105,7 +108,8 @@ def _audit_one_container(info: dict) -> list[dict]:
         findings.append(_finding(
             'low', f'{name}: ports listening on all interfaces (0.0.0.0)',
             ', '.join(public_ports) + ' — fine for web services behind a reverse proxy, '
-            'but internal services (DBs, admin panels) usually should be 127.0.0.1'
+            'but internal services (DBs, admin panels) usually should be 127.0.0.1',
+            id=subject_id('DCK-NET-001', name),
         ))
 
     # --- docker.sock mounted inside ---
@@ -119,13 +123,15 @@ def _audit_one_container(info: dict) -> list[dict]:
             findings.append(_finding(
                 'high', f'{name}: docker.sock mounted inside the container',
                 f'{bind} — this is effectively root access to the host via the Docker API; '
-                'make sure this is deliberate (e.g. Portainer/CI runner), not an accident'
+                'make sure this is deliberate (e.g. Portainer/CI runner), not an accident',
+                id=subject_id('DCK-SOCK-001', name),
             ))
         elif normalized in DANGEROUS_BIND_TARGETS:
             findings.append(_finding(
                 'medium', f'{name}: a sensitive host path is mounted: {normalized}',
                 f'{bind} — excessive access for a regular application, '
-                'check whether the container really needs this whole path'
+                'check whether the container really needs this whole path',
+                id=subject_id('DCK-MNT-001', name, normalized),
             ))
 
     # --- latest tag / no tag ---
@@ -133,7 +139,8 @@ def _audit_one_container(info: dict) -> list[dict]:
         findings.append(_finding(
             'low', f'{name}: image with no version pin ({image})',
             'without a fixed version it\'s hard to track which CVE patches are applied — '
-            'the image could silently change on the next pull'
+            'the image could silently change on the next pull',
+            id=subject_id('DCK-IMG-001', name),
         ))
 
     return findings
@@ -211,7 +218,8 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='', 
             all_findings.append(_finding(
                 'high', 'Docker daemon is listening on TCP without explicit TLS (port 2375)',
                 socket_out.strip()[:300] + ' — an unprotected TCP Docker API socket means root access '
-                'for anyone who can reach it over the network'
+                'for anyone who can reach it over the network',
+                id='DCK-API-001',
             ))
 
         if not container_ids:

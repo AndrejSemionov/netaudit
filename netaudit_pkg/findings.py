@@ -102,3 +102,18 @@ def finding(severity: str, title: str, detail: str = '', confidence: str = 'high
     no other edits needed. Returns a dict, same as the old per-module helper did."""
     return Finding(severity=severity, title=title, detail=detail, confidence=confidence,
                     id=id, **kwargs).to_dict()
+
+
+def subject_id(control_id: str, *parts: str) -> str:
+    """Stable id for a control that fires once per subject (a container, a
+    unit + directive, a directory...): 'DCK-MNT-001:web:%2Fetc'.
+
+    Each part is percent-encoded with quote(part, safe='') and parts are
+    joined with ':', so ':'/'/'/spaces/newlines inside a name can never make
+    two different subjects produce the same id, and every part decodes back
+    with unquote(). An empty part stays empty ('WEB-COOKIE-002:').
+    Contract: docs/research/stable_finding_ids_research.md; catalogue:
+    docs/checks/finding_ids.md.
+    """
+    from urllib.parse import quote
+    return control_id + ''.join(':' + quote(str(p), safe='') for p in parts)
