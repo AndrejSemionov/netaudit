@@ -498,14 +498,17 @@ introduced once a third independent source shows an actual need for one, not pre
 - The Anthropic API key is read from an environment variable / local DB, never stored in code or reports.
 - New reports remove SSH password parameters before storage or AI analysis;
   old reports are redacted when read. Existing SQLite files and older backups
-  may still contain passwords. To inspect an existing database without
-  changing it, run:
+  may still contain passwords. As the account that runs the NetAudit service
+  (`User=` in its systemd unit), inspect its database without rewriting
+  reports:
 
   ```bash
   python3 -m netaudit_pkg.scrub_legacy_secrets --database "$HOME/.netaudit/netaudit.db"
   ```
 
-  The separate `--apply` mode requires an explicit backup path. Review the
+  SQLite may create empty `-wal`/`-shm` sidecar files during this dry-run;
+  check that `reports=` matches the history you expect. The separate `--apply`
+  mode requires an explicit backup path. Review the
   [scrub contract](docs/research/legacy_secret_scrub.md) before using it on a
   database that contains real reports.
 
