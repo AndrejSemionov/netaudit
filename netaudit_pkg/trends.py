@@ -38,31 +38,57 @@ def _result_param_pairs(check_id: str, ctx: dict, results: dict) -> list[tuple[d
     return [(ctx, result)]
 
 
+def _scoped_findings(result: dict) -> dict[str, list] | None:
+    """Findings grouped by scope: '' for a flat result, the section name for a
+    sectioned one (server_audit: {'sections': {name: {'findings': [...]}}}).
+    Top-level findings win - a result is never counted twice. None when the
+    result has neither shape."""
+    findings = result.get('findings')
+    if isinstance(findings, list):
+        return {'': findings}
+    sections = result.get('sections')
+    if isinstance(sections, dict) and sections and all(isinstance(s, dict) for s in sections.values()):
+        return {name: s['findings'] if isinstance(s.get('findings'), list) else []
+                for name, s in sections.items()}
+    return None
+
+
 def _snapshot(check_id: str, key: str, value, timestamp: str, result: dict) -> dict | None:
     base = {'check_id': check_id, 'key': key, 'value': value, 'timestamp': timestamp}
     if result.get('error'):
         return {**base, 'error': result['error'], 'counts': None,
-                'hardening_score': None, 'finding_ids': {}}
+                'hardening_score': None, 'finding_ids': {}, 'scopes': {}, 'unverified': None}
 
-    findings = result.get('findings')
+    scoped = _scoped_findings(result)
     hardening = result.get('hardening')
     score = hardening.get('score') if isinstance(hardening, dict) else None
-    if not isinstance(findings, list) and score is None:
+    if scoped is None and score is None:
         return None  # metric-style result (ping, mtr, ...) - out of scope for v1
+    if scoped is None:
+        scoped = {'': []}
 
     counts = dict.fromkeys(PROBLEM_SEVERITIES, 0)
     finding_ids = {}
-    for f in findings or []:
-        if not isinstance(f, dict) or f.get('severity') not in PROBLEM_SEVERITIES:
-            continue
-        counts[f['severity']] += 1
-        if f.get('id'):
-            finding_ids[f['id']] = f['severity']
-    return {**base, 'error': None, 'counts': counts,
-            'hardening_score': score, 'finding_ids': finding_ids}
+    # per scope: its ids and how many problems it could not verify - a
+    # "could not determine / no access" finding means that scope's missing
+    # ids were not evaluated, not fixed (Contract v1.2)
+    scopes = {name: {'ids': [], 'unverified': 0} for name in scoped}
+    for name, findings in scoped.items():
+        for f in findings:
+            if not isinstance(f, dict) or f.get('severity') not in PROBLEM_SEVERITIES:
+                continue
+            counts[f['severity']] += 1
+            if f.get('requires_manual_verification'):
+                scopes[name]['unverified'] += 1
+            if f.get('id'):
+                finding_ids[f['id']] = f['severity']
+                scopes[name]['ids'].append(f['id'])
+    return {**base, 'error': None, 'counts': counts, 'hardening_score': score,
+            'finding_ids': finding_ids, 'scopes': scopes,
+            'unverified': sum(s['unverified'] for s in scopes.values())}
 
 
-_COMPARED_FIELDS = ('error', 'counts', 'hardening_score', 'finding_ids')
+_COMPARED_FIELDS = ('error', 'counts', 'hardening_score', 'finding_ids', 'scopes', 'unverified')
 
 
 def _one_per_unit(instances: list[dict]) -> dict:
@@ -80,7 +106,8 @@ def _one_per_unit(instances: list[dict]) -> dict:
     return {**first,
             'error': f'ambiguous: {len(instances)} instances of this unit '
                      f'with different results in one report',
-            'counts': None, 'hardening_score': None, 'finding_ids': {}}
+            'counts': None, 'hardening_score': None, 'finding_ids': {},
+            'scopes': {}, 'unverified': None}
 
 
 def snapshots_from_report(report: dict) -> list[dict]:
@@ -107,7 +134,22 @@ def _point(snap: dict) -> dict:
         'counts': counts,
         'total': sum(counts.values()) if counts is not None else None,
         'hardening_score': snap['hardening_score'],
+        'unverified': snap.get('unverified'),
     }
+
+
+def _was_evaluated(fid: str, prev: dict, cur: dict) -> bool:
+    """True if `cur` fully evaluated the scope `fid` belonged to in `prev`:
+    that scope is present in `cur` and has no finding requiring manual
+    verification. Snapshots without scope data (hand-built, pre-v1.2 shape)
+    count as one fully evaluated scope."""
+    prev_scope = next((name for name, s in (prev.get('scopes') or {}).items()
+                       if fid in s['ids']), '')
+    cur_scopes = cur.get('scopes')
+    if cur_scopes is None:
+        return True
+    scope = cur_scopes.get(prev_scope)
+    return scope is not None and scope['unverified'] == 0
 
 
 def _change(prev: dict, cur: dict) -> dict:
@@ -116,6 +158,10 @@ def _change(prev: dict, cur: dict) -> dict:
     score_delta = None
     if prev['hardening_score'] is not None and cur['hardening_score'] is not None:
         score_delta = cur['hardening_score'] - prev['hardening_score']
+    gone = prev_ids - cur_ids
+    # a missing id is "resolved" only where the latest run could actually
+    # look; otherwise it was not evaluated (Contract v1.2, tri-state)
+    not_evaluated = {fid for fid in gone if not _was_evaluated(fid, prev, cur)}
     return {
         'from': prev['timestamp'],
         'to': cur['timestamp'],
@@ -123,8 +169,9 @@ def _change(prev: dict, cur: dict) -> dict:
         'total_delta': sum(counts_delta.values()),
         'score_delta': score_delta,
         'new': sorted(cur_ids - prev_ids),
-        'resolved': sorted(prev_ids - cur_ids),
+        'resolved': sorted(gone - not_evaluated),
         'persisting': sorted(prev_ids & cur_ids),
+        'not_evaluated': sorted(not_evaluated),
     }
 
 

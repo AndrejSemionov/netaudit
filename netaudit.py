@@ -168,12 +168,14 @@ def _print_trend(trend: dict) -> None:
     # two non-error points, so those are the ones to print.
     prev, cur = [p for p in trend['points'] if not p['error']][-2:]
     print(f"\nLatest change ({ch['from']} -> {ch['to']}):")
-    print(f"  problems: {prev['total']} -> {cur['total']} ({_signed(ch['total_delta'])})")
+    # observed counts: a run that could not look everywhere sees fewer problems
+    print(f"  observed problems: {prev['total']} -> {cur['total']} ({_signed(ch['total_delta'])})")
     if ch['score_delta'] is not None:
         print(f"  hardening score: {prev['hardening_score']} -> {cur['hardening_score']} "
               f"({_signed(ch['score_delta'])})")
-    for label in ('new', 'resolved', 'persisting'):
-        print(f"  {label}: {', '.join(ch[label]) or '-'}")
+    for field, label in (('new', 'new'), ('resolved', 'resolved'),
+                         ('not_evaluated', 'not evaluated'), ('persisting', 'persisting')):
+        print(f"  {label}: {', '.join(ch[field]) or '-'}")
 
 
 def cmd_trend(args):
