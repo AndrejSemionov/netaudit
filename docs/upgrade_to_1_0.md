@@ -70,9 +70,17 @@ sudo systemctl start netaudit
 
 Exit code `0` and `status=complete`: the rows are clean and the file was vacuumed
 (`status=noop`: there was nothing to remove).
-Exit code `3` (`incomplete`): the rows were changed but `VACUUM` or the WAL
-checkpoint did not finish - keep the backup and run it again with NetAudit
-stopped. The scrub backup still contains the passwords, and older backups or
+Exit code `3` (`incomplete`, with the failed `stage`): the rows are already
+clean, but `VACUUM` or the WAL checkpoint did not finish, so old bytes may
+still be on free pages. Running the tool again does nothing (no rows left to
+change). With NetAudit still stopped, finish the physical cleanup yourself -
+it should print `(0, 0, 0)`:
+
+```bash
+python3 -c "import sqlite3, os; c = sqlite3.connect(os.path.expanduser('~/.netaudit/netaudit.db')); c.execute('VACUUM'); print(c.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()); c.close()"
+```
+
+The scrub backup still contains the passwords, and older backups or
 filesystem snapshots are not touched - see
 [the scrub contract](research/legacy_secret_scrub.md).
 
