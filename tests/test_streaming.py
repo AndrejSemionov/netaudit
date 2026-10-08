@@ -10,14 +10,14 @@ are explicitly out of scope here (see is_multi_host in run_stream()).
 
 from __future__ import annotations
 
-import time
 import queue
 import threading
+import time
 
 import pytest
 
+from netaudit_pkg.registry import CheckSpec, registry
 from netaudit_pkg.streaming import StreamTask, run_stream
-from netaudit_pkg.registry import registry, CheckSpec
 
 
 @pytest.fixture

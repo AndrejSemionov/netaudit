@@ -52,7 +52,7 @@ HANDLER_SAFE_EXPRS = {'c.id', 'checkId', 'nextIdx', 'it.id', 'x.id', 'tool.tool'
                       'i'}  # i: row index into a JS-side list
 
 HTML_SINK = re.compile(r'\.innerHTML\s*=|\.outerHTML\s*=|insertAdjacentHTML\(')
-TOP_FUNC = re.compile(r'^(?:async\s+)?function\s+(\w+)\s*\(', re.M)
+TOP_FUNC = re.compile(r'^(?:async\s+)?function\s+(\w+)\s*\(', re.MULTILINE)
 
 
 def _script() -> str:
@@ -71,8 +71,8 @@ def _functions(js: str) -> dict[str, str]:
 
 def test_escape_helpers_exist_and_cover_html_metacharacters():
     js = _script()
-    assert re.search(r'^function esc\(', js, re.M)
-    assert re.search(r'^function escDeep\(', js, re.M)
+    assert re.search(r'^function esc\(', js, re.MULTILINE)
+    assert re.search(r'^function escDeep\(', js, re.MULTILINE)
     esc_body = _functions(js)['esc']
     for entity in ('&amp;', '&lt;', '&gt;', '&quot;', '&#39;'):
         assert entity in esc_body

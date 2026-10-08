@@ -98,8 +98,8 @@ def test_trend_endpoints_never_return_params(client, isolated_db):
 def test_page_has_trend_units_card():
     html = INDEX.read_text(encoding='utf-8')
     assert 'id="trendUnits"' in html and 'id="trendUnitDetail"' in html
-    assert re.search(r"^async function loadTrendUnits\(", html, re.M)
-    assert re.search(r"^function renderTrendUnit\(", html, re.M)
+    assert re.search(r"^async function loadTrendUnits\(", html, re.MULTILINE)
+    assert re.search(r"^function renderTrendUnit\(", html, re.MULTILINE)
 
 
 def test_report_opened_from_history_keeps_its_id():
