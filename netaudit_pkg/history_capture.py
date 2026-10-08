@@ -32,7 +32,10 @@ DEFAULT_INTERVAL_SEC = 60
 DEFAULT_RETENTION_HOURS = 24
 
 _watcher_thread: threading.Thread | None = None
+# stop signal of the CURRENT watcher - each start() gets a fresh one, so a
+# watcher still finishing a slow pass after stop() can't swallow the next start()
 _stop_event = threading.Event()
+_lifecycle_lock = threading.Lock()
 _status_lock = threading.Lock()
 _status = {'running': False, 'last_run': None, 'last_error': None, 'snapshots_taken': 0}
 
@@ -122,46 +125,51 @@ def _take_snapshot(s: dict) -> None:
     storage.traffic_history_add(s['target_ip'], rows)
 
 
-def _watch_loop() -> None:
-    while not _stop_event.is_set():
+def _watch_loop(stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
         s = get_settings()
         if not s['enabled']:
-            _stop_event.wait(5)
+            stop_event.wait(5)
             continue
         try:
             _take_snapshot(s)
             with _status_lock:
-                _status['last_run'] = datetime.now().isoformat()
+                _status['last_run'] = datetime.now().isoformat()  # noqa: DTZ005 - capture retention and status use local wall time
                 _status['last_error'] = None
                 _status['snapshots_taken'] += 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - background capture must report any failure
             with _status_lock:
-                _status['last_run'] = datetime.now().isoformat()
+                _status['last_run'] = datetime.now().isoformat()  # noqa: DTZ005 - capture retention and status use local wall time
                 _status['last_error'] = str(e)[:300]
 
         # prune old records - once per loop pass, cheap thanks to the seen_at index
         try:
-            cutoff = (datetime.now() - timedelta(hours=s['retention_hours'])).isoformat()
+            cutoff = (datetime.now() - timedelta(hours=s['retention_hours'])).isoformat()  # noqa: DTZ005 - capture retention and status use local wall time
             storage.traffic_history_prune(cutoff)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - retention failure must not stop capture
             log.debug('history_capture: prune failed: %s: %s', type(e).__name__, e)
 
-        _stop_event.wait(max(10, s['interval_sec']))
+        stop_event.wait(max(10, s['interval_sec']))
 
 
 def start() -> None:
-    """Called once when the web server starts (see web/app.py lifespan)."""
-    global _watcher_thread
-    if _watcher_thread and _watcher_thread.is_alive():
-        return
-    _stop_event.clear()
-    with _status_lock:
-        _status['running'] = True
-    _watcher_thread = threading.Thread(target=_watch_loop, daemon=True, name='traffic-history-watcher')
-    _watcher_thread.start()
+    """Called when the web server starts (see web/app.py lifespan)."""
+    global _watcher_thread, _stop_event
+    with _lifecycle_lock:
+        if _watcher_thread and _watcher_thread.is_alive() and not _stop_event.is_set():
+            return
+        # a previous watcher may still be inside a pass after stop(): it keeps
+        # its own (set) event and exits by itself - never wait for it here
+        _stop_event = threading.Event()
+        with _status_lock:
+            _status['running'] = True
+        _watcher_thread = threading.Thread(target=_watch_loop, args=(_stop_event,),
+                                           daemon=True, name='traffic-history-watcher')
+        _watcher_thread.start()
 
 
 def stop() -> None:
-    _stop_event.set()
-    with _status_lock:
-        _status['running'] = False
+    with _lifecycle_lock:
+        _stop_event.set()
+        with _status_lock:
+            _status['running'] = False

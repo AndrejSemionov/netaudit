@@ -23,11 +23,11 @@ detection_succeeded semantics
 detection_succeeded (passed to ssh_auth_findings.build_findings(), see
 that function's own docstring on why it must never be inferred from an
 empty DetectionResult) is True iff a source was actually selected (see
-"Source selection" below) and its collection completed. If neither
-auth.log nor the journal produces a usable result, there is nothing to
-analyze and detection_succeeded is False — an empty result in that case
-must not read as "no suspicious activity", it must read as "we could
-not check".
+"Source selection" below) and its collection completed with exit code 0.
+If neither auth.log nor the journal produces a usable result, there is
+nothing to analyze and detection_succeeded is False — an empty result in
+that case must not read as "no suspicious activity", it must read as
+"we could not check".
 
 Source selection (fixed after a real E2E bug — see project session
 notes, 2026-08-18)
@@ -45,12 +45,12 @@ authentication analysis when it exists and contains events; journal is
 optional/best-effort), this check now selects exactly ONE source per
 run:
   1. If Discovery reports auth.log as available, try collect_file() on
-     it. If that collection completes, auth.log IS the selected source
-     — journal is never also collected in this case.
+     it. If that collection completes with exit code 0, auth.log IS the
+     selected source — journal is never also collected in this case.
   2. Only if auth.log is unavailable, or its collection did not
-     complete, is journalctl -u ssh attempted as a fallback.
-  3. If neither produces a completed result, no source is selected and
-     detection_succeeded is False.
+     complete successfully, is journalctl -u ssh attempted as a fallback.
+  3. If neither produces a successful result, no source is selected,
+     detection_succeeded is False, and the report has a top-level error.
 
 This is deliberately NOT deduplication — merging two sources' events by
 matching timestamp/pid/content was considered and rejected (see project
@@ -73,9 +73,8 @@ that value explicitly.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from .log_discovery_audit import SourceType, file_verdict
 from ..log_collection import collect_file, collect_journal
 from ..log_discovery import probe_log_file
 from ..registry import register
@@ -83,6 +82,7 @@ from ..ssh import HostKeyMismatchError, SSHExecutor
 from ..ssh_auth_detection import DetectionContext, apply_window, detect
 from ..ssh_auth_findings import DEFAULT_POLICY, build_findings
 from ..ssh_auth_parser import parse_ssh_auth_line
+from .log_discovery_audit import SourceType, file_verdict
 
 try:
     import paramiko
@@ -124,7 +124,8 @@ def check_ssh_auth_audit(host='', user='root', port=22, key_path='', password=''
         ssh = SSHExecutor(host, user, port, key_path, password).connect()
     except HostKeyMismatchError as e:
         return {'error': str(e)}
-    except Exception as e:
+    # SSH libraries can fail with transport, auth, or socket errors; keep the check isolated.
+    except Exception as e:  # noqa: BLE001
         return {'error': f'could not connect: {e}'}
 
     try:
@@ -138,7 +139,7 @@ def check_ssh_auth_audit(host='', user='root', port=22, key_path='', password=''
         # caller-determines-it-once principle already enforced for
         # reference_year in ssh_auth_parser.py and reference_time in
         # ssh_auth_detection.py.
-        reference_time = datetime.now(timezone.utc)
+        reference_time = datetime.now(UTC)
         reference_year = reference_time.year
 
         # --- Discovery: targeted probe of auth.log ONLY — not full-host
@@ -171,12 +172,13 @@ def check_ssh_auth_audit(host='', user='root', port=22, key_path='', password=''
 
         if auth_source.available:
             file_result = collect_file(ssh, auth_source, lines=lines)
-            if file_result is not None and file_result.result.completed:
+            if (file_result is not None and file_result.result.completed
+                    and file_result.result.exit_code == 0):
                 selected_source = 'file'
 
         if selected_source == 'none':
             journal_result = collect_journal(ssh, JOURNAL_UNIT, lines=lines)
-            if journal_result.result.completed:
+            if journal_result.result.completed and journal_result.result.exit_code == 0:
                 selected_source = 'journal'
                 fallback_used = auth_source.available  # only a "fallback" if file was tried and failed
 
@@ -222,9 +224,10 @@ def check_ssh_auth_audit(host='', user='root', port=22, key_path='', password=''
     elif selected_source == 'journal':
         selection_reason = 'journal source used (auth.log was not reported available by Discovery)'
     else:
-        selection_reason = 'no usable SSH authentication source (auth.log unavailable and journal collection failed)'
+        selection_reason = ('no usable SSH authentication source '
+                            '(auth.log unavailable or failed to collect, and journal collection failed)')
 
-    return {
+    report = {
         'host': host,
         'findings': findings,
         'summary': counts,
@@ -237,3 +240,6 @@ def check_ssh_auth_audit(host='', user='root', port=22, key_path='', password=''
             'coverage_uncertain': detection_result.coverage_uncertain,
         },
     }
+    if not detection_succeeded:
+        report['error'] = 'no SSH authentication source could be collected'
+    return report

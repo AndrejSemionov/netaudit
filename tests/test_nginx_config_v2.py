@@ -14,7 +14,6 @@ from netaudit_pkg.nginx_config_v2 import (
     parse_nginx_config_v2,
 )
 
-
 # ===========================================================================
 # Real VM baseline (docs/checks/nginx_hardening.md Milestone 1 capture) —
 # the regression anchor. This exact text is what `sudo nginx -T` produced

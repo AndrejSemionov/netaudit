@@ -45,10 +45,10 @@ is the implementation of that spec, not a fresh design. In particular:
 
 from __future__ import annotations
 
-from ..registry import register
 from ..findings import finding as _finding
+from ..registry import register
 from ..scoring import Component, weighted_score
-from ..ssh import SSHExecutor, HostKeyMismatchError
+from ..ssh import HostKeyMismatchError, SSHExecutor
 from ..ssh_config import SSHConfig, collect_ssh_config
 
 try:
@@ -516,7 +516,8 @@ def check_ssh_hardening(host='', user='root', port=22, key_path='', password='')
         ssh = SSHExecutor(host, user, port, key_path, password).connect()
     except HostKeyMismatchError as e:
         return {'error': str(e)}
-    except Exception as e:
+    # SSH libraries can fail with transport, auth, or socket errors; keep the check isolated.
+    except Exception as e:  # noqa: BLE001
         return {'error': f'could not connect: {e}'}
 
     try:

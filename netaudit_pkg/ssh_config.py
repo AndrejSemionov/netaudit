@@ -132,7 +132,7 @@ def collect_ssh_config(ssh: SSHExecutor) -> SSHConfig:
     ver_out, ver_err = ssh.run('sshd -V 2>&1')
     version = (ver_out or ver_err).strip().splitlines()[0] if (ver_out or ver_err) else ''
 
-    out, err = ssh.sudo('sshd -T')
+    out, _err = ssh.sudo('sshd -T')
     if not out.strip():
         return SSHConfig(readable=False, version=version)
 

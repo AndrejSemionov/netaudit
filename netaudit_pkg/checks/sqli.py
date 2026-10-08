@@ -14,7 +14,7 @@ sqlmap without explicit authorization confirmation.
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from ..registry import register
 from ..utils import run_cmd, tool_available
@@ -29,7 +29,7 @@ def _fetch_html(url: str) -> str | None:
         import httpx
         with httpx.Client(follow_redirects=True, timeout=15) as c:
             return c.get(url).text
-    except Exception:
+    except Exception:  # noqa: BLE001 - an unreachable/invalid URL has no page to inspect
         return None
 
 
@@ -69,7 +69,7 @@ def _run_sqlmap(url: str, crawl: bool, level: int = 1, risk: int = 1) -> dict:
     if crawl:
         cmd += ['--crawl=1']
 
-    code, out, err = run_cmd(cmd, timeout=240)
+    _code, out, err = run_cmd(cmd, timeout=240)
     combined = out + '\n' + err
 
     findings = []

@@ -11,21 +11,23 @@ Covers:
 
 from __future__ import annotations
 
-from netaudit_pkg.nginx_config import NginxConfig
 from netaudit_pkg.checks.nginx_hardening import (
-    _build_findings, audit_nginx_hardening, check_nginx_hardening,
+    _build_findings,
+    audit_nginx_hardening,
+    check_nginx_hardening,
 )
+from netaudit_pkg.nginx_config import NginxConfig
 from netaudit_pkg.ssh import HostKeyMismatchError
 from tests.conftest import FakeSSHExecutor
 
 
 def _cfg(**kwargs) -> NginxConfig:
-    defaults = dict(
-        installed=True, readable=True, server_tokens='off',
-        ssl_protocols=['TLSv1.3'], has_ssl_certificate=True,
-        headers_present={'strict-transport-security', 'x-frame-options', 'x-content-type-options'},
-        autoindex_on=False,
-    )
+    defaults = {
+        'installed': True, 'readable': True, 'server_tokens': 'off',
+        'ssl_protocols': ['TLSv1.3'], 'has_ssl_certificate': True,
+        'headers_present': {'strict-transport-security', 'x-frame-options', 'x-content-type-options'},
+        'autoindex_on': False,
+    }
     defaults.update(kwargs)
     return NginxConfig(**defaults)
 

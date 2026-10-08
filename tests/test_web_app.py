@@ -305,7 +305,8 @@ def test_api_analyze_passes_history_to_ai_analyze_inline_report(client, isolated
         resp = client.post('/api/analyze', json={'report': SAMPLE_REPORT})
 
     assert resp.status_code == 200
-    mock_find.assert_called_once_with(SAMPLE_REPORT, limit=3)
+    # inline report without _report_id: timestamp anchor (trend layer v1.2, 2b.1)
+    mock_find.assert_called_once_with(SAMPLE_REPORT, limit=3, report_id=None)
     mock_analyze.assert_called_once()
     assert mock_analyze.call_args.args[0] == SAMPLE_REPORT
     assert mock_analyze.call_args.kwargs.get('history') == FAKE_RELATED
@@ -319,7 +320,7 @@ def test_api_analyze_passes_history_to_ai_analyze_by_report_id(client, isolated_
         resp = client.post('/api/analyze', json={'report_id': 1})
 
     assert resp.status_code == 200
-    mock_find.assert_called_once_with(SAMPLE_REPORT, limit=3)
+    mock_find.assert_called_once_with(SAMPLE_REPORT, limit=3, report_id=1)
     mock_analyze.assert_called_once()
     assert mock_analyze.call_args.kwargs.get('history') == FAKE_RELATED
 
@@ -334,6 +335,34 @@ def test_api_analyze_still_forwards_language_param(client, isolated_db):
 
     assert resp.status_code == 200
     assert mock_analyze.call_args.kwargs.get('language') == 'ru'
+
+
+@pytest.mark.parametrize('posted_id, expected', [(7, 7), ('7', None), (True, None)])
+def test_api_analyze_anchors_on_posted_report_id_only_when_integer(client, isolated_db, posted_id, expected):
+    report = {**SAMPLE_REPORT, '_report_id': posted_id}
+    with patch('web.app.storage.find_related_reports', return_value=[]) as mock_find, \
+         patch('web.app.trends.trend_context', return_value=[{'x': 1}]) as mock_ctx, \
+         patch('web.app.ai_analyze', return_value={'summary': 'ok'}) as mock_analyze:
+        resp = client.post('/api/analyze', json={'report': report})
+
+    assert resp.status_code == 200
+    assert mock_find.call_args.kwargs['report_id'] == expected
+    assert mock_ctx.call_args.kwargs['report_id'] == expected
+    assert mock_analyze.call_args.kwargs.get('trends') == [{'x': 1}]
+
+
+def test_api_analyze_explicit_report_id_wins_over_posted_report_id(client, isolated_db):
+    """GPT/Codex review of 2b (pass 1): contract 2b.1 - "/api/analyze ->
+    report_id, else an integer report['_report_id']"."""
+    report = {**SAMPLE_REPORT, '_report_id': 3}
+    with patch('web.app.storage.find_related_reports', return_value=[]) as mock_find, \
+         patch('web.app.trends.trend_context', return_value=[]) as mock_ctx, \
+         patch('web.app.ai_analyze', return_value={'summary': 'ok'}):
+        resp = client.post('/api/analyze', json={'report': report, 'report_id': 2})
+
+    assert resp.status_code == 200
+    assert mock_find.call_args.kwargs['report_id'] == 2
+    assert mock_ctx.call_args.kwargs['report_id'] == 2
 
 
 # ===========================================================================

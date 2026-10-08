@@ -10,14 +10,14 @@ are explicitly out of scope here (see is_multi_host in run_stream()).
 
 from __future__ import annotations
 
-import time
 import queue
 import threading
+import time
 
 import pytest
 
+from netaudit_pkg.registry import CheckSpec, registry
 from netaudit_pkg.streaming import StreamTask, run_stream
-from netaudit_pkg.registry import registry, CheckSpec
 
 
 @pytest.fixture
@@ -362,7 +362,10 @@ def test_ec_saved_web_report_is_found_by_find_related_reports(temp_check, isolat
     """The user-visible effect: a Web report is history for the next one."""
     temp_check('__test_st_ec_hist__', lambda host='': {'findings': []})
     _run_and_drain([{'id': '__test_st_ec_hist__', 'params': {'host': '10.0.0.1'}}])
-    current = {'results': {}, 'execution_context': {'__test_st_ec_hist__': {'host': '10.0.0.1'}}}
+    # a later run: history is anchored strictly before the analyzed report
+    # (trend layer v1.2, 2b.1) - a report with no timestamp and no id has none
+    current = {'timestamp': '9999-12-31 00:00:00', 'results': {},
+               'execution_context': {'__test_st_ec_hist__': {'host': '10.0.0.1'}}}
 
     related = isolated_db.find_related_reports(current)
 

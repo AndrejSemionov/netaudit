@@ -25,9 +25,9 @@ from __future__ import annotations
 
 import re
 
-from ..registry import register, confirm_param, CONFIRM_MODIFY
 from ..findings import finding as _finding
-from ..ssh import SSHExecutor, HostKeyMismatchError
+from ..registry import CONFIRM_MODIFY, confirm_param, register
+from ..ssh import HostKeyMismatchError, SSHExecutor
 
 try:
     import paramiko
@@ -153,7 +153,8 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='',  # no
         ssh = SSHExecutor(host, user, port, key_path, password).connect()
     except HostKeyMismatchError as e:
         return {'error': str(e)}
-    except Exception as e:
+    # SSH libraries can fail with transport, auth, or socket errors; keep the check isolated.
+    except Exception as e:  # noqa: BLE001
         return {'error': f'could not connect: {e}'}
 
     try:

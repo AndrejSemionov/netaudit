@@ -22,7 +22,7 @@ def tool_available(name: str) -> bool:
 def run_cmd(cmd: list[str], timeout: int = 30, input_text: str | None = None) -> tuple[int, str, str]:
     """Runs a command as an argument list (never shell=True)."""
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, input=input_text)  # nosec B603 - run_cmd() is the project-wide safe subprocess wrapper: list-form args, never shell=True
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, input=input_text, check=False)  # nosec B603 - run_cmd() is the project-wide safe subprocess wrapper: list-form args, never shell=True
         return result.returncode, result.stdout, result.stderr
     except subprocess.TimeoutExpired:
         log.warning(f'Timeout: {" ".join(cmd)}')

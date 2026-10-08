@@ -36,9 +36,9 @@ from __future__ import annotations
 
 import re
 
-from ..registry import register, confirm_param, CONFIRM_MODIFY
 from ..findings import finding as _finding
-from ..ssh import SSHExecutor, HostKeyMismatchError
+from ..registry import CONFIRM_MODIFY, confirm_param, register
+from ..ssh import HostKeyMismatchError, SSHExecutor
 
 try:
     import paramiko
@@ -118,7 +118,8 @@ def check_aide(host='', user='root', port=22, key_path='', password='',  # nosec
         ssh = SSHExecutor(host, user, port, key_path, password).connect()
     except HostKeyMismatchError as e:
         return {'error': str(e)}
-    except Exception as e:
+    # SSH libraries can fail with transport, auth, or socket errors; keep the check isolated.
+    except Exception as e:  # noqa: BLE001
         return {'error': f'could not connect: {e}'}
 
     try:
@@ -138,7 +139,7 @@ def check_aide(host='', user='root', port=22, key_path='', password='',  # nosec
         # (writing a new one as aide.db.new on --init) - these paths are standard
         # for the repo package, a custom aide.conf might differ
         if mode == 'init':
-            out, err = ssh.sudo(f'aide --config {AIDE_CONFIG} --init 2>&1', timeout=600)
+            out, _err = ssh.sudo(f'aide --config {AIDE_CONFIG} --init 2>&1', timeout=600)
             # --init writes the new database as aide.db.new, it has to be
             # explicitly activated by renaming - otherwise the next --check
             # would compare against the old (or missing) database
@@ -167,7 +168,7 @@ def check_aide(host='', user='root', port=22, key_path='', password='',  # nosec
         # ~7 minutes end to end (confirmed via `time aide --check`), same
         # ballpark as --init above - a low timeout here would kill a
         # legitimate scan on any server with a non-trivial filesystem.
-        out, err = ssh.sudo(f'aide --config {AIDE_CONFIG} --check 2>&1', timeout=900)
+        out, _err = ssh.sudo(f'aide --config {AIDE_CONFIG} --check 2>&1', timeout=900)
 
     finally:
         ssh.close()

@@ -55,9 +55,9 @@ from datetime import datetime, timedelta
 
 import httpx
 
-from ..registry import register
 from .. import storage
-from ..ssh import SSHExecutor, HostKeyMismatchError
+from ..registry import register
+from ..ssh import HostKeyMismatchError, SSHExecutor
 from ..ssh_utils import run_command_with_exit_code
 
 try:
@@ -481,7 +481,7 @@ def collect_composer_packages(ssh: SSHExecutor) -> list[dict]:
             # silently mangle any version string with more than one
             # leading 'v' (or, worse, treat 'v' as a character class and
             # strip further characters that happen to also be 'v').
-            clean_version = version[1:] if version.startswith('v') else version
+            clean_version = version.removeprefix('v')
             packages.append({
                 'name': name, 'version': clean_version,
                 'upstream_version': version, 'ecosystem': 'Packagist',
@@ -506,7 +506,7 @@ def _cache_get(name: str, version: str, ecosystem: str) -> list | None:
     if not row:
         return None
     updated = datetime.fromisoformat(row['updated_at'])
-    if datetime.now() - updated > timedelta(hours=CACHE_TTL_HOURS):
+    if datetime.now() - updated > timedelta(hours=CACHE_TTL_HOURS):  # noqa: DTZ005 - cache timestamps are stored as local naive wall time
         return None
     return row['data']
 
@@ -755,7 +755,8 @@ def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> 
         ssh = SSHExecutor(host, user, port, key_path, password).connect()
     except HostKeyMismatchError as e:
         return {'error': str(e)}
-    except Exception as e:
+    # SSH libraries can fail with transport, auth, or socket errors; keep the check isolated.
+    except Exception as e:  # noqa: BLE001
         return {'error': f'could not connect: {e}'}
 
     try:

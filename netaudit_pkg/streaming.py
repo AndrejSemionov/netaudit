@@ -91,7 +91,7 @@ class StreamTask:
 
 def _stream_mtr(task, params, out_lines):
     """Reads mtr --raw line by line, emits per-hop latency points."""
-    cmd, count = _mtr_cmd(params)
+    cmd, _count = _mtr_cmd(params)
     if not shutil.which('mtr'):
         task.emit({'type': 'error', 'message': 'mtr is not installed'})
         return
@@ -117,7 +117,7 @@ def _stream_mtr(task, params, out_lines):
 
 
 def _stream_ping(task, params, out_lines):
-    cmd, count = _ping_cmd(params)
+    cmd, _count = _ping_cmd(params)
     if not shutil.which('ping'):
         task.emit({'type': 'error', 'message': 'ping not found'})
         return
@@ -136,7 +136,7 @@ def _stream_ping(task, params, out_lines):
 
 
 def _stream_tcptr(task, params, out_lines):
-    cmd, max_hops = _tcptr_cmd(params)
+    cmd, _max_hops = _tcptr_cmd(params)
     if not shutil.which('tcptraceroute'):
         task.emit({'type': 'error', 'message': 'tcptraceroute is not installed'})
         return
@@ -165,7 +165,7 @@ STREAM_FUNCS = {'mtr': _stream_mtr, 'ping': _stream_ping, 'tcptraceroute': _stre
 def run_stream(task: StreamTask):
     """Runs all selected checks, emitting events into the task queue."""
     report = {
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),  # noqa: DTZ005 - report history uses local naive timestamps for ordering
         'results': {}, 'timing': {}, 'meta': {},
         # Same Execution Context Contract v1 as engine.run_checks()/
         # run_checks_multi() - without it Web reports are invisible to
@@ -236,7 +236,7 @@ def run_stream(task: StreamTask):
                 out_lines: list[str] = []
                 try:
                     STREAM_FUNCS[check_id](task, params, out_lines)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - isolate arbitrary streaming check failures
                     report['results'][check_id] = {'error': f'{type(e).__name__}: {e}'}
                     task.emit({'type': 'check_done', 'id': check_id,
                                'result': report['results'][check_id]})
@@ -246,7 +246,7 @@ def run_stream(task: StreamTask):
                 if not task.cancelled.is_set():
                     try:
                         result = spec.func(**params)
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 - isolate arbitrary registered check failures
                         result = {'error': f'{type(e).__name__}: {e}'}
                 else:
                     result = _partial_from_lines(check_id, out_lines)
@@ -255,14 +255,14 @@ def run_stream(task: StreamTask):
                 # regular (instant/non-streaming) check
                 try:
                     result = spec.func(**params)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - isolate arbitrary registered check failures
                     result = {'error': f'{type(e).__name__}: {e}'}
 
             elapsed = round(time.monotonic() - start, 2)
             if not (isinstance(result, dict) and result.get('error')):
                 try:
                     timing.record(check_id, params, elapsed)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - timing failure must not lose check result
                     log.debug('streaming: timing.record failed for %s: %s: %s', check_id, type(e).__name__, e)
             report['results'][check_id] = result
             report['timing'][check_id] = elapsed
@@ -278,7 +278,7 @@ def run_stream(task: StreamTask):
         try:
             rid = storage.save_report(report)
             report['_report_id'] = rid
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - storage failure must not lose streamed result
             log.error(f'save_report: {e}')
 
         if task.cancelled.is_set():
@@ -287,7 +287,7 @@ def run_stream(task: StreamTask):
         else:
             task.status = 'done'
             task.emit({'type': 'all_done', 'report': report})
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - stream boundary emits one terminal error event
         task.status = 'error'
         task.emit({'type': 'error', 'message': f'{type(e).__name__}: {e}'})
     finally:

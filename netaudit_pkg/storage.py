@@ -180,7 +180,7 @@ def _seed_presets(conn: sqlite3.Connection) -> None:
     ]
     for name, checks in defaults:
         conn.execute('INSERT INTO presets (name, checks, created_at) VALUES (?,?,?)',
-                     (name, _j.dumps(checks, ensure_ascii=False), _dt.now().isoformat()))
+                     (name, _j.dumps(checks, ensure_ascii=False), _dt.now().isoformat()))  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
     conn.commit()
 
 
@@ -300,7 +300,44 @@ def identity_pairs(execution_context: dict) -> set[tuple[str, object]]:
     return pairs
 
 
-def find_related_reports(report: dict, limit: int = 3) -> list[dict]:
+def _before_anchor(report: dict, report_id: int | None) -> tuple[str, int] | None:
+    """(timestamp, id) of `report` in the trend layer's total order, for
+    "saved strictly before this run" (docs/research/trend_layer_v1_2_web_ai.md,
+    2b.1). With the report's DB id the row's own timestamp is authoritative
+    (a posted body cannot move the anchor) and earlier runs saved in the same
+    second are kept. Without one - an inline report - only strictly earlier
+    timestamps count (id 0: ids start at 1); content is not an identity.
+    None when there is nothing to anchor on."""
+    if isinstance(report_id, int) and not isinstance(report_id, bool):
+        row = _conn().execute('SELECT timestamp FROM reports WHERE id = ?', (report_id,)).fetchone()
+        if row is not None and row['timestamp']:
+            return row['timestamp'], report_id
+    ts = report.get('timestamp')
+    return (ts, 0) if ts else None
+
+
+_ROWS_BEFORE_SQL = ('SELECT id, timestamp, checks, data FROM reports '
+                    'WHERE timestamp < ? OR (timestamp = ? AND id < ?) '
+                    'ORDER BY timestamp DESC, id DESC LIMIT ?')
+
+
+def _rows_before(report: dict, report_id: int | None, window: int) -> list:
+    anchor = _before_anchor(report, report_id)
+    if anchor is None:
+        return []
+    ts, before_id = anchor
+    return _conn().execute(_ROWS_BEFORE_SQL, (ts, ts, before_id, window)).fetchall()
+
+
+def report_data_before(report: dict, report_id: int | None = None,
+                       window: int = RELATED_REPORTS_SEARCH_WINDOW) -> list[dict]:
+    """Full report dicts saved strictly before `report` (see _before_anchor()),
+    most recent first, redacted like load_report(). Read path for the trend
+    context given to AI analysis (trends.trend_context())."""
+    return [redact_report(json.loads(r['data'])) for r in _rows_before(report, report_id, window)]
+
+
+def find_related_reports(report: dict, limit: int = 3, report_id: int | None = None) -> list[dict]:
     """
     Finds past reports that appear to be about the same object as `report`,
     using its execution_context (see netaudit_pkg/engine.py's Report
@@ -327,16 +364,17 @@ def find_related_reports(report: dict, limit: int = 3) -> list[dict]:
     params, or a check whose only params are non-identity ones like
     count/timeout), there is nothing to match against and this returns []
     - not an error, just no history.
+
+    Only runs saved strictly BEFORE `report` are candidates (v1.2, 2b.1):
+    pass the report's DB id when known (`report_id`) - the analyzed run is
+    then never its own history and a later run is never "previous". Without
+    an id, strictly earlier timestamps; without a timestamp either, [].
     """
     current_identity_pairs = identity_pairs(report.get('execution_context', {}))
     if not current_identity_pairs:
         return []
 
-    conn = _conn()
-    rows = conn.execute(
-        'SELECT timestamp, checks, data FROM reports ORDER BY timestamp DESC LIMIT ?',
-        (RELATED_REPORTS_SEARCH_WINDOW,),
-    ).fetchall()
+    rows = _rows_before(report, report_id, RELATED_REPORTS_SEARCH_WINDOW)
 
     matches = []
     for row in rows:
@@ -431,8 +469,8 @@ def timing_upsert(key: str, ema: float, count: int, last: float) -> None:
         """INSERT INTO timing_stats (key, ema, count, last, updated_at)
            VALUES (?,?,?,?,?)
            ON CONFLICT(key) DO UPDATE SET ema=?, count=?, last=?, updated_at=?""",
-        (key, ema, count, last, datetime.now().isoformat(),
-         ema, count, last, datetime.now().isoformat()),
+        (key, ema, count, last, datetime.now().isoformat(),  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
+         ema, count, last, datetime.now().isoformat()),  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
     )
     conn.commit()
 
@@ -477,7 +515,7 @@ def preset_save(name: str, checks: list[dict]) -> int:
     cur = conn.execute(
         """INSERT INTO presets (name, checks, created_at) VALUES (?,?,?)
            ON CONFLICT(name) DO UPDATE SET checks=?""",
-        (name, json.dumps(checks, ensure_ascii=False), datetime.now().isoformat(),
+        (name, json.dumps(checks, ensure_ascii=False), datetime.now().isoformat(),  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
          json.dumps(checks, ensure_ascii=False)),
     )
     conn.commit()
@@ -528,7 +566,7 @@ def rep_add(pattern: str, list_type: str, note: str = '') -> int:
     conn = _conn()
     cur = conn.execute(
         'INSERT INTO rep_list (pattern, list_type, note, created_at) VALUES (?,?,?,?)',
-        (pattern, list_type, note, datetime.now().isoformat()),
+        (pattern, list_type, note, datetime.now().isoformat()),  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
     )
     conn.commit()
     return cur.lastrowid
@@ -564,7 +602,7 @@ def asn_set(ip: str, org: str | None, country: str | None) -> None:
     conn.execute(
         """INSERT INTO asn_cache (ip, org, country, updated_at) VALUES (?,?,?,?)
            ON CONFLICT(ip) DO UPDATE SET org=?, country=?, updated_at=?""",
-        (ip, org, country, datetime.now().isoformat(), org, country, datetime.now().isoformat()),
+        (ip, org, country, datetime.now().isoformat(), org, country, datetime.now().isoformat()),  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
     )
     conn.commit()
 
@@ -586,8 +624,8 @@ def cve_set(key: str, data: list) -> None:
     conn.execute(
         """INSERT INTO cve_cache (key, data, updated_at) VALUES (?,?,?)
            ON CONFLICT(key) DO UPDATE SET data=?, updated_at=?""",
-        (key, json.dumps(data, ensure_ascii=False), datetime.now().isoformat(),
-         json.dumps(data, ensure_ascii=False), datetime.now().isoformat()),
+        (key, json.dumps(data, ensure_ascii=False), datetime.now().isoformat(),  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
+         json.dumps(data, ensure_ascii=False), datetime.now().isoformat()),  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
     )
     conn.commit()
 
@@ -602,7 +640,7 @@ def cve_set(key: str, data: list) -> None:
 def traffic_history_add(target_ip: str, destinations: list[dict]) -> None:
     """destinations: [{'ip','port'?,'protocol'?,'risk_level'?,'risk_score'?}, ...]"""
     conn = _conn()
-    now = datetime.now().isoformat()
+    now = datetime.now().isoformat()  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
     conn.executemany(
         """INSERT INTO traffic_history (target_ip, dst_ip, dst_port, protocol, risk_level, risk_score, seen_at)
            VALUES (?,?,?,?,?,?,?)""",

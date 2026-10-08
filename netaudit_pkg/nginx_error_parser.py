@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 
 
@@ -141,7 +141,7 @@ def parse_nginx_error_line(line: str) -> NginxErrorEvent:
             int(match.group("hour")),
             int(match.group("minute")),
             int(match.group("second")),
-            tzinfo=timezone.utc,
+            tzinfo=UTC,
         )
     except ValueError:
         # Structurally matched but semantically invalid date/time

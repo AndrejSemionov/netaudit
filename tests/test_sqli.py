@@ -15,9 +15,10 @@ from __future__ import annotations
 import pytest
 
 from netaudit_pkg.checks.sqli import (
-    check_sql_injection, _find_injection_points, AUTH_CONFIRM,
+    AUTH_CONFIRM,
+    _find_injection_points,
+    check_sql_injection,
 )
-
 
 # ===========================================================================
 # The authorization gate — the critical path

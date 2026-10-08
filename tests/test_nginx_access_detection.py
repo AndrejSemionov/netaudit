@@ -13,7 +13,7 @@ scenario is added here purely to inflate the test count.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -36,7 +36,7 @@ from netaudit_pkg.nginx_access_parser import NginxAccessEvent, NginxAccessEventT
 # Fixture helpers
 # ---------------------------------------------------------------------------
 
-_BASE_TS = datetime(2026, 8, 19, 12, 0, 0, tzinfo=timezone.utc)
+_BASE_TS = datetime(2026, 8, 19, 12, 0, 0, tzinfo=UTC)
 
 
 def _parsed(

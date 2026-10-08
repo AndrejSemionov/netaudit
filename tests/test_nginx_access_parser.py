@@ -33,8 +33,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from netaudit_pkg.nginx_access_parser import NginxAccessEventType, parse_nginx_access_line
-
+from netaudit_pkg.nginx_access_parser import (
+    NginxAccessEventType,
+    parse_nginx_access_line,
+)
 
 # ===========================================================================
 # 1. Normal combined line -> PARSED, all fields extracted

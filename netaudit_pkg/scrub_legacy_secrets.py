@@ -253,13 +253,13 @@ def apply_scrub(database: str | Path, backup: str | Path) -> ScrubResult:
                              backup_path if backup_reserved else None) from exc
         try:
             _run_vacuum(conn)
-        except Exception:
+        except Exception:  # noqa: BLE001 - any post-commit VACUUM failure means incomplete cleanup
             return ScrubResult('incomplete', locked.affected, 'vacuum')
         try:
             checkpoint = _checkpoint(conn)
             if checkpoint is None or checkpoint[0] != 0:
                 return ScrubResult('incomplete', locked.affected, 'checkpoint')
-        except Exception:
+        except Exception:  # noqa: BLE001 - any checkpoint failure means incomplete cleanup
             return ScrubResult('incomplete', locked.affected, 'checkpoint')
         try:
             if conn.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
@@ -269,7 +269,7 @@ def apply_scrub(database: str | Path, backup: str | Path) -> ScrubResult:
                 return ScrubResult('incomplete', locked.affected, 'verify')
             if not _private_backup_files(backup_path):
                 return ScrubResult('incomplete', locked.affected, 'permissions')
-        except Exception:
+        except Exception:  # noqa: BLE001 - verify all post-commit failures without claiming success
             return ScrubResult('incomplete', locked.affected, 'verify')
         return ScrubResult('complete', locked.affected)
     finally:
@@ -322,7 +322,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f'Backup at {exc.sensitive_backup} may contain original secrets; '
                   'protect it and follow your backup retention policy.', file=sys.stderr)
         return 2
-    except Exception:
+    except Exception:  # noqa: BLE001 - CLI must not print exception text containing report data
         # Unexpected OS/SQLite exception text may contain external report
         # data. Keep diagnostics generic at the command-line boundary.
         print('error: scrub failed; no report data was printed', file=sys.stderr)

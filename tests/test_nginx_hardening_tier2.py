@@ -13,8 +13,6 @@ test_nginx_v2_resolvers.py).
 
 from __future__ import annotations
 
-from netaudit_pkg.nginx_config_v2 import parse_nginx_config_v2
-from netaudit_pkg.nginx_v2_resolvers import resolve_listen_groups
 from netaudit_pkg.checks.nginx_hardening import (
     _aggregate_server_verdicts,
     _build_tier2_components,
@@ -35,7 +33,8 @@ from netaudit_pkg.checks.nginx_hardening import (
     _verdict_hdr_006_permissions_policy,
     _verdict_tls_004_ciphers,
 )
-
+from netaudit_pkg.nginx_config_v2 import parse_nginx_config_v2
+from netaudit_pkg.nginx_v2_resolvers import resolve_listen_groups
 
 # ===========================================================================
 # _aggregate_server_verdicts() — shared multi-vhost aggregation helper
@@ -209,14 +208,14 @@ def test_tls004_variable_in_value_is_unknown():
 def test_tls004_evidence_includes_server_name():
     conf = 'http { server { listen 443 ssl; server_name example.com; ssl_ciphers ALL:RC4; } }'
     cfg = parse_nginx_config_v2(conf)
-    verdict, evidence = _verdict_tls_004_ciphers(cfg.servers[0], cfg.http_directives)
+    _verdict, evidence = _verdict_tls_004_ciphers(cfg.servers[0], cfg.http_directives)
     assert 'example.com' in evidence
 
 
 def test_tls004_evidence_falls_back_to_listen_when_no_server_name():
     conf = 'http { server { listen 443 ssl; ssl_ciphers ALL:RC4; } }'
     cfg = parse_nginx_config_v2(conf)
-    verdict, evidence = _verdict_tls_004_ciphers(cfg.servers[0], cfg.http_directives)
+    _verdict, evidence = _verdict_tls_004_ciphers(cfg.servers[0], cfg.http_directives)
     assert '443' in evidence
 
 
@@ -1489,8 +1488,8 @@ def test_build_tier2_components_returns_all_seven():
 # ===========================================================================
 
 def test_legacy_and_tier2_weights_sum_to_one():
-    from netaudit_pkg.nginx_config import NginxConfig
     from netaudit_pkg.checks.nginx_hardening import _build_components
+    from netaudit_pkg.nginx_config import NginxConfig
 
     cfg = NginxConfig(installed=True, readable=True, ssl_protocols='TLSv1.2 TLSv1.3',
                        server_tokens='off', autoindex_on=False, has_ssl_certificate=True,
@@ -1508,6 +1507,7 @@ def test_legacy_and_tier2_weights_sum_to_one():
 
 def test_audit_nginx_hardening_end_to_end_16_components():
     from unittest.mock import MagicMock
+
     from netaudit_pkg.checks.nginx_hardening import audit_nginx_hardening
 
     ssh = MagicMock()
@@ -1542,6 +1542,7 @@ def test_hardening_score_unavailable_when_tier2_unreadable():
     # hardening score must be entirely absent, not a different
     # (unvalidated, non-comparable) 9-component number.
     from unittest.mock import MagicMock
+
     from netaudit_pkg.checks.nginx_hardening import audit_nginx_hardening
 
     ssh = MagicMock()

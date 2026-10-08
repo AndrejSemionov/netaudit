@@ -42,6 +42,7 @@ from dataclasses import dataclass
 
 from .ssh import SSHExecutor
 
+
 @dataclass
 class KernelConfig:
     """Structured facts read from `sysctl -a` (runtime effective values)
@@ -103,7 +104,7 @@ def collect_kernel_config(ssh: SSHExecutor) -> KernelConfig:
     ver_out, _ = ssh.run('uname -r')
     kernel_version = ver_out.strip()
 
-    out, err = ssh.sudo('sysctl -a')
+    out, _err = ssh.sudo('sysctl -a')
     if not out.strip():
         return KernelConfig(readable=False, kernel_version=kernel_version)
 

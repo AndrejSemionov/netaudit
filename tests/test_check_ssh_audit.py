@@ -10,7 +10,11 @@ silently became an empty string instead of the intended fallback message.
 
 from __future__ import annotations
 
-from netaudit_pkg.checks.system import check_ssh_audit, REMOTE_CHECKS, REMOTE_SUDO_CHECKS
+from netaudit_pkg.checks.system import (
+    REMOTE_CHECKS,
+    REMOTE_SUDO_CHECKS,
+    check_ssh_audit,
+)
 from tests.conftest import FakeSSHExecutor
 
 

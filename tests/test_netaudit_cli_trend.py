@@ -221,3 +221,23 @@ def test_trend_ambiguous_point_is_not_labelled_as_error(isolated_db, capsys):
     out = capsys.readouterr().out
     assert 'AMBIGUOUS: 2 instances of this unit with different results in one report' in out
     assert 'ERROR' not in out
+
+
+def test_trend_unit_text_shows_not_evaluated_and_observed_counts(isolated_db, capsys):
+    """Contract v1.2 (2a): ids the latest run could not evaluate are listed
+    separately, never as resolved; counts are labelled as observed."""
+    _save(isolated_db, '2026-02-01 00:00:00', 'server_audit', {'host': 's'},
+          {'host': 's', 'summary': {}, 'sections': {
+              'nginx': {'installed': True, 'findings': [_f('high', 'NGX-CONF-001')]}}})
+    unreadable = _f('low')
+    unreadable['requires_manual_verification'] = True
+    _save(isolated_db, '2026-02-02 00:00:00', 'server_audit', {'host': 's'},
+          {'host': 's', 'summary': {}, 'sections': {
+              'nginx': {'installed': True, 'findings': [unreadable]}}})
+
+    netaudit.cmd_trend(_ns('server_audit', 's'))
+
+    out = capsys.readouterr().out
+    assert 'not evaluated: NGX-CONF-001' in out
+    assert 'resolved: -' in out
+    assert 'observed problems: 1 -> 1 (0)' in out

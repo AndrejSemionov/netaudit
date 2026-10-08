@@ -11,7 +11,7 @@ Console:
     netaudit.py run --quick --url https://example.com   - default site bundle
     netaudit.py run --quick --host 1.2.3.4 --user root  - default server bundle
     netaudit.py history                       - list reports
-    netaudit.py analyze <path>                 - AI analysis of a report (what to do)
+    netaudit.py analyze <report_id>            - AI analysis of a saved report (see history)
 
 Web:
     netaudit.py web                            - start the web UI on 127.0.0.1:8000
@@ -33,12 +33,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from netaudit_pkg import storage, trends
+from netaudit_pkg import __version__, storage, trends
 from netaudit_pkg.engine import list_available, run_checks
-from netaudit_pkg.history import save_report, list_reports, load_report, ai_analyze
+from netaudit_pkg.history import ai_analyze, list_reports, load_report, save_report
 from netaudit_pkg.utils import log
-
-__version__ = '0.2.0'
 
 QUICK_BUNDLE_SITE = ['ssl', 'security_headers', 'web_security_external', 'dns_audit']
 QUICK_BUNDLE_SERVER = ['server_audit', 'ports', 'firewall', 'lynis_audit', 'cve_audit']
@@ -114,8 +112,10 @@ def cmd_run(args):
 
     if args.ai:
         log.info('Running AI analysis...')
-        related = storage.find_related_reports(report, limit=3)
-        analysis = ai_analyze(report, history=related)
+        # anchored on this run's id: history and trend are strictly before it
+        related = storage.find_related_reports(report, limit=3, report_id=saved)
+        analysis = ai_analyze(report, history=related,
+                              trends=trends.trend_context(report, report_id=saved))
         print('\n=== AI ANALYSIS ===')
         print(json.dumps(analysis, ensure_ascii=False, indent=2))
 
@@ -130,12 +130,14 @@ def cmd_history(args):
 
 
 def cmd_analyze(args):
-    report = load_report(int(args.id))
+    report_id = int(args.id)
+    report = load_report(report_id)
     if report is None:
         print(f'Report #{args.id} not found.')
         return
-    related = storage.find_related_reports(report, limit=3)
-    analysis = ai_analyze(report, history=related)
+    related = storage.find_related_reports(report, limit=3, report_id=report_id)
+    analysis = ai_analyze(report, history=related,
+                          trends=trends.trend_context(report, report_id=report_id))
     print(json.dumps(analysis, ensure_ascii=False, indent=2))
 
 
@@ -146,6 +148,30 @@ def _signed(n) -> str:
 def _print_trend(trend: dict) -> None:
     runs = len(trend['points'])
     print(f"{trend['check_id']}  {trend['key']}={trend['value']}  ({runs} run{'s' if runs != 1 else ''})\n")
+    if trend.get('kind') == 'event_observation':
+        print('Log observations (bounded collection slices; no state change inferred):')
+        for p in trend['points']:
+            if p['error']:
+                label = ('AMBIGUOUS: ' + p['error'][len('ambiguous: '):]
+                         if p['error'].startswith('ambiguous: ') else f"ERROR: {p['error']}")
+                print(f"  {p['timestamp']}  {label}")
+                continue
+            obs = p.get('observation') or {}
+            label = obs.get('label') or 'coverage unknown'
+            source = obs.get('source') or 'source unknown'
+            coverage = obs.get('coverage')
+            contours = (f"access={obs.get('access_coverage') or 'unknown'}, "
+                        f"error={obs.get('error_coverage') or 'unknown'}") if obs.get('access_coverage') or obs.get('error_coverage') else None
+            coverage_text = contours or (f'coverage={coverage}' if coverage else label)
+            count = p['total'] if p['total'] is not None else 'unknown'
+            c = p['counts']
+            severities = (f"critical={c['critical']}, high={c['high']}, medium={c['medium']}, low={c['low']}"
+                          if c is not None else 'severity counts unknown')
+            limits = ', '.join(f'{name}={obs[name]}' for name in ('requested_lines', 'window_hours')
+                               if obs.get(name) is not None)
+            print(f"  {p['timestamp']}  observed problems={count} ({severities})  "
+                  f"{source}; {coverage_text}; {label}" + (f'; {limits}' if limits else ''))
+        return
     print(f"  {'timestamp':<20} {'crit':>4} {'high':>4} {'med':>4} {'low':>4} {'total':>6} {'score':>6}")
     for p in trend['points']:
         if p['error']:
@@ -168,12 +194,14 @@ def _print_trend(trend: dict) -> None:
     # two non-error points, so those are the ones to print.
     prev, cur = [p for p in trend['points'] if not p['error']][-2:]
     print(f"\nLatest change ({ch['from']} -> {ch['to']}):")
-    print(f"  problems: {prev['total']} -> {cur['total']} ({_signed(ch['total_delta'])})")
+    # observed counts: a run that could not look everywhere sees fewer problems
+    print(f"  observed problems: {prev['total']} -> {cur['total']} ({_signed(ch['total_delta'])})")
     if ch['score_delta'] is not None:
         print(f"  hardening score: {prev['hardening_score']} -> {cur['hardening_score']} "
               f"({_signed(ch['score_delta'])})")
-    for label in ('new', 'resolved', 'persisting'):
-        print(f"  {label}: {', '.join(ch[label]) or '-'}")
+    for field, label in (('new', 'new'), ('resolved', 'resolved'),
+                         ('not_evaluated', 'not evaluated'), ('persisting', 'persisting')):
+        print(f"  {label}: {', '.join(ch[field]) or '-'}")
 
 
 def cmd_trend(args):
@@ -185,8 +213,9 @@ def cmd_trend(args):
             print('No trend history yet.')
         else:
             for u in units:
+                kind_label = ' (log observations)' if u.get('kind') == 'event_observation' else ''
                 print(f"{u['check_id']:<22} {u['key']}={u['value']:<30} "
-                      f"{u['runs']} run{'s' if u['runs'] != 1 else ''}, last {u['last_timestamp']}")
+                      f"{u['runs']} run{'s' if u['runs'] != 1 else ''}, last {u['last_timestamp']}{kind_label}")
         return
 
     if args.value is None:

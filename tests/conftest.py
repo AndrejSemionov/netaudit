@@ -205,7 +205,7 @@ def isolated_db(tmp_path, monkeypatch):
     effect for that thread - this fixture clears the cached connection
     attribute too, forcing a fresh connect() against the new path.
     """
-    import netaudit_pkg.storage as storage
+    from netaudit_pkg import storage
 
     monkeypatch.setattr(storage, 'DB_PATH', tmp_path / 'test.db')
     if hasattr(storage._local, 'conn'):

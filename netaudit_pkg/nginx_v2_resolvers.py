@@ -30,7 +30,6 @@ from typing import Literal
 from .nginx_config_v2 import AddHeader, ListenEndpoint, ServerBlock
 from .nginx_v2_utils import has_nginx_variable
 
-
 # ===========================================================================
 # EffectiveValueResolver — ordinary cascading directives
 # (ssl_ciphers, client_max_body_size: both documented http/server/location
@@ -63,7 +62,7 @@ class EffectiveValue:
 
     value: str | None
     source: Literal['explicit', 'nginx-default', 'absent']
-    level: Literal['location', 'server', 'http', 'default', None]
+    level: Literal['location', 'server', 'http', 'default'] | None
     explicit: bool
     has_variable: bool
 
@@ -294,9 +293,7 @@ def _is_exact_server_name(name: str) -> bool:
         return False
     if '*' in name:
         return False
-    if name.startswith('.'):
-        return False
-    return True
+    return not name.startswith('.')
 
 
 @dataclass(frozen=True)

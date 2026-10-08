@@ -271,7 +271,8 @@ def test_compute_trend_points_in_given_order_with_totals():
     assert [p['timestamp'] for p in trend['points']] == ['t1', 't2']
     assert [p['total'] for p in trend['points']] == [3, 1]
     assert [p['hardening_score'] for p in trend['points']] == [60, 75]
-    assert set(trend['points'][0]) == {'timestamp', 'error', 'counts', 'total', 'hardening_score'}
+    # Contract v1.2 added 'unverified' (docs/research/trend_layer_v1_2_web_ai.md, 2a.2)
+    assert set(trend['points'][0]) == {'timestamp', 'error', 'counts', 'total', 'hardening_score', 'unverified'}
 
 
 def test_compute_trend_latest_change_deltas_and_id_diff():
@@ -335,7 +336,7 @@ def test_compute_trend_no_latest_change_with_fewer_than_two_good_snapshots():
 # trend_for() / list_units() - storage-backed
 # ===========================================================================
 
-from netaudit_pkg.trends import list_units, trend_for  # noqa: E402
+from netaudit_pkg.trends import list_units, trend_for
 
 
 def _ssh_report(ts, host, findings, score=None):
@@ -399,9 +400,9 @@ def test_list_units_runs_and_last_timestamp_most_recent_first(isolated_db):
 
     assert units == [
         {'check_id': 'ssh_hardening', 'key': 'host', 'value': '10.0.0.2',
-         'runs': 1, 'last_timestamp': '2026-01-05 00:00:00'},
+         'runs': 1, 'last_timestamp': '2026-01-05 00:00:00', 'kind': 'state'},
         {'check_id': 'ssh_hardening', 'key': 'host', 'value': '10.0.0.1',
-         'runs': 2, 'last_timestamp': '2026-01-02 00:00:00'},
+         'runs': 2, 'last_timestamp': '2026-01-02 00:00:00', 'kind': 'state'},
     ]
 
 

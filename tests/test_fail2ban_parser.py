@@ -38,7 +38,7 @@ This gives 30+ concrete assertions across the parametrized cases below.
 
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import UTC
 
 import pytest
 
@@ -328,4 +328,4 @@ def test_d3_timestamp_is_always_aware_utc():
         "INFO    [sshd-ddos] Found 85.217.149.44 - 2026-08-17 02:37:53"
     )
     result = parse_fail2ban_line(line)
-    assert result.timestamp.tzinfo == timezone.utc
+    assert result.timestamp.tzinfo == UTC
