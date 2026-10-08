@@ -107,3 +107,12 @@ def test_report_opened_from_history_keeps_its_id():
     body = html[html.index('async function openReport('):]
     body = body[:body.index('\n}\n')]
     assert re.search(r'_report_id\s*=\s*id\b', body)
+
+
+def test_event_points_show_their_observation_label():
+    """2d: a log-observation point says how its slice was collected (or that
+    collection failed) instead of a bare status."""
+    html = INDEX.read_text(encoding='utf-8')
+    body = html[html.index('function renderTrendUnit('):]
+    body = body[:body.index('\n}\n')]
+    assert 'p.observation' in body and '.label' in body
