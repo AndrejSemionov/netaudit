@@ -265,10 +265,12 @@ def api_trend(check_id: str = '', key: str = '', value: str = '') -> dict:
 def api_analyze(req: AnalyzeRequest) -> dict:
     if req.report is not None:
         report = req.report
-        # a run saved by /api/run or the stream (or opened from history)
-        # carries its DB id; anything else is anchored by timestamp (2b.1)
+        # anchor (2b.1): an explicit report_id, else the DB id a saved run
+        # carries (/api/run, the stream, a report opened from history),
+        # else the report's timestamp
         posted_id = report.get('_report_id')
-        report_id = posted_id if type(posted_id) is int else None
+        report_id = (req.report_id if req.report_id is not None
+                     else posted_id if type(posted_id) is int else None)
     elif req.report_id is not None:
         report = load_report(req.report_id)
         if report is None:

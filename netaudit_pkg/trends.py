@@ -324,7 +324,7 @@ def trend_context(report: dict, report_id: int | None = None,
     event-log observations (latest_change is always None) are left out.
     Id lists longer than `max_ids` are cut, with `<list>_omitted` counts."""
     current = [s for s in snapshots_from_report(report) if s['error'] is None]
-    if not current:
+    if not current or max_units <= 0:
         return []
     history = []
     for past in reversed(storage.report_data_before(report, report_id, window)):
