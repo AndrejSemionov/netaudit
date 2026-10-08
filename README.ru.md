@@ -215,6 +215,8 @@ python3 netaudit.py run ssl http --url https://example.com
 python3 netaudit.py run ports firewall performance      # локальная безопасность + ресурсы
 python3 netaudit.py run mtr ping --ai                    # + AI-анализ после прогона
 python3 netaudit.py history                               # список сохранённых отчётов
+python3 netaudit.py trend                                 # объекты с историей findings/score
+python3 netaudit.py trend ssh_hardening 10.0.0.1          # как менялось состояние объекта
 python3 netaudit.py analyze ~/.netaudit/history/report_X.json  # AI-анализ отчёта
 ```
 
