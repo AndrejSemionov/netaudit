@@ -1,9 +1,10 @@
 # Preset secrets and command injection — fix contract proposal (task 8)
 
-Status: **DRAFT rev.1** (2026-10-08). USER: «делай задачу 8» (the two
-findings recorded during task 7). Items C3–C5 below were found while
-researching this task and need USER approval to enter scope (decision D1).
-Implementer: Claude (proposed). Reviewer: GPT/Codex.
+Status: **APPROVED by USER rev.1** (2026-10-08). USER: «делай задачу 8» (the
+two findings recorded during task 7, E1–E2); D1 = **all three** extra findings
+(E3–E5) in scope; D2 = **D2-A** (scrub tool covers presets); MODE: AUTONOMOUS,
+GPT/Codex reviews the contract together with the code.
+Implementer: Claude. Reviewer: GPT/Codex.
 Branch: `fix/preset-secrets-shell-injection`, stacked on `fix/sudo-privilege`
 (PR #8), because both change `checks/systemd_hardening.py`.
 
