@@ -40,13 +40,16 @@ HTML_WRITERS = {
     'loadPresetBar': 'escapes',
     'loadPresetsManage': 'escapes',
     'loadSavedTargetsDatalist': 'escapes',
+    'loadTrendUnits': 'escapes',
+    'renderTrendUnit': 'escapes',
 }
 
 # Interpolations allowed inside inline on*="..." handlers: check/tool ids from
-# the code registry and integer DB ids. HTML escaping does not protect a JS
+# the code registry, integer DB ids and integer row indexes. HTML escaping does not protect a JS
 # string inside an attribute (the browser decodes entities first), so nothing
 # else may go there.
-HANDLER_SAFE_EXPRS = {'c.id', 'checkId', 'nextIdx', 'it.id', 'x.id', 'tool.tool', 'tg.id', 'p.id'}
+HANDLER_SAFE_EXPRS = {'c.id', 'checkId', 'nextIdx', 'it.id', 'x.id', 'tool.tool', 'tg.id', 'p.id',
+                      'i'}  # i: row index into a JS-side list
 
 HTML_SINK = re.compile(r'\.innerHTML\s*=|\.outerHTML\s*=|insertAdjacentHTML\(')
 TOP_FUNC = re.compile(r'^(?:async\s+)?function\s+(\w+)\s*\(', re.M)
@@ -268,6 +271,9 @@ def _bindings(body: str) -> list[tuple[set[str], str, int]]:
     out = []
     for m in re.finditer(r'\b(?:const|let|var)\s+(\{[^}]*\}|\[[^\]]*\]|[A-Za-z_$][\w$]*)\s*=(?!=)', body):
         out.append((_names(m.group(1)), body[m.end():_statement_end(body, m.end())], m.start()))
+    # plain assignment at statement start, e.g. a module-level cache `X = await res.json()`
+    for m in re.finditer(r'(?m)^\s*([A-Za-z_$][\w$]*)\s*=(?![=>])', body):
+        out.append(({m.group(1)}, body[m.end():_statement_end(body, m.end())], m.start()))
     for m in re.finditer(r'\bfor\s*\(\s*(?:const|let|var)\s+(\{[^}]*\}|\[[^\]]*\]|[A-Za-z_$][\w$]*)'
                          r'\s+of\s+', body):
         out.append((_names(m.group(1)), body[m.end():_statement_end(body, m.end())], m.start()))
@@ -333,6 +339,7 @@ def test_guard_notices_every_escaping_site_being_removed():
 CLASS_SAFE_EXPRS = {
     "h.loss_pct > 10 ? 'bad' : ''", 'lossClass(h.loss_pct)', 'lossClass(r.loss_pct||0)',
     'daysClass', 'scoreClass', 'pillClass', 'predClass', 'rowClass', 'AI_SEV_CLASS[p.severity] || \'\'',
+    "p.counts ? 'ok' : 'warn'",
 }
 
 

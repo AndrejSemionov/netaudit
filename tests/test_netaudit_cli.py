@@ -31,6 +31,8 @@ FAKE_RELATED = [
     {'timestamp': 't0', 'checks': ['ping'], 'results': {'ping': {'loss_pct': 5}}},
 ]
 
+FAKE_TRENDS = [{'check_id': 'ping', 'key': 'host', 'value': '1.2.3.4', 'latest_change': {}}]
+
 
 def _namespace_run(**overrides):
     base = {'checks': ['ping'], 'quick': False, 'rest': [], 'ai': True}
@@ -42,10 +44,14 @@ def test_cmd_run_passes_history_to_ai_analyze():
     with patch('netaudit.run_checks', return_value=SAMPLE_REPORT), \
          patch('netaudit.save_report', return_value=1), \
          patch('netaudit.storage.find_related_reports', return_value=FAKE_RELATED) as mock_find, \
+         patch('netaudit.trends.trend_context', return_value=FAKE_TRENDS) as mock_ctx, \
          patch('netaudit.ai_analyze', return_value={'summary': 'ok'}) as mock_analyze:
         netaudit.cmd_run(_namespace_run())
 
-    mock_find.assert_called_once_with(SAMPLE_REPORT, limit=3)
+    # anchored on the id save_report() returned (trend layer v1.2, 2b.1/2b.5)
+    mock_find.assert_called_once_with(SAMPLE_REPORT, limit=3, report_id=1)
+    mock_ctx.assert_called_once_with(SAMPLE_REPORT, report_id=1)
+    assert mock_analyze.call_args.kwargs.get('trends') == FAKE_TRENDS
     mock_analyze.assert_called_once()
     _, kwargs = mock_analyze.call_args
     assert mock_analyze.call_args.args[0] == SAMPLE_REPORT
@@ -69,10 +75,13 @@ def test_cmd_run_without_ai_flag_never_touches_history():
 def test_cmd_analyze_passes_history_to_ai_analyze():
     with patch('netaudit.load_report', return_value=SAMPLE_REPORT), \
          patch('netaudit.storage.find_related_reports', return_value=FAKE_RELATED) as mock_find, \
+         patch('netaudit.trends.trend_context', return_value=FAKE_TRENDS) as mock_ctx, \
          patch('netaudit.ai_analyze', return_value={'summary': 'ok'}) as mock_analyze:
         netaudit.cmd_analyze(Namespace(id='1'))
 
-    mock_find.assert_called_once_with(SAMPLE_REPORT, limit=3)
+    mock_find.assert_called_once_with(SAMPLE_REPORT, limit=3, report_id=1)
+    mock_ctx.assert_called_once_with(SAMPLE_REPORT, report_id=1)
+    assert mock_analyze.call_args.kwargs.get('trends') == FAKE_TRENDS
     mock_analyze.assert_called_once()
     assert mock_analyze.call_args.args[0] == SAMPLE_REPORT
     assert mock_analyze.call_args.kwargs.get('history') == FAKE_RELATED

@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from netaudit_pkg.engine import list_available, run_checks_multi
 from netaudit_pkg.history import save_report, list_reports, load_report, ai_analyze, verify_api_key
-from netaudit_pkg import timing, storage, tools
+from netaudit_pkg import timing, storage, tools, trends
 from netaudit_pkg import streaming
 from netaudit_pkg import history_capture
 from netaudit_pkg import deployment
@@ -242,19 +242,45 @@ def api_timeseries_targets() -> list[str]:
     return storage.distinct_mtr_targets()
 
 
+# --- Trend layer (docs/research/trend_layer_v1_2_web_ai.md, 2c) ---
+@app.get('/api/trends')
+def api_trends() -> dict:
+    """Every object with finding/score history."""
+    return {'units': trends.list_units()}
+
+
+@app.get('/api/trend')
+def api_trend(check_id: str = '', key: str = '', value: str = '') -> dict:
+    """Trend of one object: points + latest change. Same shape as `netaudit trend --json`."""
+    if not (check_id and key and value) or key not in storage.IDENTITY_PARAM_KEYS:
+        raise HTTPException(400, 'check_id, key (an identity key) and value are required')
+    trend = trends.trend_for(check_id, key, value)
+    if trend is None:
+        raise HTTPException(404, 'no trend data for this object')
+    return trend
+
+
 # --- AI analysis ---
 @app.post('/api/analyze')
 def api_analyze(req: AnalyzeRequest) -> dict:
     if req.report is not None:
         report = req.report
+        # anchor (2b.1): an explicit report_id, else the DB id a saved run
+        # carries (/api/run, the stream, a report opened from history),
+        # else the report's timestamp
+        posted_id = report.get('_report_id')
+        report_id = (req.report_id if req.report_id is not None
+                     else posted_id if type(posted_id) is int else None)
     elif req.report_id is not None:
         report = load_report(req.report_id)
         if report is None:
             raise HTTPException(404, 'report not found')
+        report_id = req.report_id
     else:
         raise HTTPException(400, 'report or report_id is required')
-    related = storage.find_related_reports(report, limit=3)
-    return ai_analyze(report, language=req.language, history=related)
+    related = storage.find_related_reports(report, limit=3, report_id=report_id)
+    return ai_analyze(report, language=req.language, history=related,
+                      trends=trends.trend_context(report, report_id=report_id))
 
 
 # --- Settings ---
