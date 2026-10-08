@@ -24,7 +24,7 @@ Test case table (agreed, do not reorder/skip):
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from netaudit_pkg.ssh_auth_detection import (
     DetectionContext,
@@ -46,7 +46,7 @@ def _ts(minute: int) -> datetime:
     """minute may exceed 59 — overflows into the hour, so callers can
     write e.g. _ts(61) to mean 'one minute past the 10:60 mark' without
     manually doing hour arithmetic."""
-    return datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc) + timedelta(minutes=minute)
+    return datetime(2026, 8, 18, 10, 0, 0, tzinfo=UTC) + timedelta(minutes=minute)
 
 
 def _context(reference_minute: int = 30, window_minutes: int = 60, collection_limit: int = 500) -> DetectionContext:

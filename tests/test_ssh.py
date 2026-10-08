@@ -311,7 +311,7 @@ def test_context_manager_closes_connection(monkeypatch):
     monkeypatch.setattr(paramiko, 'SSHClient', ConnectableClient)
 
     with SSHExecutor('host', 'user', 22, '', password='pw') as ex:
-        out, err = ex.run('whoami')
+        out, _err = ex.run('whoami')
         assert out == 'hello'
 
     assert fake_client.closed is True

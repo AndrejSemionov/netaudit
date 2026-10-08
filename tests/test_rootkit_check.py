@@ -3,12 +3,12 @@ parsing, confidence levels, and the full check flow with both tools."""
 
 from __future__ import annotations
 
-
 from netaudit_pkg.checks.rootkit_check import (
-    _parse_rkhunter, _parse_chkrootkit, check_rootkit,
+    _parse_chkrootkit,
+    _parse_rkhunter,
+    check_rootkit,
 )
 from tests.conftest import FakeSSHExecutor
-
 
 # ===========================================================================
 # _parse_rkhunter

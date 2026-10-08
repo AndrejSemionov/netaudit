@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json as _json
-import socket
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ..registry import register
+from ..ssh import HostKeyMismatchError, SSHExecutor
 from ..utils import run_cmd, tool_available
-from ..ssh import SSHExecutor, HostKeyMismatchError
 
 try:
     import psutil
@@ -74,7 +73,7 @@ def check_performance() -> dict:
     mem = psutil.virtual_memory()
     return {'cpu_pct': psutil.cpu_percent(interval=1), 'cpu_cores': psutil.cpu_count(),
             'ram_total_gb': round(mem.total / 1e9, 1), 'ram_used_pct': mem.percent, 'disks': disks,
-            'boot_time': datetime.fromtimestamp(psutil.boot_time(), tz=timezone.utc).isoformat()}
+            'boot_time': datetime.fromtimestamp(psutil.boot_time(), tz=UTC).isoformat()}
 
 
 REMOTE_CHECKS = {
@@ -144,13 +143,13 @@ def check_ssh_audit(host: str = '', user: str = 'root', port: int = 22,  # nosec
             try:
                 out, err = ssh.run(cmd, timeout=15)
                 results[name] = out.strip() or err.strip() or '(empty)'
-            except (paramiko.SSHException, socket.timeout) as e:
+            except (TimeoutError, paramiko.SSHException) as e:
                 results[name] = f'error: {e}'
         for name, cmd in REMOTE_SUDO_CHECKS.items():
             try:
                 out, err = ssh.sudo(cmd, timeout=15)
                 results[name] = out.strip() or err.strip() or '(empty)'
-            except (paramiko.SSHException, socket.timeout) as e:
+            except (TimeoutError, paramiko.SSHException) as e:
                 results[name] = f'error: {e}'
     finally:
         ssh.close()

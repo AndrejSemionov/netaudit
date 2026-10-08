@@ -22,15 +22,17 @@ CURL_TIMING = (
 def _ssl_stdlib(hostname: str, port: int = 443) -> dict:
     try:
         ctx = ssl.create_default_context()
-        with socket.create_connection((hostname, port), timeout=8) as sock:
-            with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
-                cert = ssock.getpeercert()
-                not_after = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
-                issuer = dict(x[0] for x in cert.get('issuer', []))
-                return {'ok': True, 'expires': not_after.isoformat(),
-                        'days_left': (not_after - datetime.now()).days,
-                        'issuer': issuer.get('organizationName', issuer.get('commonName', '—'))}
-    except (socket.timeout, socket.gaierror, ssl.SSLError, ConnectionRefusedError, OSError) as e:
+        with (
+            socket.create_connection((hostname, port), timeout=8) as sock,
+            ctx.wrap_socket(sock, server_hostname=hostname) as ssock,
+        ):
+            cert = ssock.getpeercert()
+            not_after = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
+            issuer = dict(x[0] for x in cert.get('issuer', []))
+            return {'ok': True, 'expires': not_after.isoformat(),
+                    'days_left': (not_after - datetime.now()).days,
+                    'issuer': issuer.get('organizationName', issuer.get('commonName', '—'))}
+    except (TimeoutError, socket.gaierror, ssl.SSLError, ConnectionRefusedError, OSError) as e:
         return {'ok': False, 'error': str(e)}
 
 
@@ -58,7 +60,7 @@ def check_ssl(url: str = 'https://example.com', method: str = 'auto') -> dict:
         res['tool_used'] = 'python'
         return res
 
-    code, out, err = run_cmd(['openssl', 's_client', '-connect', f'{hostname}:443',
+    _code, out, err = run_cmd(['openssl', 's_client', '-connect', f'{hostname}:443',
                               '-servername', hostname, '-brief'], timeout=15, input_text='Q\n')
     combined = out + err
     if 'CONNECTION ESTABLISHED' not in combined and 'CONNECTED' not in combined:
@@ -70,7 +72,7 @@ def check_ssl(url: str = 'https://example.com', method: str = 'auto') -> dict:
         elif line.startswith('Ciphersuite:'):
             cipher = line.split(':', 1)[1].strip()
     stdlib = _ssl_stdlib(hostname)
-    code2, out2, _ = run_cmd(['openssl', 's_client', '-connect', f'{hostname}:443',
+    _code2, out2, _ = run_cmd(['openssl', 's_client', '-connect', f'{hostname}:443',
                               '-servername', hostname, '-showcerts'], timeout=15, input_text='Q\n')
     return {'ok': True, 'hostname': hostname, 'protocol': protocol, 'cipher': cipher,
             'cert_chain_length': out2.count('BEGIN CERTIFICATE'),

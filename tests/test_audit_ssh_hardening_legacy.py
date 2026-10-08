@@ -24,7 +24,6 @@ from __future__ import annotations
 from netaudit_pkg.checks.server_security import audit_ssh_hardening
 from tests.conftest import FakeSSHExecutor
 
-
 SSHD_CONFIG_HARDENED = """\
 port 22
 permitrootlogin prohibit-password

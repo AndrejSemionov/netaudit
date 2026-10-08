@@ -46,7 +46,7 @@ def test_rootkit_findings_have_low_confidence():
     """rootkit_check is the concrete case the confidence field exists for:
     rkhunter/chkrootkit are known for false positives, so their findings
     should never claim high confidence by default."""
-    from netaudit_pkg.checks.rootkit_check import _parse_rkhunter, _parse_chkrootkit
+    from netaudit_pkg.checks.rootkit_check import _parse_chkrootkit, _parse_rkhunter
 
     rk_findings = _parse_rkhunter('Warning: SSH root login enabled\n')
     assert len(rk_findings) == 1
@@ -69,6 +69,7 @@ def test_cert_transparency_sensitive_hostname_wording_and_confidence():
     should read as an observation (keyword match), not a conclusion (forgotten),
     and should be marked low-confidence since it's a keyword heuristic."""
     import httpx
+
     import netaudit_pkg.checks.cert_transparency as ct_mod
 
     fake_certs = [

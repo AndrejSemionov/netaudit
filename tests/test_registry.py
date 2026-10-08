@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from netaudit_pkg.registry import CheckSpec, Registry, RISK_LEVELS, register
+from netaudit_pkg.registry import RISK_LEVELS, CheckSpec, Registry, register
 
 
 def _dummy_func():

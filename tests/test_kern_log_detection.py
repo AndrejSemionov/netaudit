@@ -35,7 +35,7 @@ This gives 20+ concrete assertions across the parametrized cases below.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from netaudit_pkg.kern_log_detection import (
     CoverageStatus,
@@ -44,7 +44,7 @@ from netaudit_pkg.kern_log_detection import (
 )
 from netaudit_pkg.kern_log_parser import KernLogEvent, KernLogEventType
 
-_TS = datetime(2026, 8, 21, 12, 0, 0, tzinfo=timezone.utc)
+_TS = datetime(2026, 8, 21, 12, 0, 0, tzinfo=UTC)
 
 
 def _dropped(src_ip: str | None = "1.2.3.4", dst_port: int | None = 22) -> KernLogEvent:

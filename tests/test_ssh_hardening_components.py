@@ -10,31 +10,31 @@ from __future__ import annotations
 
 import pytest
 
-from netaudit_pkg.ssh_config import SSHConfig
 from netaudit_pkg.checks.ssh_hardening import _build_components
 from netaudit_pkg.scoring import weighted_score
+from netaudit_pkg.ssh_config import SSHConfig
 
 
 def _cfg(**kwargs) -> SSHConfig:
     """SSHConfig with fully-hardened defaults, overridable per test - keeps
     each test focused on the one field it's actually exercising."""
-    defaults = dict(
-        readable=True,
-        permit_root_login='no',
-        password_authentication=False,
-        permit_empty_passwords=False,
-        pubkey_authentication=True,
-        kbd_interactive_authentication=False,
-        hostbased_authentication=False,
-        max_auth_tries=4,
-        login_grace_time=60,
-        x11_forwarding=False,
-        allow_tcp_forwarding='no',
-        allow_agent_forwarding=False,
-        ciphers=['chacha20-poly1305@openssh.com', 'aes256-gcm@openssh.com', 'aes256-ctr'],
-        macs=['hmac-sha2-256-etm@openssh.com', 'hmac-sha2-512-etm@openssh.com'],
-        kex_algorithms=['curve25519-sha256', 'ecdh-sha2-nistp256'],
-    )
+    defaults = {
+        'readable': True,
+        'permit_root_login': 'no',
+        'password_authentication': False,
+        'permit_empty_passwords': False,
+        'pubkey_authentication': True,
+        'kbd_interactive_authentication': False,
+        'hostbased_authentication': False,
+        'max_auth_tries': 4,
+        'login_grace_time': 60,
+        'x11_forwarding': False,
+        'allow_tcp_forwarding': 'no',
+        'allow_agent_forwarding': False,
+        'ciphers': ['chacha20-poly1305@openssh.com', 'aes256-gcm@openssh.com', 'aes256-ctr'],
+        'macs': ['hmac-sha2-256-etm@openssh.com', 'hmac-sha2-512-etm@openssh.com'],
+        'kex_algorithms': ['curve25519-sha256', 'ecdh-sha2-nistp256'],
+    }
     defaults.update(kwargs)
     return SSHConfig(**defaults)
 
@@ -438,29 +438,29 @@ def test_build_components_feeds_weighted_score_without_error():
 
 @pytest.mark.parametrize('name,kwargs,expected_score', [
     ('1_fully_hardened', {}, 100),
-    ('2_password_auth_enabled', dict(password_authentication=True), 94),
-    ('3_root_login_yes', dict(permit_root_login='yes'), 91),
-    ('3b_root_login_prohibit_password', dict(permit_root_login='prohibit-password'), 100),
-    ('3c_root_login_forced_commands_only', dict(permit_root_login='forced-commands-only'), 100),
-    ('3d_root_login_no', dict(permit_root_login='no'), 100),
-    ('4_all_forwarding_enabled', dict(
-        x11_forwarding=True, allow_tcp_forwarding='yes', allow_agent_forwarding=True,
-    ), 80),
-    ('5a_weak_cipher', dict(ciphers=['aes256-gcm@openssh.com', '3des-cbc']), 91),
-    ('5b_weak_mac', dict(macs=['hmac-sha2-256-etm@openssh.com', 'hmac-sha1-etm@openssh.com']), 94),
-    ('5c_weak_kex', dict(kex_algorithms=['curve25519-sha256', 'diffie-hellman-group14-sha1']), 91),
-    ('5d_all_crypto_weak', dict(
-        ciphers=['3des-cbc', 'arcfour'],
-        macs=['hmac-sha1', 'hmac-md5'],
-        kex_algorithms=['diffie-hellman-group1-sha1'],
-    ), 75),
-    ('6_mixed_real_vm_config', dict(
-        permit_root_login='prohibit-password', password_authentication=True,
-        max_auth_tries=6, login_grace_time=120,
-        x11_forwarding=True, allow_tcp_forwarding='yes', allow_agent_forwarding=True,
-        macs=['umac-64-etm@openssh.com', 'hmac-sha1-etm@openssh.com', 'hmac-sha2-256'],
-    ), 58),
-    ('7_crypto_fields_empty', dict(ciphers=[], macs=[], kex_algorithms=[]), 100),
+    ('2_password_auth_enabled', {'password_authentication': True}, 94),
+    ('3_root_login_yes', {'permit_root_login': 'yes'}, 91),
+    ('3b_root_login_prohibit_password', {'permit_root_login': 'prohibit-password'}, 100),
+    ('3c_root_login_forced_commands_only', {'permit_root_login': 'forced-commands-only'}, 100),
+    ('3d_root_login_no', {'permit_root_login': 'no'}, 100),
+    ('4_all_forwarding_enabled', {
+        'x11_forwarding': True, 'allow_tcp_forwarding': 'yes', 'allow_agent_forwarding': True,
+    }, 80),
+    ('5a_weak_cipher', {'ciphers': ['aes256-gcm@openssh.com', '3des-cbc']}, 91),
+    ('5b_weak_mac', {'macs': ['hmac-sha2-256-etm@openssh.com', 'hmac-sha1-etm@openssh.com']}, 94),
+    ('5c_weak_kex', {'kex_algorithms': ['curve25519-sha256', 'diffie-hellman-group14-sha1']}, 91),
+    ('5d_all_crypto_weak', {
+        'ciphers': ['3des-cbc', 'arcfour'],
+        'macs': ['hmac-sha1', 'hmac-md5'],
+        'kex_algorithms': ['diffie-hellman-group1-sha1'],
+    }, 75),
+    ('6_mixed_real_vm_config', {
+        'permit_root_login': 'prohibit-password', 'password_authentication': True,
+        'max_auth_tries': 6, 'login_grace_time': 120,
+        'x11_forwarding': True, 'allow_tcp_forwarding': 'yes', 'allow_agent_forwarding': True,
+        'macs': ['umac-64-etm@openssh.com', 'hmac-sha1-etm@openssh.com', 'hmac-sha2-256'],
+    }, 58),
+    ('7_crypto_fields_empty', {'ciphers': [], 'macs': [], 'kex_algorithms': []}, 100),
 ])
 def test_synthetic_scenario_matches_spec(name, kwargs, expected_score):
     cfg = _cfg(**kwargs)

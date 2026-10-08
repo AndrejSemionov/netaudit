@@ -8,10 +8,9 @@ check_kernel_hardening(), no findings — those are separate steps.
 
 from __future__ import annotations
 
-from netaudit_pkg.kernel_config import KernelConfig
 from netaudit_pkg.checks.kernel_hardening import _build_components
+from netaudit_pkg.kernel_config import KernelConfig
 from netaudit_pkg.scoring import weighted_score
-
 
 # ===========================================================================
 # Fixture builders

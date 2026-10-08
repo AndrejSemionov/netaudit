@@ -55,9 +55,9 @@ from datetime import datetime, timedelta
 
 import httpx
 
-from ..registry import register
 from .. import storage
-from ..ssh import SSHExecutor, HostKeyMismatchError
+from ..registry import register
+from ..ssh import HostKeyMismatchError, SSHExecutor
 from ..ssh_utils import run_command_with_exit_code
 
 try:
@@ -481,7 +481,7 @@ def collect_composer_packages(ssh: SSHExecutor) -> list[dict]:
             # silently mangle any version string with more than one
             # leading 'v' (or, worse, treat 'v' as a character class and
             # strip further characters that happen to also be 'v').
-            clean_version = version[1:] if version.startswith('v') else version
+            clean_version = version.removeprefix('v')
             packages.append({
                 'name': name, 'version': clean_version,
                 'upstream_version': version, 'ecosystem': 'Packagist',

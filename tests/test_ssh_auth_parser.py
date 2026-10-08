@@ -20,10 +20,13 @@ Test case table (agreed, do not reorder/skip):
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from netaudit_pkg.ssh_auth_parser import AuthMethod, SSHAuthEventType, parse_ssh_auth_line
-
+from netaudit_pkg.ssh_auth_parser import (
+    AuthMethod,
+    SSHAuthEventType,
+    parse_ssh_auth_line,
+)
 
 # ===========================================================================
 # 1. Accepted password (real line, 192.168.88.20)
@@ -41,7 +44,7 @@ def test_accepted_password_real_line_iso8601():
     assert event.source_ip == '192.168.88.12'
     assert event.pid == 1355
     assert event.raw_line == line
-    assert event.timestamp == datetime(2026, 8, 18, 8, 23, 50, 17004, tzinfo=timezone.utc)
+    assert event.timestamp == datetime(2026, 8, 18, 8, 23, 50, 17004, tzinfo=UTC)
 
 
 def test_accepted_password_matches_sshd_session_process_name():
@@ -93,7 +96,7 @@ def test_syslog_timestamp_with_reference_year():
     event = parse_ssh_auth_line(line, reference_year=2026)
 
     assert event.event_type == SSHAuthEventType.ACCEPTED
-    assert event.timestamp == datetime(2026, 8, 17, 19, 52, 31, tzinfo=timezone.utc)
+    assert event.timestamp == datetime(2026, 8, 17, 19, 52, 31, tzinfo=UTC)
     assert event.username == 'netaudit'
     assert event.source_ip == '192.168.88.12'
     assert event.pid == 2360
@@ -231,7 +234,7 @@ def test_unknown_sshd_message_still_extracts_pid_and_timestamp():
 
     assert event.event_type == SSHAuthEventType.UNKNOWN
     assert event.pid == 400004
-    assert event.timestamp == datetime(2026, 8, 18, 9, 5, 0, 0, tzinfo=timezone.utc)
+    assert event.timestamp == datetime(2026, 8, 18, 9, 5, 0, 0, tzinfo=UTC)
     assert event.auth_method is None
     assert event.raw_line == line
 

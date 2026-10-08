@@ -16,21 +16,24 @@ from __future__ import annotations
 
 import pytest
 
+from netaudit_pkg.checks.nginx_hardening import (
+    _build_components,
+    _build_tier2_components,
+)
 from netaudit_pkg.nginx_config import NginxConfig
 from netaudit_pkg.nginx_config_v2 import parse_nginx_config_v2
-from netaudit_pkg.checks.nginx_hardening import _build_components, _build_tier2_components
 from netaudit_pkg.scoring import weighted_score
 
 
 def _cfg(**kwargs) -> NginxConfig:
     """NginxConfig with sane hardened defaults, overridable per test - keeps
     each test focused on the one field it's actually exercising."""
-    defaults = dict(
-        installed=True, readable=True, server_tokens='off',
-        ssl_protocols=['TLSv1.3'], has_ssl_certificate=True,
-        headers_present={'strict-transport-security', 'x-frame-options', 'x-content-type-options'},
-        autoindex_on=False,
-    )
+    defaults = {
+        'installed': True, 'readable': True, 'server_tokens': 'off',
+        'ssl_protocols': ['TLSv1.3'], 'has_ssl_certificate': True,
+        'headers_present': {'strict-transport-security', 'x-frame-options', 'x-content-type-options'},
+        'autoindex_on': False,
+    }
     defaults.update(kwargs)
     return NginxConfig(**defaults)
 
@@ -343,42 +346,42 @@ _TIER2_BAD = '''http {
 
 
 @pytest.mark.parametrize('name,legacy_kwargs,tier2_conf,expected_score', [
-    ('A_fully_hardened', dict(
-        server_tokens='off', ssl_protocols=['TLSv1.3'], has_ssl_certificate=True,
-        headers_present={'strict-transport-security', 'x-frame-options', 'x-content-type-options'},
-        autoindex_on=False,
-    ), _TIER2_GOOD, 100),
-    ('B_tls12_only', dict(
-        server_tokens='off', ssl_protocols=['TLSv1.2'], has_ssl_certificate=True,
-        headers_present={'strict-transport-security', 'x-frame-options', 'x-content-type-options'},
-        autoindex_on=False,
-    ), _TIER2_GOOD, 99),
-    ('C_legacy_present', dict(
-        server_tokens='off', ssl_protocols=['TLSv1', 'TLSv1.2'], has_ssl_certificate=True,
-        headers_present={'strict-transport-security', 'x-frame-options', 'x-content-type-options'},
-        autoindex_on=False,
-    ), _TIER2_GOOD, 83),
-    ('C2_legacy_no_modern', dict(
-        server_tokens='off', ssl_protocols=['TLSv1', 'TLSv1.1'], has_ssl_certificate=True,
-        headers_present={'strict-transport-security', 'x-frame-options', 'x-content-type-options'},
-        autoindex_on=False,
-    ), _TIER2_GOOD, 77),
-    ('D_no_headers', dict(
-        server_tokens='off', ssl_protocols=['TLSv1.3'], has_ssl_certificate=True,
-        headers_present={'x-frame-options'}, autoindex_on=False,
-    ), _TIER2_GOOD, 92),
-    ('E_bad_config_bad_tls', dict(
-        server_tokens='on', ssl_protocols=['TLSv1', 'TLSv1.1'], has_ssl_certificate=True,
-        headers_present={'x-frame-options', 'x-content-type-options'}, autoindex_on=True,
-    ), _TIER2_BAD, 20),
-    ('F_no_tls_at_all', dict(
-        server_tokens='off', ssl_protocols=[], has_ssl_certificate=False,
-        headers_present={'x-frame-options', 'x-content-type-options'}, autoindex_on=False,
-    ), _TIER2_NO_TLS_NO_HEADERS, 54),
-    ('G_realistic_mixed', dict(
-        server_tokens='on', ssl_protocols=['TLSv1.2'], has_ssl_certificate=True,
-        headers_present={'x-frame-options', 'x-content-type-options'}, autoindex_on=False,
-    ), _TIER2_BAD, 51),
+    ('A_fully_hardened', {
+        'server_tokens': 'off', 'ssl_protocols': ['TLSv1.3'], 'has_ssl_certificate': True,
+        'headers_present': {'strict-transport-security', 'x-frame-options', 'x-content-type-options'},
+        'autoindex_on': False,
+    }, _TIER2_GOOD, 100),
+    ('B_tls12_only', {
+        'server_tokens': 'off', 'ssl_protocols': ['TLSv1.2'], 'has_ssl_certificate': True,
+        'headers_present': {'strict-transport-security', 'x-frame-options', 'x-content-type-options'},
+        'autoindex_on': False,
+    }, _TIER2_GOOD, 99),
+    ('C_legacy_present', {
+        'server_tokens': 'off', 'ssl_protocols': ['TLSv1', 'TLSv1.2'], 'has_ssl_certificate': True,
+        'headers_present': {'strict-transport-security', 'x-frame-options', 'x-content-type-options'},
+        'autoindex_on': False,
+    }, _TIER2_GOOD, 83),
+    ('C2_legacy_no_modern', {
+        'server_tokens': 'off', 'ssl_protocols': ['TLSv1', 'TLSv1.1'], 'has_ssl_certificate': True,
+        'headers_present': {'strict-transport-security', 'x-frame-options', 'x-content-type-options'},
+        'autoindex_on': False,
+    }, _TIER2_GOOD, 77),
+    ('D_no_headers', {
+        'server_tokens': 'off', 'ssl_protocols': ['TLSv1.3'], 'has_ssl_certificate': True,
+        'headers_present': {'x-frame-options'}, 'autoindex_on': False,
+    }, _TIER2_GOOD, 92),
+    ('E_bad_config_bad_tls', {
+        'server_tokens': 'on', 'ssl_protocols': ['TLSv1', 'TLSv1.1'], 'has_ssl_certificate': True,
+        'headers_present': {'x-frame-options', 'x-content-type-options'}, 'autoindex_on': True,
+    }, _TIER2_BAD, 20),
+    ('F_no_tls_at_all', {
+        'server_tokens': 'off', 'ssl_protocols': [], 'has_ssl_certificate': False,
+        'headers_present': {'x-frame-options', 'x-content-type-options'}, 'autoindex_on': False,
+    }, _TIER2_NO_TLS_NO_HEADERS, 54),
+    ('G_realistic_mixed', {
+        'server_tokens': 'on', 'ssl_protocols': ['TLSv1.2'], 'has_ssl_certificate': True,
+        'headers_present': {'x-frame-options', 'x-content-type-options'}, 'autoindex_on': False,
+    }, _TIER2_BAD, 51),
 ])
 def test_synthetic_scenario_matches_spec(name, legacy_kwargs, tier2_conf, expected_score):
     legacy = _build_components(_cfg(**legacy_kwargs))
@@ -414,11 +417,11 @@ def test_scenario_f_all_tls_components_are_na():
 def test_synthetic_single_critical_legacy_fail_visible_but_not_catastrophic():
     # tls_legacy_disabled (0.16, the highest single Tier-1 weight) failing
     # alone should produce a visible but proportionate drop, not near-zero.
-    legacy_kwargs = dict(
-        server_tokens='off', ssl_protocols=['TLSv1', 'TLSv1.3'], has_ssl_certificate=True,
-        headers_present={'strict-transport-security', 'x-frame-options', 'x-content-type-options'},
-        autoindex_on=False,
-    )
+    legacy_kwargs = {
+        'server_tokens': 'off', 'ssl_protocols': ['TLSv1', 'TLSv1.3'], 'has_ssl_certificate': True,
+        'headers_present': {'strict-transport-security', 'x-frame-options', 'x-content-type-options'},
+        'autoindex_on': False,
+    }
     legacy = _build_components(_cfg(**legacy_kwargs))
     tier2 = _build_tier2_components(_cfg_v2(_TIER2_GOOD))
     result = weighted_score(legacy + tier2)

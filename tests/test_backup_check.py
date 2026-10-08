@@ -9,10 +9,12 @@ import time
 import pytest
 
 from netaudit_pkg.checks.backup_check import (
-    _find_files, _check_archive_integrity, _check_disk_space, check_backup,
+    _check_archive_integrity,
+    _check_disk_space,
+    _find_files,
+    check_backup,
 )
 from tests.conftest import FakeSSHExecutor
-
 
 NOW = time.time()
 RECENT = NOW - 3600 * 5   # 5 hours ago

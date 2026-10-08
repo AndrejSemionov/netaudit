@@ -13,32 +13,34 @@ Covers:
 
 from __future__ import annotations
 
-from netaudit_pkg.ssh_config import SSHConfig
 from netaudit_pkg.checks.ssh_hardening import (
-    _build_findings, audit_ssh_hardening_score, check_ssh_hardening,
+    _build_findings,
+    audit_ssh_hardening_score,
+    check_ssh_hardening,
 )
 from netaudit_pkg.ssh import HostKeyMismatchError
+from netaudit_pkg.ssh_config import SSHConfig
 from tests.conftest import FakeSSHExecutor
 
 
 def _cfg(**kwargs) -> SSHConfig:
-    defaults = dict(
-        readable=True,
-        permit_root_login='no',
-        password_authentication=False,
-        permit_empty_passwords=False,
-        pubkey_authentication=True,
-        kbd_interactive_authentication=False,
-        hostbased_authentication=False,
-        max_auth_tries=4,
-        login_grace_time=60,
-        x11_forwarding=False,
-        allow_tcp_forwarding='no',
-        allow_agent_forwarding=False,
-        ciphers=['chacha20-poly1305@openssh.com', 'aes256-gcm@openssh.com'],
-        macs=['hmac-sha2-256-etm@openssh.com'],
-        kex_algorithms=['curve25519-sha256'],
-    )
+    defaults = {
+        'readable': True,
+        'permit_root_login': 'no',
+        'password_authentication': False,
+        'permit_empty_passwords': False,
+        'pubkey_authentication': True,
+        'kbd_interactive_authentication': False,
+        'hostbased_authentication': False,
+        'max_auth_tries': 4,
+        'login_grace_time': 60,
+        'x11_forwarding': False,
+        'allow_tcp_forwarding': 'no',
+        'allow_agent_forwarding': False,
+        'ciphers': ['chacha20-poly1305@openssh.com', 'aes256-gcm@openssh.com'],
+        'macs': ['hmac-sha2-256-etm@openssh.com'],
+        'kex_algorithms': ['curve25519-sha256'],
+    }
     defaults.update(kwargs)
     return SSHConfig(**defaults)
 

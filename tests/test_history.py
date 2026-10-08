@@ -11,12 +11,11 @@ local `import httpx` statement.
 from __future__ import annotations
 
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from netaudit_pkg.history import ai_analyze
-
 
 # ai_analyze() resolves the language from settings unless a test supplies it.
 # Keep every test's settings lookup on the isolated SQLite fixture.

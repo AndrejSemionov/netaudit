@@ -18,7 +18,6 @@ from netaudit_pkg.nginx_v2_resolvers import (
     resolve_listen_groups,
 )
 
-
 # ===========================================================================
 # resolve_cascading_value() — ssl_ciphers / client_max_body_size model
 # ===========================================================================

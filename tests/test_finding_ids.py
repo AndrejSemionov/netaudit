@@ -22,7 +22,13 @@ from urllib.parse import unquote
 
 import pytest
 
-from netaudit_pkg.checks import backup_check, dns_audit, docker_audit, server_security, systemd_hardening
+from netaudit_pkg.checks import (
+    backup_check,
+    dns_audit,
+    docker_audit,
+    server_security,
+    systemd_hardening,
+)
 from netaudit_pkg.findings import subject_id
 
 ROOT = Path(__file__).resolve().parents[1]

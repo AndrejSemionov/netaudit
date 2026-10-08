@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -53,7 +53,7 @@ def run_audit(monkeypatch):
 
 
 def test_failed_auth_log_falls_back_to_journal_events(run_audit):
-    line = (f'{datetime.now(timezone.utc).isoformat()} host sshd[123]: '
+    line = (f'{datetime.now(UTC).isoformat()} host sshd[123]: '
             'Failed password for root from 192.0.2.1 port 22 ssh2')
     report, calls = run_audit(_collection(True, 1), _collection(True, 0, line))
 

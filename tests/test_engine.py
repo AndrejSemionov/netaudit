@@ -472,7 +472,7 @@ def test_run_instances_no_callback_does_not_error(temp_check, isolated_db):
     """on_instance_done is optional - omitting it must not raise."""
     temp_check('__test_ri_nocb__', lambda host='': {'ok': True})
     spec = registry.get('__test_ri_nocb__')
-    results, timings = run_instances('__test_ri_nocb__', spec, [{'host': 'a'}])
+    results, _timings = run_instances('__test_ri_nocb__', spec, [{'host': 'a'}])
     assert results == {'a': {'ok': True}}
 
 

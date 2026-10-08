@@ -73,9 +73,8 @@ that value explicitly.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from .log_discovery_audit import SourceType, file_verdict
 from ..log_collection import collect_file, collect_journal
 from ..log_discovery import probe_log_file
 from ..registry import register
@@ -83,6 +82,7 @@ from ..ssh import HostKeyMismatchError, SSHExecutor
 from ..ssh_auth_detection import DetectionContext, apply_window, detect
 from ..ssh_auth_findings import DEFAULT_POLICY, build_findings
 from ..ssh_auth_parser import parse_ssh_auth_line
+from .log_discovery_audit import SourceType, file_verdict
 
 try:
     import paramiko
@@ -138,7 +138,7 @@ def check_ssh_auth_audit(host='', user='root', port=22, key_path='', password=''
         # caller-determines-it-once principle already enforced for
         # reference_year in ssh_auth_parser.py and reference_time in
         # ssh_auth_detection.py.
-        reference_time = datetime.now(timezone.utc)
+        reference_time = datetime.now(UTC)
         reference_year = reference_time.year
 
         # --- Discovery: targeted probe of auth.log ONLY — not full-host

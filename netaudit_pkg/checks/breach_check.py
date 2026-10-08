@@ -25,8 +25,8 @@ import time
 
 import httpx
 
-from ..registry import register
 from .. import storage
+from ..registry import register
 
 EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 

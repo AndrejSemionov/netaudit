@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import ipaddress
 
-from .utils import run_cmd, tool_available
 from . import storage
+from .utils import run_cmd, tool_available
 
 # Known-good organizations/domains - their traffic is usually legitimate.
 KNOWN_GOOD_PATTERNS = [
@@ -121,14 +121,14 @@ def enrich_asn(ip: str) -> dict:
         return cached
     if not tool_available('whois'):
         return {'org': None, 'country': None}
-    code, out, err = run_cmd(['whois', ip], timeout=10)
+    code, out, _err = run_cmd(['whois', ip], timeout=10)
     if code != 0:
         storage.asn_set(ip, None, None)
         return {'org': None, 'country': None}
     org = country = None
     for line in out.splitlines():
         l = line.lower()
-        if org is None and (l.startswith('orgname:') or l.startswith('org-name:') or l.startswith('organization:') or l.startswith('descr:')):
+        if org is None and l.startswith(('orgname:', 'org-name:', 'organization:', 'descr:')):
             org = line.split(':', 1)[1].strip()
         if country is None and l.startswith('country:'):
             country = line.split(':', 1)[1].strip()

@@ -28,6 +28,8 @@ Test matrix (agreed, do not reorder/skip):
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from netaudit_pkg.ssh_auth_detection import (
     DetectionResult,
     RepeatedFailuresForUsernameSignal,
@@ -36,23 +38,22 @@ from netaudit_pkg.ssh_auth_detection import (
 )
 from netaudit_pkg.ssh_auth_findings import DEFAULT_POLICY, build_findings
 from netaudit_pkg.ssh_auth_parser import AuthMethod, SSHAuthEvent, SSHAuthEventType
-from datetime import datetime, timezone
 
 
 def _event(event_type, username=None, source_ip=None, auth_method=None,
            timestamp=None, raw_line=None) -> SSHAuthEvent:
     return SSHAuthEvent(
-        timestamp=timestamp or datetime(2026, 8, 18, 10, 0, tzinfo=timezone.utc),
+        timestamp=timestamp or datetime(2026, 8, 18, 10, 0, tzinfo=UTC),
         event_type=event_type, username=username, source_ip=source_ip, auth_method=auth_method,
         pid=None, raw_line=raw_line or f'{event_type.value} {username}@{source_ip}',
     )
 
 
 def _empty_result(**overrides) -> DetectionResult:
-    base = dict(
-        repeated_failures_by_ip=[], repeated_failures_by_username=[],
-        success_after_failure=[], undated_event_count=0, coverage_uncertain=False,
-    )
+    base = {
+        'repeated_failures_by_ip': [], 'repeated_failures_by_username': [],
+        'success_after_failure': [], 'undated_event_count': 0, 'coverage_uncertain': False,
+    }
     base.update(overrides)
     return DetectionResult(**base)
 

@@ -91,7 +91,7 @@ class StreamTask:
 
 def _stream_mtr(task, params, out_lines):
     """Reads mtr --raw line by line, emits per-hop latency points."""
-    cmd, count = _mtr_cmd(params)
+    cmd, _count = _mtr_cmd(params)
     if not shutil.which('mtr'):
         task.emit({'type': 'error', 'message': 'mtr is not installed'})
         return
@@ -117,7 +117,7 @@ def _stream_mtr(task, params, out_lines):
 
 
 def _stream_ping(task, params, out_lines):
-    cmd, count = _ping_cmd(params)
+    cmd, _count = _ping_cmd(params)
     if not shutil.which('ping'):
         task.emit({'type': 'error', 'message': 'ping not found'})
         return
@@ -136,7 +136,7 @@ def _stream_ping(task, params, out_lines):
 
 
 def _stream_tcptr(task, params, out_lines):
-    cmd, max_hops = _tcptr_cmd(params)
+    cmd, _max_hops = _tcptr_cmd(params)
     if not shutil.which('tcptraceroute'):
         task.emit({'type': 'error', 'message': 'tcptraceroute is not installed'})
         return

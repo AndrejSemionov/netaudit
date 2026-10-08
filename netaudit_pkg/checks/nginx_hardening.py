@@ -29,10 +29,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from ..registry import register
 from ..findings import finding as _finding
-from ..scoring import Component, weighted_score
-from ..ssh import SSHExecutor, HostKeyMismatchError
 from ..nginx_config import NginxConfig, collect_nginx_config
 from ..nginx_config_v2 import NginxConfigV2, ServerBlock, collect_nginx_config_v2
 from ..nginx_v2_resolvers import (
@@ -44,6 +41,9 @@ from ..nginx_v2_resolvers import (
     resolve_listen_groups,
 )
 from ..nginx_v2_utils import has_nginx_variable, parse_nginx_size
+from ..registry import register
+from ..scoring import Component, weighted_score
+from ..ssh import HostKeyMismatchError, SSHExecutor
 
 try:
     import paramiko

@@ -152,9 +152,10 @@ def _ip_signal_finding(signal: RepeatedFailuresFromIPSignal, policy: SSHFindingP
     # reach 'high', but never suppresses the finding outright — the
     # underlying repeated-attempt signal (against a nonexistent account)
     # remains valid evidence on its own.
-    if signal.invalid_user_count > 0 and diversity < policy.invalid_username_diversity_threshold:
-        if severity == 'high' and signal.failed_password_count == 0:
-            severity = 'low'
+    if (signal.invalid_user_count > 0
+            and diversity < policy.invalid_username_diversity_threshold
+            and severity == 'high' and signal.failed_password_count == 0):
+        severity = 'low'
 
     detail_parts = [_cite_fail2ban(policy)]
     if signal.invalid_user_count > 0:

@@ -25,9 +25,9 @@ from __future__ import annotations
 
 import re
 
-from ..registry import register, confirm_param, CONFIRM_MODIFY
 from ..findings import finding as _finding
-from ..ssh import SSHExecutor, HostKeyMismatchError
+from ..registry import CONFIRM_MODIFY, confirm_param, register
+from ..ssh import HostKeyMismatchError, SSHExecutor
 
 try:
     import paramiko

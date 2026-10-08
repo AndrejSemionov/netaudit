@@ -66,7 +66,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from enum import Enum
 
 
@@ -177,7 +177,7 @@ def _parse_timestamp(line: str, reference_year: int | None) -> datetime | None:
             return datetime(
                 reference_year, month, int(g['day']),
                 int(g['hour']), int(g['minute']), int(g['second']),
-                tzinfo=timezone.utc,
+                tzinfo=UTC,
             )
         except ValueError:
             return None

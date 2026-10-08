@@ -11,12 +11,18 @@ import httpx
 import pytest
 
 from netaudit_pkg.checks.cve_audit import (
-    _parse_version, _resolve_ecosystem, collect_packages, collect_composer_packages,
-    collect_os_release, query_osv, fetch_vuln_details, check_cve_audit, _dpkg_version,
+    _dpkg_version,
     _get_package_origin,
+    _parse_version,
+    _resolve_ecosystem,
+    check_cve_audit,
+    collect_composer_packages,
+    collect_os_release,
+    collect_packages,
+    fetch_vuln_details,
+    query_osv,
 )
-from tests.conftest import FakeSSHExecutor, ExitCodeFakeSSHExecutor
-
+from tests.conftest import ExitCodeFakeSSHExecutor, FakeSSHExecutor
 
 # ===========================================================================
 # _parse_version
@@ -574,8 +580,8 @@ def test_get_package_origin_mirror_sourced_native_package_still_says_ubuntu():
     server using this exact mirror."""
     fake = FakeSSHExecutor(responses={
         'apt-cache show openssh-client=1:9.6p1-3ubuntu13.18': (
-            'Package: openssh-client\nOrigin: Ubuntu\n'
-            'Original-Maintainer: Debian OpenSSH Maintainers <debian-ssh@lists.debian.org>\n',
+            ('Package: openssh-client\nOrigin: Ubuntu\n'
+            'Original-Maintainer: Debian OpenSSH Maintainers <debian-ssh@lists.debian.org>\n'),
             ''),
     })
     assert _get_package_origin(fake, 'openssh-client', '1:9.6p1-3ubuntu13.18') == 'Ubuntu'

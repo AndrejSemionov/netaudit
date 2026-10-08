@@ -22,10 +22,10 @@ import re
 import socket
 from collections import defaultdict
 
-from ..registry import register
-from ..utils import run_cmd, tool_available
 from .. import threat
-from ..ssh import SSHExecutor, HostKeyMismatchError
+from ..registry import register
+from ..ssh import HostKeyMismatchError, SSHExecutor
+from ..utils import run_cmd, tool_available
 
 try:
     import paramiko
@@ -38,7 +38,7 @@ def _reverse_dns(ip: str) -> str | None:
     try:
         socket.setdefaulttimeout(1.5)
         return socket.gethostbyaddr(ip)[0]
-    except (socket.herror, socket.gaierror, socket.timeout, OSError):
+    except (TimeoutError, socket.herror, socket.gaierror, OSError):
         return None
 
 
@@ -274,7 +274,7 @@ def check_mikrotik_sniffer(router: str = '192.168.88.1', user: str = 'admin',  #
         ssh = SSHExecutor(router, user, port, key_path='', password=password).connect()
     except HostKeyMismatchError as e:
         return {'error': str(e)}
-    except (paramiko.AuthenticationException, paramiko.SSHException, socket.error, OSError) as e:
+    except (paramiko.AuthenticationException, paramiko.SSHException, OSError) as e:
         return {'error': f'could not connect to the router: {e}'}
 
     # terse — one line per record, easy to parse.
@@ -282,7 +282,7 @@ def check_mikrotik_sniffer(router: str = '192.168.88.1', user: str = 'admin',  #
     cmd = f'/ip firewall connection print terse where src-address~"{target_ip}"'
     try:
         out, err = ssh.run(cmd, timeout=20)
-    except (paramiko.SSHException, socket.timeout) as e:
+    except (TimeoutError, paramiko.SSHException) as e:
         ssh.close()
         return {'error': f'error running the command on the router: {e}'}
     finally:

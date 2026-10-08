@@ -8,11 +8,12 @@ This module previously had no test coverage at all.
 from __future__ import annotations
 
 from netaudit_pkg.checks.lynis_audit import (
-    _parse_report, _to_findings, check_lynis_audit,
+    _parse_report,
+    _to_findings,
+    check_lynis_audit,
 )
 from netaudit_pkg.registry import CONFIRM_MODIFY
 from tests.conftest import FakeSSHExecutor
-
 
 # ===========================================================================
 # _parse_report
