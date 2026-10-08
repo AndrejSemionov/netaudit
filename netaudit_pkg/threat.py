@@ -121,7 +121,7 @@ def enrich_asn(ip: str) -> dict:
         return cached
     if not tool_available('whois'):
         return {'org': None, 'country': None}
-    code, out, err = run_cmd(['whois', ip], timeout=10)
+    code, out, _err = run_cmd(['whois', ip], timeout=10)
     if code != 0:
         storage.asn_set(ip, None, None)
         return {'org': None, 'country': None}

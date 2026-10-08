@@ -32,7 +32,7 @@ def test_decide_mode_instances_uses_max_within_check(monkeypatch):
     monkeypatch.setattr(timing, 'estimate',
                          lambda check_id, params: estimates_by_host[params['host']])
 
-    mode, total = timing.decide_mode([
+    _mode, total = timing.decide_mode([
         {'id': 'cve', 'instances': [
             {'host': 'h1'}, {'host': 'h2'}, {'host': 'h3'},
         ]},
@@ -52,7 +52,7 @@ def test_decide_mode_sums_across_checks_even_with_instances(monkeypatch):
 
     monkeypatch.setattr(timing, 'estimate', fake_estimate)
 
-    mode, total = timing.decide_mode([
+    _mode, total = timing.decide_mode([
         {'id': 'cve', 'instances': [{'host': 'h1'}, {'host': 'h2'}]},
         {'id': 'dns', 'params': {}},
     ], threshold=100.0)
@@ -70,7 +70,7 @@ def test_decide_mode_mixed_legacy_and_instances_items(monkeypatch):
 
     monkeypatch.setattr(timing, 'estimate', fake_estimate)
 
-    mode, total = timing.decide_mode([
+    _mode, total = timing.decide_mode([
         {'id': 'mtr', 'params': {}},
         {'id': 'cve', 'instances': [{'host': 'a'}, {'host': 'b'}]},
     ], threshold=100.0)
@@ -97,7 +97,7 @@ def test_decide_mode_empty_instances_list_contributes_zero(monkeypatch):
     on an empty sequence - contributes 0 to the total."""
     monkeypatch.setattr(timing, 'estimate', lambda check_id, params: 99.0)
 
-    mode, total = timing.decide_mode([
+    _mode, total = timing.decide_mode([
         {'id': 'cve', 'instances': []},
     ], threshold=100.0)
     assert total == 0.0

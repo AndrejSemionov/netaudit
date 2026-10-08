@@ -208,14 +208,14 @@ def test_tls004_variable_in_value_is_unknown():
 def test_tls004_evidence_includes_server_name():
     conf = 'http { server { listen 443 ssl; server_name example.com; ssl_ciphers ALL:RC4; } }'
     cfg = parse_nginx_config_v2(conf)
-    verdict, evidence = _verdict_tls_004_ciphers(cfg.servers[0], cfg.http_directives)
+    _verdict, evidence = _verdict_tls_004_ciphers(cfg.servers[0], cfg.http_directives)
     assert 'example.com' in evidence
 
 
 def test_tls004_evidence_falls_back_to_listen_when_no_server_name():
     conf = 'http { server { listen 443 ssl; ssl_ciphers ALL:RC4; } }'
     cfg = parse_nginx_config_v2(conf)
-    verdict, evidence = _verdict_tls_004_ciphers(cfg.servers[0], cfg.http_directives)
+    _verdict, evidence = _verdict_tls_004_ciphers(cfg.servers[0], cfg.http_directives)
     assert '443' in evidence
 
 
