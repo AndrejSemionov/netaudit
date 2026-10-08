@@ -51,6 +51,11 @@ class HostKeyMismatchError(Exception):
     already trusts for it — the actual MITM/reinstalled-server detection."""
 
 
+class EncryptedKeyError(Exception):
+    """Raised when key_path is an encrypted private key that ssh-agent did
+    not provide either. Checks report it like any connect failure."""
+
+
 class TofuPolicy(paramiko.MissingHostKeyPolicy if paramiko else object):
     """Trust-On-First-Use: accept and save an unknown host's key, but require
     an exact match on every later connection to the same host."""
@@ -78,9 +83,10 @@ class SSHExecutor:
     Raises on connect():
         HostKeyMismatchError  — the host's key doesn't match what's saved
                                 (likely MITM, or the server was reinstalled/rekeyed)
-        Whatever paramiko itself raises for auth/network failures — callers
-        already catch broad Exception around connection setup, so this
-        deliberately doesn't introduce a new exception type for those cases.
+        EncryptedKeyError     — key_path is encrypted and ssh-agent didn't
+                                provide it (NetAudit takes no key passphrase)
+        Whatever paramiko itself raises for other auth/network failures —
+        callers already catch broad Exception around connection setup.
     """
 
     def __init__(self, host: str, user: str = 'root', port: int = 22,
@@ -94,12 +100,6 @@ class SSHExecutor:
         self.password = password
         self.timeout = timeout
         self.client: paramiko.SSHClient | None = None
-        # Used only by needs_sudo_password() (unchanged this pass - see
-        # that method's docstring and project session notes for why its
-        # own generic-probe contract is being reconsidered separately).
-        # sudo() itself no longer reads or writes this - see sudo()'s
-        # docstring for why a session-level capability cache was removed.
-        self._no_password_sudo: bool | None = None
 
     def connect(self) -> SSHExecutor:
         client = paramiko.SSHClient()
@@ -119,6 +119,14 @@ class SSHExecutor:
 
         try:
             client.connect(**kwargs)
+        except paramiko.PasswordRequiredException as e:
+            # NetAudit takes no key passphrase (task 7, D2-A): paramiko gets
+            # here only when ssh-agent (allow_agent=True with a key_path)
+            # did not hold the key either
+            raise EncryptedKeyError(
+                f'the private key {self.key_path} is encrypted; load it into ssh-agent (CLI) '
+                f'or use an unencrypted key for the account NetAudit runs as'
+            ) from e
         except paramiko.BadHostKeyException as e:
             raise HostKeyMismatchError(
                 f'{self.host} presented a different SSH host key than the one NetAudit has '
@@ -136,9 +144,16 @@ class SSHExecutor:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
-    def run(self, cmd: str, timeout: int = 20) -> tuple[str, str]:
-        """Runs a command as the connected user. Returns (stdout, stderr)."""
-        _, so, se = self.client.exec_command(cmd, timeout=timeout)  # nosec B601 - SSHExecutor core purpose: remote exec_command with fixed, non-shell-form commands
+    def run(self, cmd: str, timeout: int = 20, stdin_data: str | None = None) -> tuple[str, str]:
+        """Runs a command as the connected user. Returns (stdout, stderr).
+        stdin_data, when given, is written to the command's stdin, which is
+        then closed (ssh_utils.run_sudo_with_exit_code() passes the sudo
+        password this way)."""
+        stdin, so, se = self.client.exec_command(cmd, timeout=timeout)  # nosec B601 - SSHExecutor core purpose: remote exec_command with fixed, non-shell-form commands
+        if stdin_data is not None:
+            stdin.write(stdin_data)
+            stdin.flush()
+            stdin.channel.shutdown_write()
         return so.read().decode(errors='replace'), se.read().decode(errors='replace')
 
     def sudo(self, cmd: str, timeout: int = 20) -> tuple[str, str]:
@@ -173,12 +188,10 @@ class SSHExecutor:
         Note: `self.password` here is used purely as a sudo password
         for `sudo -S`, distinct from SSH authentication (which uses
         key_path, or this same self.password as an SSH login password
-        only when no key_path is given - see connect()). SSH key
-        passphrase support does not currently exist in this class as a
-        separate concept; that is a deliberately separate, not-yet-
-        addressed piece of work (see project session notes) and this
-        method must never be extended to treat key material as sudo
-        credential material.
+        only when no key_path is given - see connect()). There is no
+        SSH key passphrase (task 7, D2-A: encrypted keys go through
+        ssh-agent), and this method must never be extended to treat key
+        material as sudo credential material.
         """
         if self.password:
             stdin, so, se = self.client.exec_command(f'sudo -S -p "" {cmd}', timeout=timeout)  # nosec B601 - SSHExecutor core purpose: remote exec_command with fixed, non-shell-form commands
@@ -188,15 +201,6 @@ class SSHExecutor:
             return so.read().decode(errors='replace'), se.read().decode(errors='replace')
 
         return self.run(f'sudo -n {cmd}', timeout=timeout)
-
-    def needs_sudo_password(self) -> bool:
-        """True if sudo requires a password and none was provided — callers
-        should surface a clear error rather than let every sudo() call
-        silently fail with an empty stdin."""
-        if self._no_password_sudo is None:
-            check_out, _ = self.run('sudo -n true 2>&1 && echo OK || echo NOPASS', timeout=10)
-            self._no_password_sudo = 'NOPASS' not in check_out
-        return (not self._no_password_sudo) and not self.password
 
     def is_tool_installed(self, tool: str) -> bool:
         """Checks whether a binary is on PATH on the remote host, via

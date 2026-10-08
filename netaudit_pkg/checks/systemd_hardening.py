@@ -19,14 +19,14 @@ from __future__ import annotations
 
 import json
 import re
-import shlex
-import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from ..findings import finding as _finding
 from ..findings import subject_id
 from ..registry import register
 from ..ssh import HostKeyMismatchError, SSHExecutor
+from ..ssh_utils import run_sudo_with_exit_code
 
 try:
     import paramiko
@@ -48,58 +48,31 @@ _OVERALL_RE = re.compile(r'Overall exposure level for [^:]+:\s*([\d.]+)\s+(\w+)'
 
 @dataclass
 class _CommandResult:
-    """Uninterpreted result of one ssh.sudo() call with exit-code
-    recovery - same completed/exit_code/stdout contract already
-    established in fail2ban_config.CommandResult/firewall_config.
-    CommandResult (see either for the full semantics). completed=False
-    means the command's completion could not be confirmed at all (SSH
-    channel drop, timeout, a sudo refusal that never produced the
-    completion marker) - exit_code is always None in that case, and
-    stdout must NOT be treated as a confirmed result. completed=True
-    means the command ran to completion and reported a real exit code.
+    """Uninterpreted result of one systemd-analyze call under sudo - same
+    completed/exit_code/stdout contract as fail2ban_config.CommandResult/
+    firewall_config.CommandResult (see either for the full semantics).
+    completed=False means the exit code could not be recovered at all
+    (SSH channel drop, timeout) - exit_code is None and stdout must NOT be
+    treated as a confirmed result. stderr is kept separately so JSON is
+    parsed from stdout only. sudo_error is sudo's own message when sudo
+    itself refused (see ssh_utils.SudoResult).
     """
     completed: bool
     exit_code: int | None
     stdout: str
+    stderr: str = ''
+    sudo_error: str | None = None
 
 
-def _run_sudo_with_exit_code(ssh: SSHExecutor, cmd: str, timeout: int = 20) -> _CommandResult:
-    """Runs `cmd` via SSHExecutor.sudo() and recovers its exit code.
-
-    Same approach as fail2ban_config._run_sudo_with_exit_code() and
-    firewall_config._run_sudo_with_exit_code() - see either for why
-    ssh_utils.run_command_with_exit_code()'s `{ cmd; rc=$?; ...; }`
-    shell-group wrapping can't be handed to sudo directly, and why the
-    completion marker is instead routed through `sh -c <script>`.
-
-    This is now the fourth independent copy of this exact pattern in
-    the project (firewall_config.py, fail2ban_config.py, and this
-    module) - kept local rather than shared, per the project's
-    established "extraction is a separate, later change" principle
-    (see fail2ban_config.py's own docstring for the prior instance of
-    this same reasoning). See also this project's session notes on a
-    known, separately-backlogged limitation of this exact `sh -c`
-    wrapping approach on hosts with sudoers scoped to a specific
-    executable rather than a blanket NOPASSWD rule - not addressed
-    here, out of scope for this fix (which targets the JSON-parse-
-    error-masking-a-sudo-denial bug, not that architectural gap).
-    """
-    marker = f'__NETAUDIT_RC_{uuid.uuid4().hex}__'
-    script = f"{cmd}; rc=$?; printf '%s:%s\\n' {shlex.quote(marker)} \"$rc\""
-    sudo_cmd = f'sh -c {shlex.quote(script)}'
-    out, _ = ssh.sudo(sudo_cmd, timeout=timeout)
-
-    if marker not in out:
-        return _CommandResult(completed=False, exit_code=None, stdout=out)
-
-    body, _, tail = out.rpartition(marker)
-    code_str = tail.lstrip(':').strip()
-    try:
-        code = int(code_str)
-    except ValueError:
-        return _CommandResult(completed=False, exit_code=None, stdout=body)
-
-    return _CommandResult(completed=True, exit_code=code, stdout=body.rstrip('\n'))
+def _run_sudo_with_exit_code(ssh: SSHExecutor, argv: Sequence[str], timeout: int = 20) -> _CommandResult:
+    """Runs argv under sudo via ssh_utils.run_sudo_with_exit_code(): sudo
+    runs systemd-analyze itself, so a sudoers rule scoped to
+    /usr/bin/systemd-analyze matches, and `unit` stays one argument.
+    Until task 7 this ran `sudo sh -c '<cmd> 2>&1; marker'`
+    (docs/research/sudo_privilege_handling.md)."""
+    r = run_sudo_with_exit_code(ssh, argv, timeout=timeout)
+    return _CommandResult(completed=r.completed, exit_code=r.exit_code, stdout=r.stdout,
+                          stderr=r.stderr, sudo_error=r.sudo_error)
 
 
 # ===========================================================================
@@ -187,7 +160,7 @@ def _to_findings(parsed: dict, unit: str) -> list[dict]:
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
         {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
+        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key) / sudo password', 'default': ''},
         {'name': 'unit', 'type': 'text', 'label': 'systemd unit', 'default': 'nginx.service'},
     ],
     required_tools=[],
@@ -221,25 +194,27 @@ def check_systemd_hardening(host='', user='root', port=22, key_path='', password
             return {'error': f'unit {unit!r} not found on {host}'}
 
         json_result = _run_sudo_with_exit_code(
-            ssh, f'systemd-analyze security {unit} --no-pager --json=short 2>&1')
+            ssh, ['systemd-analyze', 'security', unit, '--no-pager', '--json=short'])
 
         if not json_result.completed:
             return {'error': 'sudo systemd-analyze security did not complete',
-                    'hint': 'the sudo attempt may have been denied (no password available, or '
-                            'sudoers does not permit this command) - see the SSH/sudo error above, '
-                            'if any, for the specific cause'}
+                    'hint': 'no exit code came back over SSH (connection dropped or the command '
+                            'timed out)'}
+        if json_result.sudo_error:
+            return {'error': f'sudo refused systemd-analyze: {json_result.sudo_error}',
+                    'hint': 'set the password field (used for sudo) or allow the SSH user to run '
+                            'systemd-analyze via a NOPASSWD sudoers rule'}
         if json_result.exit_code != 0:
-            detail = json_result.stdout.strip()[:300]
-            if (json_result.stdout.lstrip().startswith('Unknown')
-                    or 'not installed' in json_result.stdout
-                    or 'command not found' in json_result.stdout):
+            output = '\n'.join(part for part in (json_result.stdout.strip(), json_result.stderr.strip()) if part)
+            detail = output[:300]
+            if (output.startswith('Unknown')
+                    or 'not installed' in output
+                    or 'command not found' in output):
                 return {'error': 'systemd-analyze security not available on this host',
                         'detail': detail,
                         'hint': 'requires systemd >= 246 (Ubuntu 20.04+, Debian 11+)'}
             return {'error': f'systemd-analyze security failed (exit {json_result.exit_code})',
-                    'detail': detail,
-                    'hint': 'a nonzero exit here is often sudo denying the command rather than '
-                            'systemd-analyze itself failing - check the detail text above'}
+                    'detail': detail}
         raw = json_result.stdout
         if not raw.strip():
             return {'error': 'empty output from systemd-analyze',
@@ -251,8 +226,7 @@ def check_systemd_hardening(host='', user='root', port=22, key_path='', password
         # exit code is tracked independently of the JSON call above: the
         # two are separate sudo invocations, and one succeeding says
         # nothing about whether the other did too.
-        text_result = _run_sudo_with_exit_code(
-            ssh, f'systemd-analyze security {unit} --no-pager 2>&1')
+        text_result = _run_sudo_with_exit_code(ssh, ['systemd-analyze', 'security', unit, '--no-pager'])
     finally:
         ssh.close()
 
@@ -282,7 +256,8 @@ def check_systemd_hardening(host='', user='root', port=22, key_path='', password
         # affected, so this is reported as an additional finding rather
         # than aborting the whole check.
         reason = ('did not complete' if not text_result.completed
-                   else f'failed (exit {text_result.exit_code})')
+                   else f'failed (exit {text_result.exit_code})'
+                   + (f': {text_result.sudo_error}' if text_result.sudo_error else ''))
         findings.append(_finding(
             'low', 'could not determine the overall exposure score',
             f'the plain-text systemd-analyze security call {reason} - per-directive findings '

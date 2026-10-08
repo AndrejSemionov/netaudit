@@ -118,7 +118,7 @@ def _check_disk_space(ssh: SSHExecutor, directory: str) -> tuple[int | None, str
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
         {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
+        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key) / sudo password', 'default': ''},
         {'name': 'directories', 'type': 'text', 'label': 'Backup directories (comma-separated)',
          'default': '/var/backups'},
         {'name': 'max_age_hours', 'type': 'number', 'label': 'Expected freshness, hours', 'default': 26},

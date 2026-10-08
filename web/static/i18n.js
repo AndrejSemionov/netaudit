@@ -690,7 +690,7 @@ const I18N_CHECKS = {
   ssh_audit: {
     label: { ru: 'Аудит SSH-сервера' },
     desc: { ru: 'Read-only аудит удалённого сервера: порты, файрвол, fail2ban, логи входа.' },
-    params: { host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'Порт' }, key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль (если без ключа)' } },
+    params: { host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'Порт' }, key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль SSH (если без ключа) / пароль sudo' } },
   },
   iperf: {
     label: { ru: 'Пропускная способность (iperf3)' },
@@ -712,14 +712,14 @@ const I18N_CHECKS = {
   server_audit: {
     label: { ru: 'Аудит безопасности сервера (SSH)' },
     desc: { ru: 'Полный аудит безопасности сервера по SSH: nginx, fail2ban, файрвол, MySQL, хардненинг SSH. Read-only.' },
-    params: { host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' }, key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль (если без ключа)' } },
+    params: { host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' }, key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль SSH (если без ключа) / пароль sudo' } },
   },
   cve_audit: {
     label: { ru: 'Аудит CVE установленного ПО (SSH)' },
     desc: { ru: 'Собирает версии установленного ПО (nginx, ssh, mysql/mariadb, php, kernel, wordpress) по SSH '
       + 'и сверяет их с базой уязвимостей OSV.dev. AI-анализ сопоставляет найденные CVE '
       + 'с реальным конфигом сервиса и говорит, что действительно нужно обновить.' },
-    params: { host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' }, key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль (если без ключа)' } },
+    params: { host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' }, key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль SSH (если без ключа) / пароль sudo' } },
   },
   web_security_external: {
     label: { ru: 'Внешний аудит сайта (без доступа)' },
@@ -743,7 +743,7 @@ const I18N_CHECKS = {
     desc: { ru: 'Аудит безопасности сервера через Lynis (hardening index + находки) по SSH. Read-only.' },
     params: {
       host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' },
-      key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль (если без ключа)' },
+      key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль SSH (если без ключа) / пароль sudo' },
       auto_install: { ru: 'Установить lynis, если отсутствует' },
     },
   },
@@ -760,7 +760,7 @@ const I18N_CHECKS = {
     desc: { ru: 'Аудит директив песочницы systemd-юнита (ProtectSystem, NoNewPrivileges, PrivateNetwork и др.) через `systemd-analyze security`. Read-only. Требует systemd >= 246.' },
     params: {
       host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' },
-      key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль (если без ключа)' },
+      key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль SSH (если без ключа) / пароль sudo' },
       unit: { ru: 'systemd-юнит' },
     },
   },

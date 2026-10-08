@@ -404,14 +404,15 @@ def test_check_server_audit_fail2ban_partial_jail_collection_reaches_summary_as_
         top-level status call), which also matches 'fail2ban-client
         status recidive' and would give it the full 6-jail status text
         with an exit code, i.e. a false CONFIRMED instead of the
-        intended collection failure. Overriding sudo() directly for
-        this one jail avoids relying on substring-matching fallthrough
-        to produce the failure shape."""
-        def sudo(self, cmd, timeout=20):
-            self.calls.append(cmd)
-            if 'status recidive' in cmd:
+        intended collection failure. Overriding the sudo call (since
+        task 7 it arrives through run() as `{ sudo -n -- ...}`) for this
+        one jail avoids relying on substring-matching fallthrough to
+        produce the failure shape."""
+        def run(self, cmd, timeout=20, stdin_data=None):
+            if cmd.startswith('{ sudo ') and 'status recidive' in cmd:
+                self.calls.append(cmd)
                 return 'dropped mid-command, no completion marker', ''
-            return self._respond(cmd)
+            return super().run(cmd, timeout, stdin_data)
 
     fake = OneJailFailsFake(responses=responses, exit_codes=exit_codes)
     import netaudit_pkg.checks.server_security as ss

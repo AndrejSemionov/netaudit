@@ -389,11 +389,12 @@ def test_audit_partial_jail_collection_5_of_6_is_low_never_ok():
                    'recidive, sshd, sshd-ddos')
 
     class OneJailFailsFake(ExitCodeFakeSSHExecutor):
-        def sudo(self, cmd, timeout=20):
-            self.calls.append(cmd)
-            if 'status recidive' in cmd:
+        def run(self, cmd, timeout=20, stdin_data=None):
+            # since task 7 the sudo call arrives through run(), as `{ sudo -n -- ...}`
+            if cmd.startswith('{ sudo ') and 'status recidive' in cmd:
+                self.calls.append(cmd)
                 return 'dropped mid-command, no marker', ''
-            return self._respond(cmd)
+            return super().run(cmd, timeout, stdin_data)
 
     fake = OneJailFailsFake(
         responses={
@@ -478,18 +479,15 @@ def test_audit_real_host_shape_46_62_147_41():
                    'recidive, sshd, sshd-ddos')
 
     class RealHostFake(ExitCodeFakeSSHExecutor):
-        def run(self, cmd, timeout=20):
-            self.calls.append(cmd)
-            if 'fail2ban-client status' in cmd:
+        def run(self, cmd, timeout=20, stdin_data=None):
+            # since task 7 sudo calls also arrive here, as `{ sudo -n -- ...}`
+            if 'fail2ban-client status' in cmd and not cmd.startswith('{ sudo '):
+                self.calls.append(cmd)
                 import re as _re
                 m = _re.search(r'__NETAUDIT_RC_[0-9a-f]+__', cmd)
                 if m:
                     return f'{unpriv_error}\n{m.group(0)}:0\n', ''
-            return self._respond(cmd)
-
-        def sudo(self, cmd, timeout=20):
-            self.calls.append(cmd)
-            return self._respond(cmd)
+            return super().run(cmd, timeout, stdin_data)
 
     fake = RealHostFake(
         responses={

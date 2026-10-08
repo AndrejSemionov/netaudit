@@ -137,6 +137,11 @@ def _fail2ban_binary_verdict(evidence) -> tuple[str, dict]:
     return v, {}
 
 
+def _sudo_suffix(result) -> str:
+    """': <sudo message>' when sudo itself refused the command (task 7)."""
+    return f': {result.sudo_error}' if result.sudo_error else ''
+
+
 def _fail2ban_status_verdict(evidence) -> tuple[str, dict]:
     """Returns (verdict, context) for the authoritative fail2ban status
     (status_sudo). status_unpriv is NEVER used to drive this verdict -
@@ -161,7 +166,9 @@ def _fail2ban_status_verdict(evidence) -> tuple[str, dict]:
                           denied signal (best-effort text match - this
                           is a semantic-layer judgment on already-
                           confirmed evidence, not a guess about
-                          collection success).
+                          collection success) - or sudo itself refused
+                          (status_sudo.sudo_error, task 7), in which case
+                          context['sudo_error'] carries sudo's message.
       'COMMAND_ERROR'  - status_sudo completed with a nonzero exit code,
                           but no permission-denied signal was found -
                           some other confirmed failure (daemon down,
@@ -193,6 +200,10 @@ def _fail2ban_status_verdict(evidence) -> tuple[str, dict]:
     combined = status.stdout
     denied = 'permission denied' in combined.lower() or 'you must be root' in combined.lower()
     ctx = {'exit_code': status.exit_code, 'raw_snippet': combined[:200]}
+    if status.sudo_error:
+        # sudo itself refused (task 7): fail2ban-client never ran
+        denied = True
+        ctx['sudo_error'] = status.sudo_error
     if evidence.status_unpriv.completed and evidence.status_unpriv.exit_code == 0:
         unpriv_lower = evidence.status_unpriv.stdout.lower()
         if 'permission denied' in unpriv_lower or 'you must be root' in unpriv_lower:
@@ -315,6 +326,8 @@ def audit_fail2ban(ssh: SSHExecutor, fail2ban_mode: str = 'client') -> dict:
 
     if status_verdict in ('ACCESS_DENIED', 'COMMAND_ERROR'):
         detail = f"sudo fail2ban-client status failed (exit {status_ctx['exit_code']}): {status_ctx['raw_snippet']!r}"
+        if status_ctx.get('sudo_error'):
+            detail += f" - {status_ctx['sudo_error']}"
         if status_ctx.get('unpriv_also_denied'):
             detail += ' (unprivileged access was also denied)'
         title = ('fail2ban is installed, but status could not be confirmed even with sudo'
@@ -427,7 +440,7 @@ def _ufw_verdict(evidence) -> tuple[str, dict]:
     if status is None or not status.completed:
         return 'UNKNOWN', {'reason': 'ufw is installed, but `ufw status` did not complete'}
     if status.exit_code != 0:
-        return 'UNKNOWN', {'reason': f'ufw is installed, but `ufw status` failed (exit {status.exit_code})'}
+        return 'UNKNOWN', {'reason': f'ufw is installed, but `ufw status` failed (exit {status.exit_code}){_sudo_suffix(status)}'}
     if 'Status: active' in status.stdout:
         return 'ACTIVE', {}
     if 'Status: inactive' in status.stdout:
@@ -468,7 +481,7 @@ def _nftables_verdict(evidence) -> tuple[str, dict]:
     if not live.completed:
         return 'LIVE_UNKNOWN', {**context, 'reason': 'nft list ruleset did not complete'}
     if live.exit_code != 0:
-        return 'LIVE_UNKNOWN', {**context, 'reason': f'nft list ruleset failed (exit {live.exit_code})'}
+        return 'LIVE_UNKNOWN', {**context, 'reason': f'nft list ruleset failed (exit {live.exit_code}){_sudo_suffix(live)}'}
     if live.stdout.strip():
         return 'LIVE_ACTIVE', context
     return 'LIVE_EMPTY', context
@@ -508,7 +521,7 @@ def _iptables_verdict(evidence) -> tuple[str, dict]:
     if not live.completed:
         return 'UNKNOWN', {'reason': 'iptables -S did not complete'}
     if live.exit_code != 0:
-        return 'UNKNOWN', {'reason': f'iptables -S failed (exit {live.exit_code})'}
+        return 'UNKNOWN', {'reason': f'iptables -S failed (exit {live.exit_code}){_sudo_suffix(live)}'}
 
     policy, rules = _parse_iptables_input(live.stdout)
     if policy is None:
@@ -998,7 +1011,7 @@ def audit_ssh_hardening(ssh: SSHExecutor) -> dict:
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
         {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
+        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key) / sudo password', 'default': ''},
         {'name': 'fail2ban_mode', 'type': 'select', 'label': 'fail2ban status command',
          'options': ['client', 'status-wrapper'], 'default': 'client'},
     ],
