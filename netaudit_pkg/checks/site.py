@@ -22,14 +22,16 @@ CURL_TIMING = (
 def _ssl_stdlib(hostname: str, port: int = 443) -> dict:
     try:
         ctx = ssl.create_default_context()
-        with socket.create_connection((hostname, port), timeout=8) as sock:
-            with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
-                cert = ssock.getpeercert()
-                not_after = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
-                issuer = dict(x[0] for x in cert.get('issuer', []))
-                return {'ok': True, 'expires': not_after.isoformat(),
-                        'days_left': (not_after - datetime.now()).days,
-                        'issuer': issuer.get('organizationName', issuer.get('commonName', '—'))}
+        with (
+            socket.create_connection((hostname, port), timeout=8) as sock,
+            ctx.wrap_socket(sock, server_hostname=hostname) as ssock,
+        ):
+            cert = ssock.getpeercert()
+            not_after = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
+            issuer = dict(x[0] for x in cert.get('issuer', []))
+            return {'ok': True, 'expires': not_after.isoformat(),
+                    'days_left': (not_after - datetime.now()).days,
+                    'issuer': issuer.get('organizationName', issuer.get('commonName', '—'))}
     except (TimeoutError, socket.gaierror, ssl.SSLError, ConnectionRefusedError, OSError) as e:
         return {'ok': False, 'error': str(e)}
 

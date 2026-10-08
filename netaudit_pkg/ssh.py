@@ -34,6 +34,7 @@ silently rely on) whatever the person's regular SSH client has already trusted.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Self
 
 from .utils import log
 
@@ -129,7 +130,7 @@ class SSHExecutor:
         self.client = client
         return self
 
-    def __enter__(self) -> SSHExecutor:
+    def __enter__(self) -> Self:
         return self.connect()
 
     def __exit__(self, exc_type, exc_val, exc_tb):

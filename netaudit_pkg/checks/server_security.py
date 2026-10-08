@@ -1070,9 +1070,11 @@ def _check_tls_version(hostname, version_name, ssl_version) -> bool:
         ctx = ssl.SSLContext(ssl_version)
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        with socket.create_connection((hostname, 443), timeout=6) as sock:
-            with ctx.wrap_socket(sock, server_hostname=hostname):
-                return True
+        with (
+            socket.create_connection((hostname, 443), timeout=6) as sock,
+            ctx.wrap_socket(sock, server_hostname=hostname),
+        ):
+            return True
     except (ssl.SSLError, OSError, ValueError):
         return False
 
@@ -1199,12 +1201,10 @@ def check_web_security_external(url='https://example.com') -> dict:
 
     # outdated TLS
     old_tls = []
-    if hasattr(ssl, 'PROTOCOL_TLSv1'):
-        if _check_tls_version(hostname, 'TLS 1.0', ssl.PROTOCOL_TLSv1):
-            old_tls.append('TLS 1.0')
-    if hasattr(ssl, 'PROTOCOL_TLSv1_1'):
-        if _check_tls_version(hostname, 'TLS 1.1', ssl.PROTOCOL_TLSv1_1):
-            old_tls.append('TLS 1.1')
+    if hasattr(ssl, 'PROTOCOL_TLSv1') and _check_tls_version(hostname, 'TLS 1.0', ssl.PROTOCOL_TLSv1):
+        old_tls.append('TLS 1.0')
+    if hasattr(ssl, 'PROTOCOL_TLSv1_1') and _check_tls_version(hostname, 'TLS 1.1', ssl.PROTOCOL_TLSv1_1):
+        old_tls.append('TLS 1.1')
     if old_tls:
         findings.append(_finding('high', 'outdated TLS versions are supported', ', '.join(old_tls), id='WEB-TLS-001'))
 
