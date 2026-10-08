@@ -1,9 +1,10 @@
 # sudo privilege handling — fix contract proposal (task 7)
 
-Status: **DRAFT rev.1** (2026-10-08). USER chose the task ("Дефекты sudo
-(1–4)", MODE: AUTONOMOUS). Implementer: Claude (proposed). Reviewer:
-GPT/Codex. USER approves this contract and the open decisions D1–D2 before
-RED/GREEN.
+Status: **APPROVED by USER rev.1** (2026-10-08): D1 = remove
+`needs_sudo_password()`, D2 = **D2-A** (no new secret field). USER chose the
+task ("Дефекты sudo (1–4)", MODE: AUTONOMOUS) and allowed RED/GREEN to start
+while GPT/Codex reviews the contract together with the code.
+Implementer: Claude. Reviewer: GPT/Codex.
 
 ## Evidence
 
