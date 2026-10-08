@@ -1700,11 +1700,12 @@ function renderTrendUnit(tr) {
   // what this slice actually covered - whatever the report recorded, nothing inferred
   const obsDetails = o => [
     o.source,
-    o.coverage ? `coverage=${o.coverage}` : '',
-    (o.access_coverage || o.error_coverage) ? `access=${o.access_coverage || '?'}, error=${o.error_coverage || '?'}` : '',
+    o.coverage ? `${t('trends.obs.coverage')}: ${o.coverage}` : '',
+    (o.access_coverage || o.error_coverage)
+      ? `${t('trends.obs.access_log')}: ${o.access_coverage || '?'}, ${t('trends.obs.error_log')}: ${o.error_coverage || '?'}` : '',
     o.events_parsed != null ? `${t('trends.obs.events')}: ${o.events_parsed}${o.events_total != null ? '/' + o.events_total : ''}` : '',
-    o.requested_lines != null ? `lines=${o.requested_lines}` : '',
-    o.window_hours != null ? `window=${o.window_hours}h` : '',
+    o.requested_lines != null ? `${t('trends.obs.lines')}: ${o.requested_lines}` : '',
+    o.window_hours != null ? `${t('trends.obs.window')}: ${o.window_hours} ${t('trends.obs.hours')}` : '',
   ].filter(Boolean).join(' · ');
   const status = p => !p.error ? (events && p.observation
       ? `<span class="pill ${p.counts ? 'ok' : 'warn'}">${obsLabel(p.observation)}</span> <span class="timing">${obsDetails(p.observation)}</span>`
