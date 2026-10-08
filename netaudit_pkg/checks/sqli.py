@@ -29,7 +29,7 @@ def _fetch_html(url: str) -> str | None:
         import httpx
         with httpx.Client(follow_redirects=True, timeout=15) as c:
             return c.get(url).text
-    except Exception:
+    except Exception:  # noqa: BLE001 - an unreachable/invalid URL has no page to inspect
         return None
 
 

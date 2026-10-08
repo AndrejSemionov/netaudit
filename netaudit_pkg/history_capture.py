@@ -134,19 +134,19 @@ def _watch_loop(stop_event: threading.Event) -> None:
         try:
             _take_snapshot(s)
             with _status_lock:
-                _status['last_run'] = datetime.now().isoformat()
+                _status['last_run'] = datetime.now().isoformat()  # noqa: DTZ005 - capture retention and status use local wall time
                 _status['last_error'] = None
                 _status['snapshots_taken'] += 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - background capture must report any failure
             with _status_lock:
-                _status['last_run'] = datetime.now().isoformat()
+                _status['last_run'] = datetime.now().isoformat()  # noqa: DTZ005 - capture retention and status use local wall time
                 _status['last_error'] = str(e)[:300]
 
         # prune old records - once per loop pass, cheap thanks to the seen_at index
         try:
-            cutoff = (datetime.now() - timedelta(hours=s['retention_hours'])).isoformat()
+            cutoff = (datetime.now() - timedelta(hours=s['retention_hours'])).isoformat()  # noqa: DTZ005 - capture retention and status use local wall time
             storage.traffic_history_prune(cutoff)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - retention failure must not stop capture
             log.debug('history_capture: prune failed: %s: %s', type(e).__name__, e)
 
         stop_event.wait(max(10, s['interval_sec']))

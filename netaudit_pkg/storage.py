@@ -180,7 +180,7 @@ def _seed_presets(conn: sqlite3.Connection) -> None:
     ]
     for name, checks in defaults:
         conn.execute('INSERT INTO presets (name, checks, created_at) VALUES (?,?,?)',
-                     (name, _j.dumps(checks, ensure_ascii=False), _dt.now().isoformat()))
+                     (name, _j.dumps(checks, ensure_ascii=False), _dt.now().isoformat()))  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
     conn.commit()
 
 
@@ -469,8 +469,8 @@ def timing_upsert(key: str, ema: float, count: int, last: float) -> None:
         """INSERT INTO timing_stats (key, ema, count, last, updated_at)
            VALUES (?,?,?,?,?)
            ON CONFLICT(key) DO UPDATE SET ema=?, count=?, last=?, updated_at=?""",
-        (key, ema, count, last, datetime.now().isoformat(),
-         ema, count, last, datetime.now().isoformat()),
+        (key, ema, count, last, datetime.now().isoformat(),  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
+         ema, count, last, datetime.now().isoformat()),  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
     )
     conn.commit()
 
@@ -515,7 +515,7 @@ def preset_save(name: str, checks: list[dict]) -> int:
     cur = conn.execute(
         """INSERT INTO presets (name, checks, created_at) VALUES (?,?,?)
            ON CONFLICT(name) DO UPDATE SET checks=?""",
-        (name, json.dumps(checks, ensure_ascii=False), datetime.now().isoformat(),
+        (name, json.dumps(checks, ensure_ascii=False), datetime.now().isoformat(),  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
          json.dumps(checks, ensure_ascii=False)),
     )
     conn.commit()
@@ -566,7 +566,7 @@ def rep_add(pattern: str, list_type: str, note: str = '') -> int:
     conn = _conn()
     cur = conn.execute(
         'INSERT INTO rep_list (pattern, list_type, note, created_at) VALUES (?,?,?,?)',
-        (pattern, list_type, note, datetime.now().isoformat()),
+        (pattern, list_type, note, datetime.now().isoformat()),  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
     )
     conn.commit()
     return cur.lastrowid
@@ -602,7 +602,7 @@ def asn_set(ip: str, org: str | None, country: str | None) -> None:
     conn.execute(
         """INSERT INTO asn_cache (ip, org, country, updated_at) VALUES (?,?,?,?)
            ON CONFLICT(ip) DO UPDATE SET org=?, country=?, updated_at=?""",
-        (ip, org, country, datetime.now().isoformat(), org, country, datetime.now().isoformat()),
+        (ip, org, country, datetime.now().isoformat(), org, country, datetime.now().isoformat()),  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
     )
     conn.commit()
 
@@ -624,8 +624,8 @@ def cve_set(key: str, data: list) -> None:
     conn.execute(
         """INSERT INTO cve_cache (key, data, updated_at) VALUES (?,?,?)
            ON CONFLICT(key) DO UPDATE SET data=?, updated_at=?""",
-        (key, json.dumps(data, ensure_ascii=False), datetime.now().isoformat(),
-         json.dumps(data, ensure_ascii=False), datetime.now().isoformat()),
+        (key, json.dumps(data, ensure_ascii=False), datetime.now().isoformat(),  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
+         json.dumps(data, ensure_ascii=False), datetime.now().isoformat()),  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
     )
     conn.commit()
 
@@ -640,7 +640,7 @@ def cve_set(key: str, data: list) -> None:
 def traffic_history_add(target_ip: str, destinations: list[dict]) -> None:
     """destinations: [{'ip','port'?,'protocol'?,'risk_level'?,'risk_score'?}, ...]"""
     conn = _conn()
-    now = datetime.now().isoformat()
+    now = datetime.now().isoformat()  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
     conn.executemany(
         """INSERT INTO traffic_history (target_ip, dst_ip, dst_port, protocol, risk_level, risk_score, seen_at)
            VALUES (?,?,?,?,?,?,?)""",

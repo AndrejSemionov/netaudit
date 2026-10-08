@@ -22,7 +22,7 @@ def run_checks(selected: list[dict]) -> dict:
     Returns a report with the elapsed time of each check.
     """
     report = {
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),  # noqa: DTZ005 - report history uses local naive timestamps for ordering
         'results': {},
         'timing': {},
         'meta': {},
@@ -47,7 +47,7 @@ def run_checks(selected: list[dict]) -> dict:
         start = time.monotonic()
         try:
             result = spec.func(**params)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - isolate arbitrary registered check failures
             result = {'error': f'exception: {type(e).__name__}: {e}'}
         elapsed = round(time.monotonic() - start, 2)
 
@@ -80,14 +80,14 @@ def _run_one_instance(check_id: str, spec, params: dict) -> tuple[dict, float]:
     start = time.monotonic()
     try:
         result = spec.func(**params)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - isolate arbitrary registered check failures
         result = {'error': f'exception: {type(e).__name__}: {e}'}
     elapsed = round(time.monotonic() - start, 2)
 
     if not (isinstance(result, dict) and result.get('error')):
         try:
             timing.record(check_id, params, elapsed)
-        except Exception:
+        except Exception:  # noqa: BLE001 - timing is best-effort after a successful check
             # Best-effort: a timing-store hiccup (e.g. a rare SQLite lock
             # under concurrent multi-host writes) must never cost this
             # instance its actual result - the check itself already
@@ -146,7 +146,7 @@ def run_instances(check_id: str, spec, instances: list[dict],
         if cb is not None:
             try:
                 cb(key, result, elapsed)
-            except Exception:
+            except Exception:  # noqa: BLE001 - callback failure must not hide check results
                 # A misbehaving callback (e.g. streaming's SSE emit) must not
                 # take down this worker thread silently - results/timing for
                 # this instance are already recorded above regardless, but an
@@ -203,7 +203,7 @@ def run_checks_multi(selected: list[dict]) -> dict:
     across checks (since different checks still run one after another).
     """
     report = {
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),  # noqa: DTZ005 - report history uses local naive timestamps for ordering
         'results': {},
         'timing': {},
         'meta': {},

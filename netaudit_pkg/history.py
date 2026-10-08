@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import os
 
-from .utils import log
 from . import storage
 from .redaction import redact_report
+from .utils import log
 
 MODEL = 'claude-sonnet-4-6'
 DEFAULT_AI_LANGUAGE = 'en'

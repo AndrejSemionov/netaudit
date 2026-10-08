@@ -506,7 +506,7 @@ def _cache_get(name: str, version: str, ecosystem: str) -> list | None:
     if not row:
         return None
     updated = datetime.fromisoformat(row['updated_at'])
-    if datetime.now() - updated > timedelta(hours=CACHE_TTL_HOURS):
+    if datetime.now() - updated > timedelta(hours=CACHE_TTL_HOURS):  # noqa: DTZ005 - cache timestamps are stored as local naive wall time
         return None
     return row['data']
 
@@ -755,7 +755,8 @@ def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> 
         ssh = SSHExecutor(host, user, port, key_path, password).connect()
     except HostKeyMismatchError as e:
         return {'error': str(e)}
-    except Exception as e:
+    # SSH libraries can fail with transport, auth, or socket errors; keep the check isolated.
+    except Exception as e:  # noqa: BLE001
         return {'error': f'could not connect: {e}'}
 
     try:

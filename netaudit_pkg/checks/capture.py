@@ -183,7 +183,7 @@ def check_arp_capture(target_ip: str = '', gateway_ip: str = '', interface: str 
                 proc.terminate()
                 try:
                     proc.wait(timeout=3)
-                except Exception:
+                except Exception:  # noqa: BLE001 - failed process cleanup still requires a kill
                     proc.kill()
         # arpspoof without -r usually doesn't send corrective packets itself on
         # an explicit terminate, so we manually restore the real ARP entries both ways

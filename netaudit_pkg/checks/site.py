@@ -27,10 +27,10 @@ def _ssl_stdlib(hostname: str, port: int = 443) -> dict:
             ctx.wrap_socket(sock, server_hostname=hostname) as ssock,
         ):
             cert = ssock.getpeercert()
-            not_after = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
+            not_after = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')  # noqa: DTZ007 - certificate format has no numeric offset; preserve output
             issuer = dict(x[0] for x in cert.get('issuer', []))
             return {'ok': True, 'expires': not_after.isoformat(),
-                    'days_left': (not_after - datetime.now()).days,
+                    'days_left': (not_after - datetime.now()).days,  # noqa: DTZ005 - preserve the existing naive certificate expiry output
                     'issuer': issuer.get('organizationName', issuer.get('commonName', '—'))}
     except (TimeoutError, socket.gaierror, ssl.SSLError, ConnectionRefusedError, OSError) as e:
         return {'ok': False, 'error': str(e)}
