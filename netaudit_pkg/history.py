@@ -95,7 +95,7 @@ def _resolve_ai_language(explicit: str | None = None) -> str:
 
 
 def ai_analyze(report: dict, api_key: str | None = None, language: str | None = None,
-                history: list[dict] | None = None) -> dict:
+                history: list[dict] | None = None, trends: list[dict] | None = None) -> dict:
     """AI analysis: problems + recommendations on what to do.
 
     history: optional list of past reports about the same object (see
@@ -106,6 +106,10 @@ def ai_analyze(report: dict, api_key: str | None = None, language: str | None = 
     model can compare trends; `report` itself is never mutated to include
     history - the history list is used only for prompt construction here,
     not merged into the object the caller will save/display.
+
+    trends: optional deterministic changes since the previous run of each
+    object (trends.trend_context()). Same rule as history: None/[] leaves
+    the prompt byte-for-byte unchanged.
     """
     api_key = _resolve_api_key(api_key)
     if not api_key:
@@ -140,6 +144,19 @@ def ai_analyze(report: dict, api_key: str | None = None, language: str | None = 
         prompt += (
             f'\n\nPREVIOUS REPORTS FOR THE SAME OBJECT (most recent first, '
             f'for trend comparison):\n{history_json}'
+        )
+
+    if trends:
+        # computed, not inferred: say exactly what each list means so "no
+        # longer reported" is never presented as "fixed"
+        trends_json = json.dumps(trends, ensure_ascii=False, indent=2)
+        prompt += (
+            '\n\nCHANGES SINCE THE PREVIOUS RUN OF THE SAME OBJECT (computed by NetAudit '
+            'from saved reports, not by you - do not recompute them). '
+            '"resolved": the finding id is no longer reported and its area was fully '
+            'evaluated. "not_evaluated": no longer reported, but the latest run could not '
+            'evaluate that area - do not treat these as fixed. "counts_delta"/"total_delta": '
+            'change in observed problem counts, not proof of improvement.\n' + trends_json
         )
 
     try:

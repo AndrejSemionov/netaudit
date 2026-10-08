@@ -300,7 +300,44 @@ def identity_pairs(execution_context: dict) -> set[tuple[str, object]]:
     return pairs
 
 
-def find_related_reports(report: dict, limit: int = 3) -> list[dict]:
+def _before_anchor(report: dict, report_id: int | None) -> tuple[str, int] | None:
+    """(timestamp, id) of `report` in the trend layer's total order, for
+    "saved strictly before this run" (docs/research/trend_layer_v1_2_web_ai.md,
+    2b.1). With the report's DB id the row's own timestamp is authoritative
+    (a posted body cannot move the anchor) and earlier runs saved in the same
+    second are kept. Without one - an inline report - only strictly earlier
+    timestamps count (id 0: ids start at 1); content is not an identity.
+    None when there is nothing to anchor on."""
+    if isinstance(report_id, int) and not isinstance(report_id, bool):
+        row = _conn().execute('SELECT timestamp FROM reports WHERE id = ?', (report_id,)).fetchone()
+        if row is not None and row['timestamp']:
+            return row['timestamp'], report_id
+    ts = report.get('timestamp')
+    return (ts, 0) if ts else None
+
+
+_ROWS_BEFORE_SQL = ('SELECT id, timestamp, checks, data FROM reports '
+                    'WHERE timestamp < ? OR (timestamp = ? AND id < ?) '
+                    'ORDER BY timestamp DESC, id DESC LIMIT ?')
+
+
+def _rows_before(report: dict, report_id: int | None, window: int) -> list:
+    anchor = _before_anchor(report, report_id)
+    if anchor is None:
+        return []
+    ts, before_id = anchor
+    return _conn().execute(_ROWS_BEFORE_SQL, (ts, ts, before_id, window)).fetchall()
+
+
+def report_data_before(report: dict, report_id: int | None = None,
+                       window: int = RELATED_REPORTS_SEARCH_WINDOW) -> list[dict]:
+    """Full report dicts saved strictly before `report` (see _before_anchor()),
+    most recent first, redacted like load_report(). Read path for the trend
+    context given to AI analysis (trends.trend_context())."""
+    return [redact_report(json.loads(r['data'])) for r in _rows_before(report, report_id, window)]
+
+
+def find_related_reports(report: dict, limit: int = 3, report_id: int | None = None) -> list[dict]:
     """
     Finds past reports that appear to be about the same object as `report`,
     using its execution_context (see netaudit_pkg/engine.py's Report
@@ -327,16 +364,17 @@ def find_related_reports(report: dict, limit: int = 3) -> list[dict]:
     params, or a check whose only params are non-identity ones like
     count/timeout), there is nothing to match against and this returns []
     - not an error, just no history.
+
+    Only runs saved strictly BEFORE `report` are candidates (v1.2, 2b.1):
+    pass the report's DB id when known (`report_id`) - the analyzed run is
+    then never its own history and a later run is never "previous". Without
+    an id, strictly earlier timestamps; without a timestamp either, [].
     """
     current_identity_pairs = identity_pairs(report.get('execution_context', {}))
     if not current_identity_pairs:
         return []
 
-    conn = _conn()
-    rows = conn.execute(
-        'SELECT timestamp, checks, data FROM reports ORDER BY timestamp DESC LIMIT ?',
-        (RELATED_REPORTS_SEARCH_WINDOW,),
-    ).fetchall()
+    rows = _rows_before(report, report_id, RELATED_REPORTS_SEARCH_WINDOW)
 
     matches = []
     for row in rows:
