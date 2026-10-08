@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json as _json
-import socket
 from datetime import UTC, datetime
 
 from ..registry import register
