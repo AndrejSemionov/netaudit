@@ -1582,8 +1582,10 @@ function renderAnalysis(a) {
     root.insertAdjacentHTML('afterbegin', `<div class="card ai-card"><h2>${t('ai.analyze')}</h2><pre>${a.summary}</pre></div>`);
     return;
   }
+  // AI output: never put it into a class attribute - fixed mapping only
+  const AI_SEV_CLASS = { high: 'sev-high', medium: 'sev-medium', low: 'sev-low' };
   const problems = (a.problems||[]).map(p =>
-    `<div class="rec"><div class="action sev-${p.severity}">[${p.severity}] ${p.title}</div><div class="why">${p.detail}</div></div>`).join('');
+    `<div class="rec"><div class="action ${AI_SEV_CLASS[p.severity] || ''}">[${p.severity}] ${p.title}</div><div class="why">${p.detail}</div></div>`).join('');
   const recs = (a.recommendations||[]).sort((x,y)=>(x.priority||9)-(y.priority||9)).map(r =>
     `<div class="rec"><div class="action">${r.priority?r.priority+'. ':''}${r.action}</div><div class="why">${r.why||''}</div></div>`).join('');
   root.insertAdjacentHTML('afterbegin', `<div class="card ai-card">
