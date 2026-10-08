@@ -50,10 +50,10 @@ def _event(event_type, username=None, source_ip=None, auth_method=None,
 
 
 def _empty_result(**overrides) -> DetectionResult:
-    base = dict(
-        repeated_failures_by_ip=[], repeated_failures_by_username=[],
-        success_after_failure=[], undated_event_count=0, coverage_uncertain=False,
-    )
+    base = {
+        'repeated_failures_by_ip': [], 'repeated_failures_by_username': [],
+        'success_after_failure': [], 'undated_event_count': 0, 'coverage_uncertain': False,
+    }
     base.update(overrides)
     return DetectionResult(**base)
 

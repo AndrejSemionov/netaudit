@@ -22,12 +22,12 @@ from tests.conftest import FakeSSHExecutor
 
 
 def _cfg(**kwargs) -> NginxConfig:
-    defaults = dict(
-        installed=True, readable=True, server_tokens='off',
-        ssl_protocols=['TLSv1.3'], has_ssl_certificate=True,
-        headers_present={'strict-transport-security', 'x-frame-options', 'x-content-type-options'},
-        autoindex_on=False,
-    )
+    defaults = {
+        'installed': True, 'readable': True, 'server_tokens': 'off',
+        'ssl_protocols': ['TLSv1.3'], 'has_ssl_certificate': True,
+        'headers_present': {'strict-transport-security', 'x-frame-options', 'x-content-type-options'},
+        'autoindex_on': False,
+    }
     defaults.update(kwargs)
     return NginxConfig(**defaults)
 
