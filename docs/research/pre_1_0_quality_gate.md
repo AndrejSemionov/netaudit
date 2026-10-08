@@ -18,6 +18,17 @@ published PRs. Fresh install, upgrade, and rollback on a disposable test
 host have not been verified for this integrated code. The real server with
 280+ reports is not available in this workspace.
 
+An offline wheel smoke test on `4eb0a76` succeeded: from a clean
+`git archive` in `/tmp`, `pip wheel --no-deps --no-build-isolation --no-index`
+produced `netaudit-0.2.0-py3-none-any.whl`. Installing that wheel with
+`--no-deps --no-index --target` into a separate `/tmp` directory and running
+its console entry point with the project test venv returned `netaudit 0.2.0`.
+The installed entry point's `list` command also exited 0 from `/tmp` with
+an isolated `HOME`; it discovered the registered checks.
+The installed `web/static` directory contained both `index.html` and
+`i18n.js`. This checks wheel contents and basic CLI startup; it does not
+exercise dependency installation or a host upgrade.
+
 ## Proposed gate
 
 1. Freeze feature behavior first. Re-run full Ruff on the final feature
@@ -40,7 +51,8 @@ host have not been verified for this integrated code. The real server with
 6. Run tests with an isolated HOME and a Web-capable environment. Verify
    dependency audit and security scan. Exercise fresh install, update and
    rollback only on an authorized disposable host; document commands and
-   observed outcomes. Do not infer server behavior from local unit tests.
+   observed outcomes. Rebuild and smoke-test the wheel from the final commit.
+   Do not infer server behavior from local unit tests.
 7. Correct English/Russian CLI/API instructions and add release notes.
    Set version 1.0.0 only when tests, review, operational checks, and
    documentation are complete. Merge to `main` remains the user's action.
