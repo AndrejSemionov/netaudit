@@ -77,6 +77,7 @@ def test_collect_file_readable_never_calls_sudo():
     source = _log_source('/var/log/auth.log', readable=True, requires_sudo=False)
 
     collect_file(fake, source)  # raises via SudoTracker.sudo() if this invariant is ever broken
+    assert not any('sudo' in c for c in fake.calls)
 
 
 # ===========================================================================
@@ -98,27 +99,39 @@ def test_collect_file_requires_sudo_uses_sudo():
     assert 'protected line1' in result.result.stdout
 
 
-def test_collect_file_requires_sudo_never_calls_plain_run_for_content():
+def test_collect_file_requires_sudo_runs_tail_under_sudo():
     """The inverse invariant of the readable=True case: a
-    readable=False+requires_sudo=True file must go through sudo(), never
-    a plain run() — content protected by file permissions must not be
-    silently fetched (or silently attempted) without elevation."""
-
-    class RunTracker(ExitCodeFakeSSHExecutor):
-        def run(self, cmd: str, timeout: int = 20):
-            if 'tail' in cmd:
-                raise AssertionError(
-                    f'collect_file() must not call run() for tail content when requires_sudo=True; got: {cmd!r}'
-                )
-            return super().run(cmd, timeout)
-
-    fake = RunTracker(
+    readable=False+requires_sudo=True file is read only under sudo.
+    Task 7 (E1): sudo runs `tail` itself (not `sh -c`), so a scoped rule
+    for /usr/bin/tail matches; the marker is printed outside sudo."""
+    fake = ExitCodeFakeSSHExecutor(
         responses={'tail -n 200 /var/log/auth.log': 'protected content'},
         exit_codes={'tail -n 200 /var/log/auth.log': 0},
     )
     source = _log_source('/var/log/auth.log', readable=False, requires_sudo=True)
 
-    collect_file(fake, source)  # raises via RunTracker.run() if this invariant is ever broken
+    collect_file(fake, source)
+
+    tail_calls = [c for c in fake.calls if 'tail' in c]
+    assert len(tail_calls) == 1
+    assert tail_calls[0].startswith('{ sudo -n -- tail -n 200 /var/log/auth.log; ')
+    assert 'sh -c' not in tail_calls[0]
+
+
+def test_collect_file_sudo_refusal_keeps_stderr_and_sudo_error():
+    fake = ExitCodeFakeSSHExecutor(
+        responses={'tail -n 200 /var/log/auth.log': ''},
+        exit_codes={'tail -n 200 /var/log/auth.log': 1},
+        stderrs={'tail -n 200 /var/log/auth.log': 'sudo: a password is required\n'},
+    )
+    source = _log_source('/var/log/auth.log', readable=False, requires_sudo=True)
+
+    result = collect_file(fake, source).result
+
+    assert (result.completed, result.exit_code) == (True, 1)
+    assert result.stderr == 'sudo: a password is required\n'
+    assert result.sudo_error == 'sudo: a password is required'
+    assert result.command == 'tail -n 200 /var/log/auth.log'
 
 
 # ===========================================================================

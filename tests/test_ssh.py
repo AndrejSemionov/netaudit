@@ -194,15 +194,11 @@ def test_sudo_key_auth_with_empty_password_uses_sudo_n_not_key_material():
     assert not any('sudo -S' in c for c in ex.client.calls)
 
 
-def test_sudo_no_longer_reads_or_writes_no_password_sudo_cache():
-    """sudo() itself must not read or mutate `_no_password_sudo` at all -
-    no session-level capability cache drives its behavior anymore. The
-    attribute itself still exists on the instance (needs_sudo_password()
-    still uses it - that method's own contract is a separate, later
-    piece of work per project session notes, deliberately not touched
-    in this pass), so this test checks that sudo() calls leave it
-    exactly as it started (None, i.e. never touched), rather than
-    asserting the attribute doesn't exist on the class at all.
+def test_sudo_keeps_no_session_level_capability_cache():
+    """No session-level sudo capability cache exists: every sudo() call
+    runs its own command and nothing probes `sudo -n true`. The cache
+    attribute and needs_sudo_password() that used it were removed in
+    task 7 (see tests/test_sudo_privilege.py).
 
     This replaces the old test_sudo_availability_check_is_cached, which
     asserted the OPPOSITE - that a single `sudo -n true` probe was
@@ -214,23 +210,10 @@ def test_sudo_no_longer_reads_or_writes_no_password_sudo_cache():
         'sudo -n cmd1': 'result1',
         'sudo -n cmd2': 'result2',
     })
-    assert ex._no_password_sudo is None
     ex.sudo('cmd1')
     ex.sudo('cmd2')
-    assert ex._no_password_sudo is None
+    assert ex.client.calls == ['sudo -n cmd1', 'sudo -n cmd2']
     assert not any('sudo -n true' in c for c in ex.client.calls)
-
-
-@pytest.mark.parametrize('no_password_sudo,password,expected', [
-    (False, '', True),    # needs a password, none given
-    (False, 'secret', False),  # needs a password, one given
-    (True, '', False),    # passwordless available, no password needed
-])
-def test_needs_sudo_password(no_password_sudo, password, expected):
-    ex = SSHExecutor('host', 'user', 22, '', password)
-    sudo_check_response = 'OK' if no_password_sudo else 'NOPASS'
-    ex.client = _FakeParamikoClient({'sudo -n true': sudo_check_response})
-    assert ex.needs_sudo_password() is expected
 
 
 def test_host_key_mismatch_raises_clear_error(monkeypatch):

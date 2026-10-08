@@ -220,7 +220,7 @@ def test_run_sudo_with_exit_code_success():
         responses={'fail2ban-client status': 'Status\n|- Number of jail:\t1'},
         exit_codes={'fail2ban-client status': 0},
     )
-    result = _run_sudo_with_exit_code(fake, 'fail2ban-client status')
+    result = _run_sudo_with_exit_code(fake, ['fail2ban-client', 'status'])
     assert result.completed is True
     assert result.exit_code == 0
     assert 'Number of jail' in result.stdout
@@ -228,9 +228,25 @@ def test_run_sudo_with_exit_code_success():
 
 def test_run_sudo_with_exit_code_collection_failure():
     fake = ExitCodeFakeSSHExecutor()  # no marker ever appears
-    result = _run_sudo_with_exit_code(fake, 'fail2ban-client status')
+    result = _run_sudo_with_exit_code(fake, ['fail2ban-client', 'status'])
     assert result.completed is False
     assert result.exit_code is None
+
+
+def test_sudo_calls_run_the_real_binary_or_wrapper_not_sh():
+    """Task 7 (E1): status-wrapper mode exists for sudoers scoped to the
+    wrapper script; sudo has to run that script itself."""
+    from netaudit_pkg.fail2ban_config import Fail2banCommands, collect_fail2ban_config
+    status_text = 'Status\n|- Number of jail:\t1\n`- Jail list:\tsshd'
+    for mode, prefix in (('client', 'fail2ban-client status'), ('status-wrapper', '/usr/local/bin/fail2ban-status-only')):
+        fake = ExitCodeFakeSSHExecutor(
+            responses={'command -v fail2ban-client': '/usr/bin/fail2ban-client', f'{prefix} sshd': 'Currently banned:\t0',
+                       prefix: status_text},
+            exit_codes={'command -v fail2ban-client': 0, f'{prefix} sshd': 0, prefix: 0},
+        )
+        collect_fail2ban_config(fake, commands=Fail2banCommands(mode=mode))
+        sudo_calls = [c.split(';')[0] for c in fake.calls if 'sudo' in c]
+        assert sudo_calls == [f'{{ sudo -n -- {prefix}', f'{{ sudo -n -- {prefix} sshd'], mode
 
 
 # ===========================================================================

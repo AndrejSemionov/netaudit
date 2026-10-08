@@ -186,37 +186,11 @@ def test_empty_host_rejected():
 # SSHExecutor.sudo() new contract integration (post-scoped-sudoers fix -
 # see project session notes on the SSHExecutor.sudo() rewrite, and
 # test_lynis_audit.py/test_aide_check.py's matching tests for the same
-# pattern). These prove check_rootkit() no longer relies on
-# needs_sudo_password() as an upfront capability gate - a host with
-# scoped NOPASSWD (permitting rkhunter/chkrootkit specifically but not a
-# generic probe) must now actually get a real run, not a pre-emptive
-# error before the real commands are ever attempted.
+# pattern). There is no upfront capability gate: a host with scoped
+# NOPASSWD (permitting rkhunter/chkrootkit specifically but not a
+# generic probe) gets a real run, and a real sudo refusal surfaces
+# through the commands themselves.
 # ===========================================================================
-
-def test_needs_sudo_password_no_longer_blocks_the_check(monkeypatch):
-    """Direct regression for the upfront-gate removal: even when
-    FakeSSHExecutor is configured to report needs_sudo_password()=True
-    (no_password_sudo=False, password=''), check_rootkit() must still
-    attempt the real rkhunter/chkrootkit commands rather than returning
-    an error before trying."""
-    fake = FakeSSHExecutor(
-        installed_tools={'rkhunter', 'chkrootkit'},
-        no_password_sudo=False,
-        password='',
-        responses={
-            'rkhunter --check': ('Warning: test warning\n', ''),
-            'chkrootkit': ("Checking `bindshell'... not infected\n", ''),
-        },
-    )
-    monkeypatch.setattr('netaudit_pkg.checks.rootkit_check.SSHExecutor', lambda *a, **kw: fake)
-    result = check_rootkit(host='1.2.3.4')
-    assert 'error' not in result
-    assert result['tools']['rkhunter']['ran'] is True
-    assert result['tools']['chkrootkit']['ran'] is True
-    # the real commands must actually have been attempted, not skipped
-    assert any('rkhunter --check' in c for c in fake.calls)
-    assert any('chkrootkit' in c for c in fake.calls)
-
 
 def test_sudo_denied_both_tools_falls_through_to_existing_per_tool_errors(monkeypatch):
     """When sudo genuinely can't run either tool (no password, real
@@ -228,7 +202,6 @@ def test_sudo_denied_both_tools_falls_through_to_existing_per_tool_errors(monkey
     new error semantics needed."""
     fake = FakeSSHExecutor(
         installed_tools={'rkhunter', 'chkrootkit'},
-        no_password_sudo=False,
         password='',
         responses={
             'rkhunter --check': ('', 'sudo: a password is required'),
@@ -253,7 +226,6 @@ def test_sudo_denied_one_tool_other_succeeds(monkeypatch):
     attempted."""
     fake = FakeSSHExecutor(
         installed_tools={'rkhunter', 'chkrootkit'},
-        no_password_sudo=False,
         password='',
         responses={
             'rkhunter --check': ('Warning: test warning\n', ''),

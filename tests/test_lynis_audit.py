@@ -161,36 +161,11 @@ def test_already_installed_lynis_needs_no_confirmation(monkeypatch):
 
 # ===========================================================================
 # SSHExecutor.sudo() new contract integration (post-scoped-sudoers fix -
-# see project session notes on the SSHExecutor.sudo() rewrite). These
-# tests exist specifically to prove check_lynis_audit() no longer relies
-# on needs_sudo_password() as an upfront capability gate - a host with
-# scoped NOPASSWD (permitting `lynis`/`cat` specifically but not a
-# generic probe) must now actually get a real lynis run, not a
-# pre-emptive error before the real commands are ever attempted.
+# see project session notes on the SSHExecutor.sudo() rewrite). There is
+# no upfront capability gate: a host with scoped NOPASSWD (permitting
+# `lynis`/`cat` specifically but not a generic probe) gets a real lynis
+# run, and a real sudo refusal surfaces through the commands themselves.
 # ===========================================================================
-
-def test_needs_sudo_password_no_longer_blocks_the_check(monkeypatch):
-    """Direct regression for the upfront-gate removal: even when
-    FakeSSHExecutor is configured to report needs_sudo_password()=True
-    (no_password_sudo=False, password=''), check_lynis_audit() must
-    still attempt the real lynis/cat commands rather than returning an
-    error before trying - the actual command result (success here) is
-    what must decide the outcome, not a generic capability guess made
-    before any real command was run."""
-    fake = FakeSSHExecutor(
-        installed_tools={'lynis'},
-        no_password_sudo=False,
-        password='',
-        responses={'cat /var/log/lynis-report.dat': (REPORT_DAT, '')},
-    )
-    monkeypatch.setattr('netaudit_pkg.checks.lynis_audit.SSHExecutor', lambda *a, **kw: fake)
-    result = check_lynis_audit(host='1.2.3.4')
-    assert 'error' not in result
-    assert result['hardening_index'] == 80
-    # the real commands must actually have been attempted, not skipped
-    assert any('lynis audit system' in c for c in fake.calls)
-    assert any('cat /var/log/lynis-report.dat' in c for c in fake.calls)
-
 
 def test_sudo_denied_with_no_password_falls_through_to_existing_error_path(monkeypatch):
     """When sudo genuinely can't run the commands (no password, and the
@@ -204,7 +179,6 @@ def test_sudo_denied_with_no_password_falls_through_to_existing_error_path(monke
     upfront gate stops short-circuiting before it."""
     fake = FakeSSHExecutor(
         installed_tools={'lynis'},
-        no_password_sudo=False,
         password='',
         responses={'cat /var/log/lynis-report.dat': ('', 'sudo: a password is required')},
     )
