@@ -23,7 +23,8 @@ import shlex
 import uuid
 from dataclasses import dataclass
 
-from ..findings import finding as _finding, subject_id
+from ..findings import finding as _finding
+from ..findings import subject_id
 from ..registry import register
 from ..ssh import HostKeyMismatchError, SSHExecutor
 

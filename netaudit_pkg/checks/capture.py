@@ -22,10 +22,10 @@ import re
 import socket
 from collections import defaultdict
 
-from ..registry import register
-from ..utils import run_cmd, tool_available
 from .. import threat
-from ..ssh import SSHExecutor, HostKeyMismatchError
+from ..registry import register
+from ..ssh import HostKeyMismatchError, SSHExecutor
+from ..utils import run_cmd, tool_available
 
 try:
     import paramiko

@@ -27,8 +27,8 @@ from datetime import datetime, timezone
 
 import httpx
 
-from ..registry import register
 from ..findings import finding as _finding
+from ..registry import register
 
 CRTSH_URL = 'https://crt.sh/'
 # crt.sh is known to be unstable - don't wait long, a clean skip beats a hung audit

@@ -28,9 +28,10 @@ from __future__ import annotations
 
 import re
 
+from ..findings import finding as _finding
+from ..findings import subject_id
 from ..registry import register
-from ..findings import finding as _finding, subject_id
-from ..ssh import SSHExecutor, HostKeyMismatchError
+from ..ssh import HostKeyMismatchError, SSHExecutor
 
 try:
     import paramiko

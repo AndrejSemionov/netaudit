@@ -11,8 +11,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal
 
+from ..findings import finding as _finding
+from ..findings import subject_id
 from ..registry import register
-from ..findings import finding as _finding, subject_id
 from ..utils import run_cmd, tool_available
 
 DNSStatus = Literal['NOERROR', 'NXDOMAIN', 'SERVFAIL', 'REFUSED', 'TIMEOUT', 'TOOL_ERROR', 'UNKNOWN_STATUS']

@@ -14,7 +14,7 @@ sqlmap without explicit authorization confirmation.
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from ..registry import register
 from ..utils import run_cmd, tool_available

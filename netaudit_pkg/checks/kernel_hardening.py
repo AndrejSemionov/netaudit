@@ -40,11 +40,11 @@ that spec, it does not re-derive it. In particular:
 
 from __future__ import annotations
 
-from ..registry import register
-from ..kernel_config import KernelConfig, collect_kernel_config
 from ..findings import finding as _finding
+from ..kernel_config import KernelConfig, collect_kernel_config
+from ..registry import register
 from ..scoring import Component, weighted_score
-from ..ssh import SSHExecutor, HostKeyMismatchError
+from ..ssh import HostKeyMismatchError, SSHExecutor
 
 try:
     import paramiko

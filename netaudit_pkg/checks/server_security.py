@@ -15,12 +15,13 @@ import re
 import socket
 import ssl
 
-from ..registry import register
-from ..findings import finding as _finding, subject_id
-from ..utils import run_cmd, tool_available
-from ..ssh import SSHExecutor, HostKeyMismatchError
-from ..ssh_config import collect_ssh_config
+from ..findings import finding as _finding
+from ..findings import subject_id
 from ..nginx_config import collect_nginx_config
+from ..registry import register
+from ..ssh import HostKeyMismatchError, SSHExecutor
+from ..ssh_config import collect_ssh_config
+from ..utils import run_cmd, tool_available
 
 try:
     import paramiko

@@ -75,7 +75,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from .log_discovery_audit import SourceType, file_verdict
 from ..log_collection import collect_file, collect_journal
 from ..log_discovery import probe_log_file
 from ..registry import register
@@ -83,6 +82,7 @@ from ..ssh import HostKeyMismatchError, SSHExecutor
 from ..ssh_auth_detection import DetectionContext, apply_window, detect
 from ..ssh_auth_findings import DEFAULT_POLICY, build_findings
 from ..ssh_auth_parser import parse_ssh_auth_line
+from .log_discovery_audit import SourceType, file_verdict
 
 try:
     import paramiko

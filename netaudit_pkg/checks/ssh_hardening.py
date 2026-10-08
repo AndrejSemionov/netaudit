@@ -45,10 +45,10 @@ is the implementation of that spec, not a fresh design. In particular:
 
 from __future__ import annotations
 
-from ..registry import register
 from ..findings import finding as _finding
+from ..registry import register
 from ..scoring import Component, weighted_score
-from ..ssh import SSHExecutor, HostKeyMismatchError
+from ..ssh import HostKeyMismatchError, SSHExecutor
 from ..ssh_config import SSHConfig, collect_ssh_config
 
 try:

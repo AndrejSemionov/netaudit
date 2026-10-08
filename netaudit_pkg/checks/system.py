@@ -7,8 +7,8 @@ import socket
 from datetime import datetime, timezone
 
 from ..registry import register
+from ..ssh import HostKeyMismatchError, SSHExecutor
 from ..utils import run_cmd, tool_available
-from ..ssh import SSHExecutor, HostKeyMismatchError
 
 try:
     import psutil

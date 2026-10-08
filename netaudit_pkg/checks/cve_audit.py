@@ -55,9 +55,9 @@ from datetime import datetime, timedelta
 
 import httpx
 
-from ..registry import register
 from .. import storage
-from ..ssh import SSHExecutor, HostKeyMismatchError
+from ..registry import register
+from ..ssh import HostKeyMismatchError, SSHExecutor
 from ..ssh_utils import run_command_with_exit_code
 
 try:
