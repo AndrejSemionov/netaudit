@@ -204,6 +204,8 @@ also auto-detected from the browser.
 python3 netaudit.py list                 # list all checks
 python3 netaudit.py run mtr --target 8.8.8.8   # run a check
 python3 netaudit.py history              # past reports
+python3 netaudit.py trend                # objects with finding/score history
+python3 netaudit.py trend ssh_hardening 10.0.0.1   # how one object changed over time
 python3 netaudit.py install <tool>       # install a missing tool (nmap, tshark, ...)
 ```
 

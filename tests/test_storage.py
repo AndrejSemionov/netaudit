@@ -405,6 +405,90 @@ def test_find_related_reports_safe_when_current_report_already_saved(isolated_db
     assert isinstance(related, list)
 
 
+# ---------------------------------------------------------------------------
+# find_related_reports() - multi-host execution_context shape
+#
+# engine.run_multi_host() stores execution_context[check_id] as
+# {host_key: params, ...} (host_key deduped as '10.0.0.1', '10.0.0.1#2', ...)
+# rather than the flat params dict a single-instance run stores. Identity
+# matching must see through both shapes - see
+# docs/research/trend_layer_research_summary.md, Finding 3.
+# ---------------------------------------------------------------------------
+
+def _multi_host_ctx(check_id, hosts):
+    return {check_id: {h: {'host': h, 'port': 22} for h in hosts}}
+
+
+def test_find_related_reports_multi_host_saved_matches_single_host_current(isolated_db):
+    isolated_db.save_report(_report(
+        '2026-01-01 00:00:00', _multi_host_ctx('ssh_hardening', ['10.0.0.1', '10.0.0.2']),
+    ))
+    current = _report('2026-01-02 00:00:00', {'ssh_hardening': {'host': '10.0.0.2', 'port': 22}})
+    assert len(isolated_db.find_related_reports(current)) == 1
+
+
+def test_find_related_reports_single_host_saved_matches_multi_host_current(isolated_db):
+    isolated_db.save_report(_report(
+        '2026-01-01 00:00:00', {'ssh_hardening': {'host': '10.0.0.1', 'port': 22}},
+    ))
+    current = _report(
+        '2026-01-02 00:00:00', _multi_host_ctx('ssh_hardening', ['10.0.0.1', '10.0.0.3']),
+    )
+    assert len(isolated_db.find_related_reports(current)) == 1
+
+
+def test_find_related_reports_multi_host_disjoint_hosts_do_not_match(isolated_db):
+    isolated_db.save_report(_report(
+        '2026-01-01 00:00:00', _multi_host_ctx('ssh_hardening', ['10.0.0.1']),
+    ))
+    current = _report(
+        '2026-01-02 00:00:00', _multi_host_ctx('ssh_hardening', ['10.0.0.9']),
+    )
+    assert isolated_db.find_related_reports(current) == []
+
+
+def test_find_related_reports_multi_host_dedup_suffix_is_not_identity(isolated_db):
+    """The '#2' dedup suffix exists only in the by_host key, not in the
+    params - identity comes from the params' own 'host' value, so a
+    repeated host still matches by its real address."""
+    isolated_db.save_report(_report(
+        '2026-01-01 00:00:00',
+        {'ssh_hardening': {'10.0.0.1': {'host': '10.0.0.1'}, '10.0.0.1#2': {'host': '10.0.0.1'}}},
+    ))
+    current = _report('2026-01-02 00:00:00', {'ssh_hardening': {'host': '10.0.0.1'}})
+    assert len(isolated_db.find_related_reports(current)) == 1
+
+
+# ===========================================================================
+# recent_report_data() - Trend Layer Contract v1 read path
+# ===========================================================================
+
+def test_recent_report_data_most_recent_first_full_reports(isolated_db):
+    isolated_db.save_report(_report('2026-01-01 00:00:00', {'ping': {'target': 'a'}}))
+    isolated_db.save_report(_report('2026-01-03 00:00:00', {'ping': {'target': 'c'}}))
+    isolated_db.save_report(_report('2026-01-02 00:00:00', {'ping': {'target': 'b'}}))
+
+    data = isolated_db.recent_report_data()
+
+    assert [d['timestamp'] for d in data] == [
+        '2026-01-03 00:00:00', '2026-01-02 00:00:00', '2026-01-01 00:00:00',
+    ]
+    # full report, execution_context included (unlike find_related_reports)
+    assert data[0]['execution_context'] == {'ping': {'target': 'c'}}
+
+
+def test_recent_report_data_respects_window(isolated_db):
+    for day in range(1, 6):
+        isolated_db.save_report(_report(f'2026-01-0{day} 00:00:00', {}))
+
+    data = isolated_db.recent_report_data(window=2)
+
+    assert [d['timestamp'] for d in data] == ['2026-01-05 00:00:00', '2026-01-04 00:00:00']
+
+
+def test_recent_report_data_empty_db(isolated_db):
+    assert isolated_db.recent_report_data() == []
+
 # ===========================================================================
 # Secret params never stored or returned (SECURITY, 2026-09-27)
 #
@@ -453,3 +537,17 @@ def test_find_related_reports_still_matches_after_redaction(isolated_db):
     isolated_db.save_report(_report('2026-01-01 00:00:00', {'ssh_hardening': {'host': 'h', 'password': 'FAKE-TEST-PW'}}))
     current = _report('2026-01-02 00:00:00', {'ssh_hardening': {'host': 'h'}})
     assert len(isolated_db.find_related_reports(current)) == 1
+
+
+def test_recent_report_data_redacts_legacy_row_saved_before_fix(isolated_db):
+    """SECURITY (2026-09-27): the trend read path returns full reports too."""
+    legacy = _report('2026-01-01 00:00:00', {'ssh_hardening': {'host': 'h', 'password': 'FAKE-TEST-PW'}})
+    conn = isolated_db._conn()
+    conn.execute('INSERT INTO reports (timestamp, checks, total_time, data) VALUES (?,?,?,?)',
+                 (legacy['timestamp'], 'ssh_hardening', 0, json.dumps(legacy)))
+    conn.commit()
+
+    (data,) = isolated_db.recent_report_data()
+
+    assert data['execution_context'] == {'ssh_hardening': {'host': 'h'}}
+    assert 'FAKE-TEST-PW' not in json.dumps(data)
