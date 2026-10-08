@@ -71,8 +71,8 @@ input, and the result is code execution as the audit user.
   → `{'error': 'invalid systemd unit name'}` before connecting. The
   `systemctl status` line also gets `shlex.quote(unit)`.
 - `backup_check`: every directory must be an absolute path (start with `/`) →
-  otherwise a per-directory error, no command is run for it. `find` and `df`
-  use `shlex.quote(directory)` instead of `repr`.
+  otherwise the check returns one error listing the invalid entries, before
+  connecting. `find` and `df` use `shlex.quote(directory)` instead of `repr`.
 - MikroTik: `target_ip` must parse with `ipaddress.ip_address()` →
   otherwise `{'error': …}` before connecting (`capture.py`), a `RuntimeError`
   in the history-capture run (`history_capture.py`), and `save_settings()`
@@ -84,8 +84,9 @@ input, and the result is code execution as the audit user.
 - `base` and `lock_path` are passed through `shlex.quote()`.
 - `dpkg-query … {dpkg_name}` and `apt-cache show {dpkg_name}={version}` also
   get `shlex.quote()`. Their sources (dpkg names/versions, `uname -r`) are
-  constrained, so this is hardening only; package names made only of safe
-  characters come out unchanged, so existing command strings stay the same.
+  constrained, so this is hardening only. Names and versions made only of
+  shell-safe characters come out unchanged; a Debian version with `~`
+  (`1.30.2-1~noble`) is now sent in single quotes.
 
 ### D2. Preset rows saved before the fix
 
