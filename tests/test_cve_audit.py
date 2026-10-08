@@ -551,7 +551,7 @@ def test_dpkg_version_collection_failure_on_nonzero_non_one_exit():
 def test_get_package_origin_nginx_org_ppa():
     """The exact real-world case: nginx.org's own apt repo."""
     fake = FakeSSHExecutor(responses={
-        'apt-cache show nginx=1.30.2-1~noble': (_APT_SHOW_NGINX_PPA, ''),
+        "apt-cache show 'nginx=1.30.2-1~noble'": (_APT_SHOW_NGINX_PPA, ''),
     })
     assert _get_package_origin(fake, 'nginx', '1.30.2-1~noble') == 'nginx'
 
@@ -611,7 +611,7 @@ def test_get_package_origin_queries_by_exact_version_not_bare_name():
             return self.exact_responses.get(cmd, ('', ''))
 
     fake = _StrictFakeSSH({
-        'apt-cache show nginx=1.30.2-1~noble 2>/dev/null': (_APT_SHOW_NGINX_PPA, ''),
+        "apt-cache show 'nginx=1.30.2-1~noble' 2>/dev/null": (_APT_SHOW_NGINX_PPA, ''),
     })
     assert _get_package_origin(fake, 'nginx', '1.30.2-1~noble') == 'nginx'
 
@@ -1642,7 +1642,7 @@ def test_full_flow_osv_short_batch_reports_collection_error_not_ok(monkeypatch, 
         "dpkg-query -W -f='${Version}' nginx": '1.28.3-1~deb13u2',
         "dpkg-query -W -f='${Version}' openssh-client": '1:9.6p1-3',
         'nginx -v': ('nginx version: nginx/1.28.3', ''),
-        'apt-cache show nginx=1.28.3-1~deb13u2': ('Package: nginx\nOrigin: Debian\n', ''),
+        "apt-cache show 'nginx=1.28.3-1~deb13u2'": ('Package: nginx\nOrigin: Debian\n', ''),
         'ssh -V': ('OpenSSH_9.6p1 Debian-3', ''),
         'apt-cache show openssh-client=1:9.6p1-3': ('Package: openssh-client\nOrigin: Debian\n', ''),
         "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', '')

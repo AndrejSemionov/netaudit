@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from datetime import datetime, timedelta
 
 import httpx
@@ -166,7 +167,7 @@ def _dpkg_version(ssh: SSHExecutor, dpkg_name: str) -> tuple[str | None, bool]:
     version number doesn't line up with how Debian's own fixed-version
     ranges are expressed.
     """
-    out, code = run_command_with_exit_code(ssh, f"dpkg-query -W -f='${{Version}}' {dpkg_name} 2>/dev/null")
+    out, code = run_command_with_exit_code(ssh, f"dpkg-query -W -f='${{Version}}' {shlex.quote(dpkg_name)} 2>/dev/null")
     if code is None:
         return None, False
     out = out.strip()
@@ -220,7 +221,7 @@ def _get_package_origin(ssh: SSHExecutor, dpkg_name: str, version: str) -> str |
     domains (archive.ubuntu.com, deb.debian.org, ...), which incorrectly
     flagged mirror-sourced native packages as third-party.
     """
-    out, _ = ssh.run(f'apt-cache show {dpkg_name}={version} 2>/dev/null')
+    out, _ = ssh.run(f'apt-cache show {shlex.quote(f"{dpkg_name}={version}")} 2>/dev/null')
     for line in out.splitlines():
         line = line.strip()
         if line.startswith('Origin:'):
@@ -382,7 +383,10 @@ def collect_packages(ssh: SSHExecutor) -> list[dict]:
     wp_dir = out.strip()
     if wp_dir:
         base = wp_dir.rsplit('/wp-includes', 1)[0]
-        ver_out, _ = ssh.run(f"grep -m1 \"\\$wp_version = \" {base}/wp-includes/version.php 2>/dev/null")
+        # the path comes from the target: anyone who can create a directory
+        # under /var/www chooses it, so it is quoted (task 8)
+        version_php = shlex.quote(f'{base}/wp-includes/version.php')
+        ver_out, _ = ssh.run(f"grep -m1 \"\\$wp_version = \" {version_php} 2>/dev/null")
         ver = _parse_version(ver_out)
         if ver:
             packages.append({'name': 'wordpress', 'version': ver,
@@ -452,7 +456,8 @@ def collect_composer_packages(ssh: SSHExecutor) -> list[dict]:
     if not lock_path:
         return []
 
-    content, _ = ssh.run(f'cat {lock_path} 2>/dev/null')
+    # path from the target (any user who can write under /var/www or /home), quoted (task 8)
+    content, _ = ssh.run(f'cat {shlex.quote(lock_path)} 2>/dev/null')
     if not content.strip():
         return []
 

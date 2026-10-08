@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -44,6 +45,13 @@ except ImportError:
 # overall score is fetched from a second, plain-text invocation instead of
 # being recomputed from --json=short data.
 _OVERALL_RE = re.compile(r'Overall exposure level for [^:]+:\s*([\d.]+)\s+(\w+)')
+
+
+# systemd unit-name characters (ASCII letters, digits, ":-_.\\", "@" for
+# templates), at most 256 long. A leading "-" is refused: `unit` is passed to
+# systemctl and to systemd-analyze running as root, where it would be read
+# as an option (task 8, docs/research/preset_secrets_and_command_injection.md).
+_UNIT_NAME_RE = re.compile(r'[A-Za-z0-9:_.@\\][A-Za-z0-9:_.@\\-]{0,255}')
 
 
 @dataclass
@@ -176,6 +184,8 @@ def check_systemd_hardening(host='', user='root', port=22, key_path='', password
         return {'error': 'host not specified'}
     if not unit:
         return {'error': 'unit not specified'}
+    if not _UNIT_NAME_RE.fullmatch(unit):
+        return {'error': 'invalid systemd unit name'}
 
     try:
         ssh = SSHExecutor(host, user, port, key_path, password).connect()
@@ -189,7 +199,7 @@ def check_systemd_hardening(host='', user='root', port=22, key_path='', password
         # confirm the unit exists before running the full analysis, so a
         # typo'd unit name gives a clear error instead of a confusing
         # "0 directives found" result.
-        status_out, _ = ssh.run(f'systemctl status {unit} --no-pager 2>&1 | head -1')
+        status_out, _ = ssh.run(f'systemctl status {shlex.quote(unit)} --no-pager 2>&1 | head -1')
         if 'could not be found' in status_out or ('Unit ' in status_out and 'not found' in status_out):
             return {'error': f'unit {unit!r} not found on {host}'}
 

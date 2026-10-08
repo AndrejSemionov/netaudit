@@ -16,6 +16,9 @@ Applied at every boundary (a report may reach any of them unredacted):
 engine/streaming when the context is built, storage.save_report() as the last
 barrier before SQLite, storage.load_report() for rows saved before the fix
 (the DB itself is not rewritten), and ai_analyze() before the prompt.
+
+Saved Web presets hold the same params and get the same treatment
+(redact_preset_checks(): storage.preset_save() and presets_list()).
 """
 
 from __future__ import annotations
@@ -49,3 +52,20 @@ def redact_report(report: dict) -> dict:
             check_id: _redact_check_context(entry) for check_id, entry in ctx.items()
         }
     return out
+
+
+def _strip_secret_keys(value):
+    if isinstance(value, dict):
+        return {k: _strip_secret_keys(v) for k, v in value.items() if k not in SECRET_PARAM_NAMES}
+    if isinstance(value, list):
+        return [_strip_secret_keys(item) for item in value]
+    return value
+
+
+def redact_preset_checks(checks):
+    """Copy of a preset's check list with every secret key removed from any
+    dict inside it - flat `params`, each multi-host `instances[*]`, or
+    anything nested. Presets are a list of check items, but any JSON value is
+    accepted, so a malformed row read back from SQLite is stripped too. The
+    input is not modified."""
+    return _strip_secret_keys(checks)

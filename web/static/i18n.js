@@ -46,7 +46,7 @@ const I18N = {
     'preset.applied': 'Применён пресет: ',
     'preset.select.first': 'Сначала выбери проверки.',
     'preset.name.prompt': 'Название пресета:',
-    'preset.saved': 'Пресет «{name}» сохранён.',
+    'preset.saved': 'Пресет «{name}» сохранён (пароли не сохраняются).',
     'preset.delete': 'удалить',
     'preset.none': 'Пресетов пока нет. Собери набор на вкладке «Аудит» и нажми «Сохранить как пресет».',
     // настройки
@@ -357,7 +357,7 @@ const I18N = {
     'preset.applied': 'Preset applied: ',
     'preset.select.first': 'Select checks first.',
     'preset.name.prompt': 'Preset name:',
-    'preset.saved': 'Preset "{name}" saved.',
+    'preset.saved': 'Preset "{name}" saved (passwords are not saved).',
     'preset.delete': 'delete',
     'preset.none': 'No presets yet. Build a set on the "Audit" tab and click "Save as preset".',
     'settings.api': 'Anthropic API key',

@@ -22,7 +22,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from .redaction import redact_report
+from .redaction import redact_preset_checks, redact_report
 
 DB_PATH = Path.home() / '.netaudit' / 'netaudit.db'
 
@@ -511,12 +511,15 @@ def settings_all() -> dict:
 # ===========================================================================
 
 def preset_save(name: str, checks: list[dict]) -> int:
+    # presets never hold secret params (passwords): the last barrier for
+    # every caller, the Web UI leaves them out already
+    data = json.dumps(redact_preset_checks(checks), ensure_ascii=False)
     conn = _conn()
     cur = conn.execute(
         """INSERT INTO presets (name, checks, created_at) VALUES (?,?,?)
            ON CONFLICT(name) DO UPDATE SET checks=?""",
-        (name, json.dumps(checks, ensure_ascii=False), datetime.now().isoformat(),  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
-         json.dumps(checks, ensure_ascii=False)),
+        (name, data, datetime.now().isoformat(),  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
+         data),
     )
     conn.commit()
     return cur.lastrowid
@@ -525,7 +528,9 @@ def preset_save(name: str, checks: list[dict]) -> int:
 def presets_list() -> list[dict]:
     conn = _conn()
     rows = conn.execute('SELECT id, name, checks, created_at FROM presets ORDER BY name').fetchall()
-    return [{'id': r['id'], 'name': r['name'], 'checks': json.loads(r['checks']),
+    # rows saved before presets were redacted may still hold a password; the
+    # DB is rewritten only by the explicit scrub tool (scrub_legacy_secrets)
+    return [{'id': r['id'], 'name': r['name'], 'checks': redact_preset_checks(json.loads(r['checks'])),
              'created_at': r['created_at']} for r in rows]
 
 

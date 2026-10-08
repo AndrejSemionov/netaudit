@@ -1999,8 +1999,18 @@ async function applyPreset(id) {
   updateEstimate();
   setStatus(`${t('preset.applied')}${trPresetName(p.name)}`);
 }
+// Presets never hold passwords: password inputs are left out of a saved
+// preset (the server strips secret params too - storage.preset_save()).
+function withoutSecretParams(checks) {
+  return checks.map(c => {
+    const secret = new Set(Array.from(
+      document.querySelectorAll(`input[type=password][data-check="${c.id}"]`)).map(i => i.dataset.param));
+    const strip = p => Object.fromEntries(Object.entries(p).filter(([k]) => !secret.has(k)));
+    return c.instances ? { id: c.id, instances: c.instances.map(strip) } : { id: c.id, params: strip(c.params) };
+  });
+}
 async function saveCurrentAsPreset() {
-  const checks = getSelected();
+  const checks = withoutSecretParams(getSelected());
   if (!checks.length) { setStatus(t('preset.select.first')); return; }
   const name = prompt(t('preset.name.prompt'));
   if (!name) return;

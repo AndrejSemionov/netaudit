@@ -1,7 +1,9 @@
-"""Shared utilities: subprocess execution without shell=True, binary availability check, logging."""
+"""Shared utilities: subprocess execution without shell=True, binary availability check, logging,
+IP address check."""
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import shutil
 import subprocess  # nosec B404 - this module IS the shared safe-subprocess wrapper (never shell=True), see run_cmd() below
@@ -34,3 +36,14 @@ def run_cmd(cmd: list[str], timeout: int = 30, input_text: str | None = None) ->
 
 def missing_tools(required: list[str]) -> list[str]:
     return [t for t in required if not tool_available(t)]
+
+
+def is_ip_address(value: str) -> bool:
+    """True for one IPv4/IPv6 address as text, nothing else (no hostnames,
+    no surrounding spaces). Used before a value goes into a router command
+    (task 8: MikroTik target_ip)."""
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return True
