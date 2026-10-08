@@ -11,7 +11,7 @@ Console:
     netaudit.py run --quick --url https://example.com   - default site bundle
     netaudit.py run --quick --host 1.2.3.4 --user root  - default server bundle
     netaudit.py history                       - list reports
-    netaudit.py analyze <path>                 - AI analysis of a report (what to do)
+    netaudit.py analyze <report_id>            - AI analysis of a saved report (see history)
 
 Web:
     netaudit.py web                            - start the web UI on 127.0.0.1:8000
