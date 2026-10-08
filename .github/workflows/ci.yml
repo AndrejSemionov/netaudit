@@ -31,16 +31,14 @@ jobs:
       - name: Check syntax (compile all Python files)
         run: python -m compileall -q netaudit_pkg netaudit.py web tests
 
-      - name: Lint (ruff — errors and undefined names only)
-        run: |
-          pip install ruff
-          # E9/F only: syntax errors, undefined names, unused imports/variables.
-          # Deliberately not the full default ruff rule set (import sorting,
-          # blind-except, timezone-naive datetime, etc) - those are style
-          # preferences the codebase hasn't been migrated to yet, and running
-          # them here would make CI red for reasons unrelated to correctness.
-          # See the project's technical-debt roadmap for widening this later.
-          ruff check --select=E9,F netaudit_pkg netaudit.py web tests
+      - name: Lint (ruff — full default rule set of the pinned version)
+        # Ruff is pinned in requirements-dev.txt: its default rule set changes
+        # between releases, and an unpinned upgrade could turn CI red with no
+        # code change. Baseline for 1.0: zero findings. Every intentional
+        # exception is a point-in-place `# noqa: RULE - reason` (blind except
+        # at SSH/check boundaries, naive local timestamps the SQLite rows
+        # already use) - no rule is disabled globally.
+        run: ruff check netaudit_pkg netaudit.py web tests
 
       - name: Run tests
         run: python -m pytest tests/ -v
