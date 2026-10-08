@@ -46,7 +46,11 @@ git pull
 ```
 
 `deploy.sh` copies the changed files, runs the full test suite in
-`~/netaudit` and only then restarts and verifies the service.
+`~/netaudit` and only then restarts and verifies the service. Its last step
+requests `http://127.0.0.1:8000/api/checks` without credentials: if the
+service listens beyond localhost, NetAudit's built-in Basic Auth answers 401
+even to local requests, and that step fails after a successful restart - check
+by hand with `curl -u user:pass`.
 
 Hard-refresh the browser afterwards (Ctrl+Shift+R): the page is cached.
 
