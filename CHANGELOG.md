@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- sudo now runs the real command instead of `sh -c '<command>'` for the
+  Fail2Ban and firewall parts of `server_audit`, `systemd_hardening`, Logs
+  Audit reads of root-only files, and `aide_check`. Narrow `sudoers` rules for
+  one binary (including the Fail2Ban `status-wrapper` mode) now work without a
+  password. README "SSH and sudo" lists the exact commands.
+- When sudo refuses a command, the report shows sudo's own message. A host
+  where sudo refuses `fail2ban-client status` now reports `F2B-STAT-003`
+  ("status could not be confirmed even with sudo") instead of `F2B-STAT-001`
+  ("could not determine fail2ban status"); both are low. Trends show this
+  once, as one finding resolved and one new.
+- `aide_check` no longer reports "AIDE database initialized" when sudo refused
+  `aide --init` or the new database was not moved into place, and a refused
+  sudo is no longer reported as a missing database.
+- An encrypted SSH key that ssh-agent does not provide fails with an explicit
+  error. The SSH `password` field is labelled as the sudo password too.
+- Removed the unused `SSHExecutor.needs_sudo_password()`.
+
 ## 1.0.0 — 2026-10-08
 
 - Add deterministic history for state findings, server audit sections, and

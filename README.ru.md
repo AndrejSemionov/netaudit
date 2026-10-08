@@ -278,8 +278,9 @@ python3 netaudit.py run server_audit --host 1.2.3.4 --user root \
 
 Если на сервере `sudoers` разрешает не весь `fail2ban-client`, а только узкий скрипт-обёртку
 для чтения статуса (см. раздел «server_audit» выше — почему так делают и пример скрипта),
-переключись на `status-wrapper` — иначе раздел Fail2Ban в отчёте вернётся как `low: не удалось
-определить статус fail2ban` вместо реальных данных по jail:
+переключись на `status-wrapper` — иначе sudo откажет в `fail2ban-client`, и раздел Fail2Ban в
+отчёте вернётся как `low: fail2ban is installed, but status could not be confirmed even with sudo`
+(с сообщением sudo) вместо реальных данных по jail:
 
 ```bash
 python3 netaudit.py run server_audit --host 1.2.3.4 --user root \
@@ -297,10 +298,9 @@ ssh пользователь@1.2.3.4 'sudo -n /usr/local/bin/fail2ban-status-onl
 ```
 
 `exit=0` на первой команде → нужен `client` (по умолчанию, `--fail2ban_mode` можно вообще не
-указывать). `exit=0` только на второй → нужен `status-wrapper`. Если для этой проверки указан
-пароль (см. пример с паролем выше) — `fail2ban_mode` вообще не важен, оба режима дадут
-одинаковый результат, потому что `sudo -S` с реальным паролем не зависит от того, как настроен
-`sudoers`, в отличие от `sudo -n`.
+указывать). `exit=0` только на второй → нужен `status-wrapper`. Пароль заменяет только
+`NOPASSWD`: при полных правах sudo (`ALL`) работают оба режима, но правило на одну команду
+разрешает только её — с паролем или без. См. раздел «SSH и sudo» ниже.
 
 **AI-анализ** (нужен ключ Anthropic API, см. «С чего начать» выше) — добавь `--ai` к любому `run`:
 
@@ -411,12 +411,10 @@ export ANTHROPIC_API_KEY=sk-ant-...
       # /etc/sudoers.d/netaudit-fail2ban
       имя_пользователя ALL=(root) NOPASSWD: /usr/local/bin/fail2ban-status-only
       ```
-      **Важно:** если для этого сервера в форме проверки указан пароль (поле «Password (if not
-      using a key)»), то `fail2ban_mode` можно не трогать — с паролем оба режима работают
-      одинаково, потому что sudo использует пароль напрямую и не зависит от того, как настроен
-      `sudoers`. Разница между `client` и `status-wrapper` имеет значение только при подключении
-      **по SSH-ключу без пароля** — тогда используется `sudo -n`, и правильный режим должен
-      совпадать с тем, что реально разрешено в `sudoers` на конкретном сервере.
+      **Важно:** режим должен совпадать с тем, что разрешено в `sudoers` на этом сервере.
+      Пароль (поле «Пароль SSH (если без ключа) / пароль sudo») заменяет только `NOPASSWD`:
+      при полных правах sudo (`ALL`) работают оба режима, но правило только на обёртку
+      разрешает только обёртку — с паролем или без. См. раздел «SSH и sudo» ниже.
 - **firewall**: реальный разбор ufw/nftables/iptables, детект «фактически открыт» (ACCEPT без правил)
 - **MySQL/MariaDB**: слушает ли на 0.0.0.0 (доступ извне), bind-address в конфиге
 - **SSH hardening**: PermitRootLogin, PasswordAuthentication, PermitEmptyPasswords, порт, MaxAuthTries
@@ -751,6 +749,46 @@ web/
   app.py                            — FastAPI: /api/checks /api/run /api/status /api/analyze /api/history
   static/index.html                  — веб-интерфейс (одностраничный)
 ```
+
+## SSH и sudo
+
+SSH-проверки принимают два вида учётных данных:
+
+- `key_path` — закрытый ключ для входа по SSH. Поля для пароля ключа (passphrase) в NetAudit
+  нет: зашифрованный ключ работает, только если он уже загружен в ssh-agent (CLI). У
+  веб-службы под systemd агента нет, поэтому её учётной записи нужен незашифрованный ключ,
+  который может читать только она. Если зашифрованный ключ не пришёл из агента, проверка
+  завершается явной ошибкой «private key … is encrypted».
+- `password` («Пароль SSH (если без ключа) / пароль sudo») — пароль входа по SSH, когда ключ
+  не задан, и пароль sudo во всех случаях (`sudo -S`). Без него каждый вызов sudo идёт как
+  `sudo -n` (без запроса пароля).
+
+sudo запускает саму команду, а не shell, поэтому узкое правило `sudoers` на один бинарник
+работает. Эти сборщики выполняют под sudo ровно такие команды:
+
+| Проверка | Команды |
+|---|---|
+| `server_audit` → Fail2Ban | `fail2ban-client status`, `fail2ban-client status <jail>` (или скрипт-обёртка, `fail2ban_mode=status-wrapper`) |
+| `server_audit` → firewall | `ufw status`, `nft list ruleset`, `iptables -S` |
+| `systemd_hardening` | `systemd-analyze security <unit> --no-pager --json=short`, `systemd-analyze security <unit> --no-pager` |
+| Logs Audit (файлы журналов, доступные только root) | `tail -n <lines> <path>` (`lines` по умолчанию 200) |
+| `aide_check` | `test -f /var/lib/aide/aide.db`, `test -f /var/lib/aide/aide.db.gz`, `aide --config /etc/aide/aide.conf --check`; с `mode=init`: `aide --config /etc/aide/aide.conf --init`, `mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db` (или пара `.gz`) |
+
+Пример (редактировать через `visudo -f /etc/sudoers.d/netaudit`; пути к бинарникам проверить на
+целевом сервере через `command -v`):
+
+```
+audit ALL=(root) NOPASSWD: /usr/sbin/nft list ruleset, /usr/sbin/iptables -S, /usr/sbin/ufw status
+audit ALL=(root) NOPASSWD: /usr/bin/systemd-analyze security nginx.service --no-pager --json=short
+audit ALL=(root) NOPASSWD: /usr/bin/systemd-analyze security nginx.service --no-pager
+audit ALL=(root) NOPASSWD: /usr/bin/tail -n 200 /var/log/auth.log
+```
+
+Указывайте точные аргументы. `*` в правиле sudoers совпадает и с пробелами, поэтому
+`/usr/bin/tail -n * /var/log/auth.log` позволит читать и любой другой файл. Остальные
+SSH-проверки пока передают sudo строку команды для shell; им нужны полные права sudo (пароль
+или `NOPASSWD: ALL`). Если sudo отказал, в отчёте будет его собственное сообщение, например
+`sudo: a password is required`.
 
 ## Безопасность
 

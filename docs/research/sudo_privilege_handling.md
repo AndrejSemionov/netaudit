@@ -50,7 +50,7 @@ All references are to `main` @ `be1decc` (1.0.0).
   `password` is the SSH login password when there is no key, and the
   `sudo -S` password in every case. paramiko gets no `passphrase`. An
   encrypted key works only through ssh-agent (`allow_agent=True` when
-  `key_path` is set). The 18 checks label the field
+  `key_path` is set). The 17 SSH checks with a `key_path` label the field
   "Password (if not using a key)", which is wrong: with a key it is still
   the sudo password.
 - **Local probe** (this machine, sudo 1.9.15p5): `sudo -n -- /usr/bin/true`
@@ -181,8 +181,8 @@ that design (E3).
   (1) If the key is encrypted (`paramiko.PasswordRequiredException`), the
   connect error says: "private key is encrypted; load it into ssh-agent
   (CLI) or use an unencrypted key for the service account". (2) The
-  `password` label in the 18 checks (EN + RU) becomes "SSH password (no
-  key) / sudo password". (3) README/README.ru get a short "SSH and sudo"
+  `password` label in the 17 SSH checks (EN + RU) becomes "SSH password (if
+  no key) / sudo password". (3) README/README.ru get a short "SSH and sudo"
   section: when the password is used, and the exact argv each S2/S4
   collector runs under sudo, for scoped NOPASSWD rules.
 - **D2-B:** everything in D2-A plus a `key_passphrase` param (type
