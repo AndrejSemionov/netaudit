@@ -42,6 +42,7 @@ from dataclasses import dataclass
 
 from .ssh import SSHExecutor
 
+
 @dataclass
 class KernelConfig:
     """Structured facts read from `sysctl -a` (runtime effective values)

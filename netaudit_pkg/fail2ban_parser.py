@@ -76,7 +76,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 
 
@@ -187,7 +187,7 @@ def parse_fail2ban_line(line: str) -> Fail2BanEvent:
             int(match.group("minute")),
             int(match.group("second")),
             int(match.group("ms")) * 1000,
-            tzinfo=timezone.utc,
+            tzinfo=UTC,
         )
     except ValueError:
         return _unknown(line)
@@ -225,7 +225,7 @@ def parse_fail2ban_line(line: str) -> Fail2BanEvent:
                 int(found_match.group("mh")),
                 int(found_match.group("mmin")),
                 int(found_match.group("ms_")),
-                tzinfo=timezone.utc,
+                tzinfo=UTC,
             )
         except ValueError:
             return _envelope_event(Fail2BanEventType.UNKNOWN_MESSAGE)

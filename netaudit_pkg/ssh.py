@@ -248,7 +248,9 @@ class SSHExecutor:
         if installed is False - most commonly "not on the allowlist" or an apt
         failure.
         """
-        from .tools import TOOL_PACKAGES  # local import - avoids a circular import at module load time
+        from .tools import (
+            TOOL_PACKAGES,  # local import - avoids a circular import at module load time
+        )
 
         if self.is_tool_installed(tool):
             return True, None

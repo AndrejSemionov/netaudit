@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import shutil
 
+from . import checks  # noqa: F401  - importing registers the checks
 from .registry import registry
 from .utils import run_cmd, tool_available
-from . import checks  # noqa: F401  - importing registers the checks
 
 # Allowlist: tool -> apt package. Only these can be installed from the web UI,
 # whether locally (install_tool below) or on a remote host over SSH

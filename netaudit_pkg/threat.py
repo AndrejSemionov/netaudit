@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import ipaddress
 
-from .utils import run_cmd, tool_available
 from . import storage
+from .utils import run_cmd, tool_available
 
 # Known-good organizations/domains - their traffic is usually legitimate.
 KNOWN_GOOD_PATTERNS = [

@@ -30,7 +30,6 @@ from typing import Literal
 from .nginx_config_v2 import AddHeader, ListenEndpoint, ServerBlock
 from .nginx_v2_utils import has_nginx_variable
 
-
 # ===========================================================================
 # EffectiveValueResolver — ordinary cascading directives
 # (ssl_ciphers, client_max_body_size: both documented http/server/location
