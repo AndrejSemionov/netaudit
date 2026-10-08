@@ -46,10 +46,10 @@ def test_audit_nginx_server_tokens_off_no_finding():
     fake = FakeSSHExecutor(responses={
         'which nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
-        'nginx -T': ('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;\n'
+        'nginx -T': (('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;\n'
                      'add_header Strict-Transport-Security "max-age=1" always;\n'
                      'add_header X-Frame-Options DENY always;\n'
-                     'add_header X-Content-Type-Options nosniff always;', ''),
+                     'add_header X-Content-Type-Options nosniff always;'), ''),
     })
     result = audit_nginx(fake)
     titles = [f['title'] for f in result['findings']]
@@ -96,11 +96,11 @@ def test_audit_nginx_autoindex_on_detected():
     fake = FakeSSHExecutor(responses={
         'which nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
-        'nginx -T': ('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;\n'
+        'nginx -T': (('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;\n'
                      'add_header Strict-Transport-Security "max-age=1" always;\n'
                      'add_header X-Frame-Options DENY always;\n'
                      'add_header X-Content-Type-Options nosniff always;\n'
-                     'location /files {\n    autoindex on;\n}', ''),
+                     'location /files {\n    autoindex on;\n}'), ''),
     })
     result = audit_nginx(fake)
     titles = [f['title'] for f in result['findings']]
@@ -111,10 +111,10 @@ def test_audit_nginx_clean_config_gives_ok():
     fake = FakeSSHExecutor(responses={
         'which nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
-        'nginx -T': ('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;\n'
+        'nginx -T': (('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;\n'
                      'add_header Strict-Transport-Security "max-age=1" always;\n'
                      'add_header X-Frame-Options DENY always;\n'
-                     'add_header X-Content-Type-Options nosniff always;', ''),
+                     'add_header X-Content-Type-Options nosniff always;'), ''),
     })
     result = audit_nginx(fake)
     assert len(result['findings']) == 1

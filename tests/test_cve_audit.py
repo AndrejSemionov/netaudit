@@ -580,8 +580,8 @@ def test_get_package_origin_mirror_sourced_native_package_still_says_ubuntu():
     server using this exact mirror."""
     fake = FakeSSHExecutor(responses={
         'apt-cache show openssh-client=1:9.6p1-3ubuntu13.18': (
-            'Package: openssh-client\nOrigin: Ubuntu\n'
-            'Original-Maintainer: Debian OpenSSH Maintainers <debian-ssh@lists.debian.org>\n',
+            ('Package: openssh-client\nOrigin: Ubuntu\n'
+            'Original-Maintainer: Debian OpenSSH Maintainers <debian-ssh@lists.debian.org>\n'),
             ''),
     })
     assert _get_package_origin(fake, 'openssh-client', '1:9.6p1-3ubuntu13.18') == 'Ubuntu'

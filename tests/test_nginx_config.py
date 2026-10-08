@@ -201,8 +201,8 @@ def test_collect_full_config(fake_ssh):
     fake_ssh.responses = {
         'which nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx version: nginx/1.24.0', ''),
-        'nginx -T': ('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;\n'
-                     'ssl_certificate /etc/nginx/cert.pem;', ''),
+        'nginx -T': (('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;\n'
+                     'ssl_certificate /etc/nginx/cert.pem;'), ''),
     }
     cfg = collect_nginx_config(fake_ssh)
     assert cfg.installed is True
