@@ -16,7 +16,7 @@ import socket
 import ssl
 
 from ..registry import register
-from ..findings import finding as _finding
+from ..findings import finding as _finding, subject_id
 from ..utils import run_cmd, tool_available
 from ..ssh import SSHExecutor, HostKeyMismatchError
 from ..ssh_config import collect_ssh_config
@@ -284,10 +284,11 @@ def audit_fail2ban(ssh: SSHExecutor, fail2ban_mode: str = 'client') -> dict:
         # below, which is unchanged from the pre-existing behavior.
         return {'installed': False,
                 'findings': [_finding('medium', 'fail2ban is not installed',
-                                      'no brute-force protection for SSH/web — recommended to install')]}
+                                      'no brute-force protection for SSH/web — recommended to install',
+                                      id='F2B-INST-001')]}
     if binary_verdict == 'UNKNOWN':
         findings.append(_finding('low', 'could not determine whether fail2ban is installed',
-                                 binary_ctx['reason'], requires_manual_verification=True))
+                                 binary_ctx['reason'], requires_manual_verification=True, id='F2B-INST-002'))
         # Deliberately falls through to still attempt the status/jail
         # checks below - collect_fail2ban_config() still attempts
         # status_sudo whenever binary_check isn't confirmed NOT_PRESENT
@@ -298,7 +299,7 @@ def audit_fail2ban(ssh: SSHExecutor, fail2ban_mode: str = 'client') -> dict:
 
     if status_verdict == 'UNKNOWN':
         findings.append(_finding('low', 'could not determine fail2ban status',
-                                 status_ctx['reason'], requires_manual_verification=True))
+                                 status_ctx['reason'], requires_manual_verification=True, id='F2B-STAT-001'))
         return {'installed': True, 'jails': [], 'findings': findings}
 
     if status_verdict == 'PARSE_FAILURE':
@@ -306,6 +307,7 @@ def audit_fail2ban(ssh: SSHExecutor, fail2ban_mode: str = 'client') -> dict:
             'low', 'fail2ban status returned but could not be parsed',
             f"unrecognized output (no 'Jail list:' line found): {status_ctx['raw_snippet']!r}",
             requires_manual_verification=True,
+            id='F2B-STAT-002',
         ))
         return {'installed': True, 'jails': [], 'findings': findings}
 
@@ -316,7 +318,8 @@ def audit_fail2ban(ssh: SSHExecutor, fail2ban_mode: str = 'client') -> dict:
         title = ('fail2ban is installed, but status could not be confirmed even with sudo'
                  if status_verdict == 'ACCESS_DENIED' else
                  'fail2ban status command failed')
-        findings.append(_finding('low', title, detail, requires_manual_verification=True))
+        control = 'F2B-STAT-003' if status_verdict == 'ACCESS_DENIED' else 'F2B-STAT-004'
+        findings.append(_finding('low', title, detail, requires_manual_verification=True, id=control))
         return {'installed': True, 'jails': [], 'findings': findings}
 
     # status_verdict == 'SUCCESS' from here on.
@@ -354,7 +357,8 @@ def audit_fail2ban(ssh: SSHExecutor, fail2ban_mode: str = 'client') -> dict:
             jail_results.append({'jail': je.name, 'currently_banned': None, 'total_banned': None})
 
     if not any('ssh' in j.lower() for j in jail_names):
-        findings.append(_finding('medium', 'no jail for SSH', "SSH isn't protected against brute-force"))
+        findings.append(_finding('medium', 'no jail for SSH', "SSH isn't protected against brute-force",
+                                 id='F2B-JAIL-001'))
 
     if unknown_jails:
         # Partial per-jail collection - never reported as 'ok', even
@@ -371,6 +375,7 @@ def audit_fail2ban(ssh: SSHExecutor, fail2ban_mode: str = 'client') -> dict:
             f'(could not query: {", ".join(unknown_jails)}); '
             f'total confirmed bans: {total_banned}',
             requires_manual_verification=True,
+            id='F2B-JAIL-002',
         ))
     else:
         findings.append(_finding('ok', f'active jails: {len(jail_names)}', f'total bans: {total_banned}'))
@@ -551,10 +556,10 @@ def audit_firewall(ssh: SSHExecutor) -> dict:
     if ufw_verdict == 'ACTIVE':
         findings.append(_finding('ok', 'ufw is active'))
     elif ufw_verdict == 'INACTIVE':
-        findings.append(_finding('high', 'ufw is installed but disabled'))
+        findings.append(_finding('high', 'ufw is installed but disabled', id='FW-UFW-001'))
     elif ufw_verdict == 'UNKNOWN':
         findings.append(_finding('low', 'could not determine ufw status', ufw_ctx['reason'],
-                                  requires_manual_verification=True))
+                                  requires_manual_verification=True, id='FW-UFW-002'))
     # NOT_PRESENT produces no finding - ufw simply isn't on this host.
 
     # --- nftables ---
@@ -575,10 +580,12 @@ def audit_firewall(ssh: SSHExecutor) -> dict:
                 'the configuration may not have been loaded (service not started/reloaded, '
                 'syntax error, or a stale/unused file)',
                 requires_manual_verification=True,
+                id='FW-NFT-001',
             ))
         else:
             findings.append(_finding('low', 'nftables: no rules loaded and no config file found',
-                                      'live ruleset is empty and no readable nftables config file was found'))
+                                      'live ruleset is empty and no readable nftables config file was found',
+                                      id='FW-NFT-002'))
     else:  # LIVE_UNKNOWN
         detail = nft_ctx['reason']
         if nft_ctx['config_readable']:
@@ -586,7 +593,7 @@ def audit_firewall(ssh: SSHExecutor) -> dict:
                        f"~{nft_ctx['config_rule_lines']} rule lines, but this does NOT confirm "
                        'those rules are actually loaded - see live ruleset collection failure above)')
         findings.append(_finding('low', 'could not determine nftables live ruleset state', detail,
-                                  requires_manual_verification=True))
+                                  requires_manual_verification=True, id='FW-NFT-003'))
 
     # --- iptables ---
     ipt_verdict, ipt_ctx = _iptables_verdict(evidence)
@@ -594,13 +601,14 @@ def audit_firewall(ssh: SSHExecutor) -> dict:
         reason = ('explicit unconditional ACCEPT rule' if ipt_ctx.get('unconditional_accept')
                   else 'no filtering rules')
         findings.append(_finding('high', 'iptables INPUT is effectively open',
-                                 f'policy {ipt_ctx["policy"]}, {reason} — everything is allowed'))
+                                 f'policy {ipt_ctx["policy"]}, {reason} — everything is allowed',
+                                 id='FW-IPT-001'))
     elif ipt_verdict == 'FILTERED':
         findings.append(_finding('ok', 'iptables: INPUT chain is filtered',
                                  f'policy {ipt_ctx["policy"]}, {ipt_ctx["rule_count"]} rule(s)'))
     else:  # UNKNOWN
         findings.append(_finding('low', 'could not determine iptables status', ipt_ctx['reason'],
-                                  requires_manual_verification=True))
+                                  requires_manual_verification=True, id='FW-IPT-002'))
 
     return {'findings': findings}
 
@@ -819,7 +827,7 @@ def audit_sql(ssh: SSHExecutor) -> dict:
     if presence == 'UNKNOWN':
         findings.append(_finding('low', 'could not determine whether MySQL/MariaDB is installed',
                                  f"mysql: {presence_ctx['mysql']}, mariadb: {presence_ctx['mariadb']}",
-                                 requires_manual_verification=True))
+                                 requires_manual_verification=True, id='SQL-INST-001'))
         # Deliberately falls through to still check listener/bind-address
         # below - a :3306 listener or an exposed bind-address is still
         # worth surfacing even if we can't confirm which binary owns it.
@@ -833,10 +841,11 @@ def audit_sql(ssh: SSHExecutor) -> dict:
             'high', 'MySQL is listening on a non-loopback address',
             f"addresses: {', '.join(listener_ctx['addresses'])} — reachable beyond localhost; "
             'restrict with bind-address unless external access is genuinely needed',
+            id='SQL-NET-001',
         ))
     elif listener_verdict == 'UNKNOWN':
         findings.append(_finding('low', 'could not determine MySQL listener state', listener_ctx['reason'],
-                                 requires_manual_verification=True))
+                                 requires_manual_verification=True, id='SQL-NET-002'))
     # NOT_LISTENING produces no finding - confirmed not listening on 3306
     # is neither a problem nor proof of a safe configuration (may be
     # stopped, or listening on a non-default port) - see quality-audit
@@ -848,7 +857,7 @@ def audit_sql(ssh: SSHExecutor) -> dict:
         security = _sql_bind_address_security(bind_ctx['lines'])
         if security == 'EXPOSED':
             findings.append(_finding('high', 'bind-address in the MySQL config allows non-loopback connections',
-                                     '; '.join(bind_ctx['lines'])))
+                                     '; '.join(bind_ctx['lines']), id='SQL-BIND-001'))
         # SAFE bind-address config produces no separate finding here -
         # the listener check above already reports 'ok' for the actual
         # runtime state, which is the more meaningful fact; a second
@@ -864,7 +873,7 @@ def audit_sql(ssh: SSHExecutor) -> dict:
             detail += (f"; observed (possibly incomplete - other files may not have been readable): "
                       f"{bind_ctx['partial_stdout']}")
         findings.append(_finding('low', 'could not fully determine MySQL bind-address configuration', detail,
-                                 requires_manual_verification=True))
+                                 requires_manual_verification=True, id='SQL-BIND-002'))
     # NOT_FOUND produces no finding - see contract notes: absence of the
     # directive is neither SAFE nor EXPOSED on its own.
 
@@ -1030,6 +1039,20 @@ def check_server_audit(host='', user='root', port=22, key_path='', password='', 
 # External web audit (no server access)
 # ===========================================================================
 
+# Stable finding ids (docs/checks/finding_ids.md) - one control per header,
+# like audit_nginx()'s header_control_ids.
+WEB_MISSING_HEADER_IDS = {
+    'strict-transport-security': 'WEB-HDR-002',
+    'x-frame-options': 'WEB-HDR-003',
+    'x-content-type-options': 'WEB-HDR-004',
+    'content-security-policy': 'WEB-HDR-005',
+}
+WEB_TECH_HEADER_IDS = {
+    'x-powered-by': 'WEB-HDR-006',
+    'x-aspnet-version': 'WEB-HDR-007',
+    'x-aspnetmvc-version': 'WEB-HDR-008',
+}
+
 SENSITIVE_PATHS = [
     '/.git/config', '/.env', '/wp-config.php.bak', '/wp-config.php~',
     '/.htaccess', '/server-status', '/phpinfo.php', '/.svn/entries',
@@ -1073,11 +1096,12 @@ def _audit_cookies(cookie_lines: list[str]) -> list[dict]:
             missing.append('SameSite')
         elif samesite_val == 'none' and 'secure' not in lower:
             findings.append(_finding('high', f'cookie "{name}": SameSite=None without Secure',
-                                      'the cookie is sent in cross-site requests and is accessible over non-HTTPS'))
+                                      'the cookie is sent in cross-site requests and is accessible over non-HTTPS',
+                                      id=subject_id('WEB-COOKIE-001', name)))
         if missing:
             sev = 'high' if 'HttpOnly' in missing and 'Secure' in missing else 'medium'
             findings.append(_finding(sev, f'cookie "{name}": missing flag(s) {", ".join(missing)}',
-                                      line[:120]))
+                                      line[:120], id=subject_id('WEB-COOKIE-002', name)))
     return findings
 
 def _audit_cors(base: str) -> list[dict]:
@@ -1096,10 +1120,12 @@ def _audit_cors(base: str) -> list[dict]:
         acao_val = acao_m.group(1).strip()
         if acao_val == '*' and acac:
             findings.append(_finding('high', 'CORS: Allow-Origin=* together with Allow-Credentials=true',
-                                      'per spec, browsers should reject this, but broken proxies/older clients might let it through — fix the config explicitly'))
+                                      'per spec, browsers should reject this, but broken proxies/older clients might let it through — fix the config explicitly',
+                                      id='WEB-CORS-001'))
         elif acao_val == fake_origin:
             findings.append(_finding('high', 'CORS: the server reflects any Origin back',
-                                      f'responded with Allow-Origin: {acao_val} to a fake Origin — any site can read responses as the user'))
+                                      f'responded with Allow-Origin: {acao_val} to a fake Origin — any site can read responses as the user',
+                                      id='WEB-CORS-002'))
     return findings
 
 def _audit_error_page(base: str) -> list[dict]:
@@ -1123,7 +1149,8 @@ def _audit_error_page(base: str) -> list[dict]:
     for label, needles in signals.items():
         if any(n in lower for n in needles):
             findings.append(_finding('medium', f'verbose error page: looks like {label}',
-                                      f'the error page at {probe_path} exposes internal details — turn off debug mode in production'))
+                                      f'the error page at {probe_path} exposes internal details — turn off debug mode in production',
+                                      id='WEB-ERR-001'))
             break  # one finding is enough, don't duplicate per signal
     return findings
 
@@ -1150,16 +1177,17 @@ def check_web_security_external(url='https://example.com') -> dict:
         hl = head.lower()
         server_m = re.search(r'server:\s*(.+)', head, re.IGNORECASE)
         if server_m and re.search(r'\d+\.\d+', server_m.group(1)):
-            findings.append(_finding('low', 'the server discloses its version', f'Server: {server_m.group(1).strip()}'))
+            findings.append(_finding('low', 'the server discloses its version', f'Server: {server_m.group(1).strip()}',
+                                     id='WEB-HDR-001'))
         for hdr, sev in [('strict-transport-security', 'medium'), ('x-frame-options', 'low'),
                          ('x-content-type-options', 'low'), ('content-security-policy', 'low')]:
             if hdr not in hl:
-                findings.append(_finding(sev, f'missing header {hdr}'))
+                findings.append(_finding(sev, f'missing header {hdr}', id=WEB_MISSING_HEADER_IDS[hdr]))
         for hdr in ('x-powered-by', 'x-aspnet-version', 'x-aspnetmvc-version'):
             m = re.search(rf'^{hdr}:\s*(.+)$', head, re.IGNORECASE | re.MULTILINE)
             if m:
                 findings.append(_finding('low', f'header {hdr} discloses the technology',
-                                          m.group(1).strip()))
+                                          m.group(1).strip(), id=WEB_TECH_HEADER_IDS[hdr]))
         findings.extend(_audit_cookies(_parse_set_cookie_headers(head)))
     else:
         head = ''
@@ -1176,7 +1204,7 @@ def check_web_security_external(url='https://example.com') -> dict:
         if _check_tls_version(hostname, 'TLS 1.1', ssl.PROTOCOL_TLSv1_1):
             old_tls.append('TLS 1.1')
     if old_tls:
-        findings.append(_finding('high', 'outdated TLS versions are supported', ', '.join(old_tls)))
+        findings.append(_finding('high', 'outdated TLS versions are supported', ', '.join(old_tls), id='WEB-TLS-001'))
 
     # sensitive paths
     exposed = []
@@ -1187,7 +1215,7 @@ def check_web_security_external(url='https://example.com') -> dict:
             if out.strip() == '200':
                 exposed.append(path)
     if exposed:
-        findings.append(_finding('high', 'sensitive paths are exposed', ', '.join(exposed)))
+        findings.append(_finding('high', 'sensitive paths are exposed', ', '.join(exposed), id='WEB-PATH-001'))
 
     if not findings:
         findings.append(_finding('ok', 'no external issues found'))

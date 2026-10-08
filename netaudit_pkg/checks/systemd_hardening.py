@@ -23,7 +23,7 @@ import shlex
 import uuid
 from dataclasses import dataclass
 
-from ..findings import finding as _finding
+from ..findings import finding as _finding, subject_id
 from ..registry import register
 from ..ssh import HostKeyMismatchError, SSHExecutor
 
@@ -168,6 +168,7 @@ def _to_findings(parsed: dict, unit: str) -> list[dict]:
         findings.append(_finding(
             severity, f'{name} not restricted',
             f'{desc} (exposure weight {exposure}) — unit: {unit}',
+            id=subject_id('SYS-SBX-001', unit, name),
         ))
     if not findings:
         findings.append(_finding('ok', f'systemd sandboxing for {unit} looks reasonably hardened'))
@@ -270,6 +271,7 @@ def check_systemd_hardening(host='', user='root', port=22, key_path='', password
                 f"systemd-analyze security's plain-text output did not contain a recognized "
                 f"'Overall exposure level' line: {text_result.stdout.strip()[:200]!r}",
                 requires_manual_verification=True,
+                id=subject_id('SYS-SCORE-001', unit),
             ))
     else:
         # This second call failing does NOT invalidate the per-directive
@@ -284,6 +286,7 @@ def check_systemd_hardening(host='', user='root', port=22, key_path='', password
             f'the plain-text systemd-analyze security call {reason} - per-directive findings '
             'above are still based on the successful JSON call and remain valid',
             requires_manual_verification=True,
+            id=subject_id('SYS-SCORE-002', unit),
         ))
 
     counts = {'high': 0, 'medium': 0, 'low': 0, 'ok': 0}
