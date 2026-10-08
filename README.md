@@ -209,6 +209,14 @@ python3 netaudit.py trend ssh_hardening 10.0.0.1   # how one object changed over
 python3 netaudit.py install <tool>       # install a missing tool (nmap, tshark, ...)
 ```
 
+`trend` reads saved reports from `~/.netaudit/netaudit.db`. For state checks it
+compares stable finding IDs; a finding that disappeared from an area the latest
+run could not verify is shown as **not evaluated**, rather than resolved.
+`ssh_auth_audit`, `nginx_logs_audit`, `kern_log_audit`, and
+`fail2ban_logs_audit` show bounded log observations only. Their counts can
+change when the collected slice changes, so no remediation is inferred from a
+lower count. The web **Trends** tab shows the same saved history.
+
 ### Common examples
 
 Every check takes its params as `--key value` after the check ID(s). `netaudit.py list` shows
@@ -484,6 +492,18 @@ introduced once a third independent source shows an actual need for one, not pre
   explicit confirmation ("yes — modify the target system") before they run, in both the CLI
   and the web UI. Without it, the check reports what it would have done and stops.
 - The Anthropic API key is read from an environment variable / local DB, never stored in code or reports.
+- New reports remove SSH password parameters before storage or AI analysis;
+  old reports are redacted when read. Existing SQLite files and older backups
+  may still contain passwords. To inspect an existing database without
+  changing it, run:
+
+  ```bash
+  python3 -m netaudit_pkg.scrub_legacy_secrets --database "$HOME/.netaudit/netaudit.db"
+  ```
+
+  The separate `--apply` mode requires an explicit backup path. Review the
+  [scrub contract](docs/research/legacy_secret_scrub.md) before using it on a
+  database that contains real reports.
 
 ## Support the project
 
