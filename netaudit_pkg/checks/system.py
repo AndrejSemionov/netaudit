@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json as _json
 import socket
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ..registry import register
 from ..ssh import HostKeyMismatchError, SSHExecutor
@@ -74,7 +74,7 @@ def check_performance() -> dict:
     mem = psutil.virtual_memory()
     return {'cpu_pct': psutil.cpu_percent(interval=1), 'cpu_cores': psutil.cpu_count(),
             'ram_total_gb': round(mem.total / 1e9, 1), 'ram_used_pct': mem.percent, 'disks': disks,
-            'boot_time': datetime.fromtimestamp(psutil.boot_time(), tz=timezone.utc).isoformat()}
+            'boot_time': datetime.fromtimestamp(psutil.boot_time(), tz=UTC).isoformat()}
 
 
 REMOTE_CHECKS = {

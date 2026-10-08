@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 
@@ -60,7 +60,7 @@ def _parse_crtsh_date(s: str) -> datetime | None:
         return None
     for fmt in ('%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M:%S.%f'):
         try:
-            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+            return datetime.strptime(s, fmt).replace(tzinfo=UTC)
         except ValueError:
             continue
     return None
@@ -100,7 +100,7 @@ def check_cert_transparency(domain: str = 'example.com', expected_issuer_contain
                 'summary': {'high': 0, 'medium': 0, 'low': 0, 'ok': 1},
                 'note': 'no certificates found — either the domain doesn\'t use HTTPS, or it\'s not in the CT logs yet'}
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     findings = []
 
     # ---- subdomains: collect unique hosts, flag "interesting" ones by keyword ----
