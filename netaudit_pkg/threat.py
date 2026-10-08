@@ -128,7 +128,7 @@ def enrich_asn(ip: str) -> dict:
     org = country = None
     for line in out.splitlines():
         l = line.lower()
-        if org is None and (l.startswith('orgname:') or l.startswith('org-name:') or l.startswith('organization:') or l.startswith('descr:')):
+        if org is None and l.startswith(('orgname:', 'org-name:', 'organization:', 'descr:')):
             org = line.split(':', 1)[1].strip()
         if country is None and l.startswith('country:'):
             country = line.split(':', 1)[1].strip()

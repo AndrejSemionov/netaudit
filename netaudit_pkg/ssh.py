@@ -92,7 +92,7 @@ class SSHExecutor:
         self.key_path = key_path
         self.password = password
         self.timeout = timeout
-        self.client: 'paramiko.SSHClient | None' = None
+        self.client: paramiko.SSHClient | None = None
         # Used only by needs_sudo_password() (unchanged this pass - see
         # that method's docstring and project session notes for why its
         # own generic-probe contract is being reconsidered separately).
@@ -100,7 +100,7 @@ class SSHExecutor:
         # docstring for why a session-level capability cache was removed.
         self._no_password_sudo: bool | None = None
 
-    def connect(self) -> 'SSHExecutor':
+    def connect(self) -> SSHExecutor:
         client = paramiko.SSHClient()
         # load whatever hosts NetAudit has already trusted, so a repeat
         # connection to a known host verifies strictly instead of re-TOFU'ing
@@ -129,7 +129,7 @@ class SSHExecutor:
         self.client = client
         return self
 
-    def __enter__(self) -> 'SSHExecutor':
+    def __enter__(self) -> SSHExecutor:
         return self.connect()
 
     def __exit__(self, exc_type, exc_val, exc_tb):

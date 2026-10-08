@@ -8,8 +8,9 @@ Nothing else needs to change — not the CLI, not the web, not the UI.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 # What a check actually does to the target, in increasing order of consequence.
 # This isn't decoration - it's meant to let the CLI/web UI warn appropriately

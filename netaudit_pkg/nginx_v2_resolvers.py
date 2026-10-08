@@ -62,7 +62,7 @@ class EffectiveValue:
 
     value: str | None
     source: Literal['explicit', 'nginx-default', 'absent']
-    level: Literal['location', 'server', 'http', 'default', None]
+    level: Literal['location', 'server', 'http', 'default'] | None
     explicit: bool
     has_variable: bool
 
@@ -293,9 +293,7 @@ def _is_exact_server_name(name: str) -> bool:
         return False
     if '*' in name:
         return False
-    if name.startswith('.'):
-        return False
-    return True
+    return not name.startswith('.')
 
 
 @dataclass(frozen=True)

@@ -336,7 +336,7 @@ def test_compute_trend_no_latest_change_with_fewer_than_two_good_snapshots():
 # trend_for() / list_units() - storage-backed
 # ===========================================================================
 
-from netaudit_pkg.trends import list_units, trend_for  # noqa: E402
+from netaudit_pkg.trends import list_units, trend_for
 
 
 def _ssh_report(ts, host, findings, score=None):
