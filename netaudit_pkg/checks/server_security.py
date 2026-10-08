@@ -61,7 +61,8 @@ def audit_nginx(ssh: SSHExecutor) -> dict:
         return {'installed': False}
     if not cfg.readable:
         return {'installed': True, 'version': cfg.version,
-                'findings': [_finding('low', 'no access to the config', 'nginx -T requires root')]}
+                'findings': [_finding('low', 'no access to the config', 'nginx -T requires root',
+                                         requires_manual_verification=True)]}
 
     findings = []
 
@@ -933,7 +934,7 @@ def audit_ssh_hardening(ssh: SSHExecutor) -> dict:
     """
     cfg = collect_ssh_config(ssh)
     if not cfg.readable:
-        return {'findings': [_finding('low', 'no access to sshd_config')]}
+        return {'findings': [_finding('low', 'no access to sshd_config', requires_manual_verification=True)]}
 
     findings = []
 

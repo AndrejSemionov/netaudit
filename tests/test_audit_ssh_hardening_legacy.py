@@ -86,8 +86,11 @@ def _ssh(conf: str) -> FakeSSHExecutor:
 def test_current_behavior_unreadable_config_returns_low_finding():
     ssh = FakeSSHExecutor(responses={'cat /etc/ssh/sshd_config': ('', '')})
     result = audit_ssh_hardening(ssh)
+    # trend layer v1.2 (2a.4): an unreadable config "could not evaluate",
+    # so the finding now also carries requires_manual_verification
     assert result == {'findings': [{'severity': 'low', 'title': 'no access to sshd_config',
-                                     'detail': '', 'confidence': 'high'}]}
+                                     'detail': '', 'confidence': 'high',
+                                     'requires_manual_verification': True}]}
 
 
 def test_current_behavior_unreadable_config_has_no_other_keys():
