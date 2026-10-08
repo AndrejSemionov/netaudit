@@ -116,3 +116,14 @@ def test_event_points_show_their_observation_label():
     body = html[html.index('function renderTrendUnit('):]
     body = body[:body.index('\n}\n')]
     assert 'p.observation' in body and '.label' in body
+
+
+def test_event_points_show_collection_metadata():
+    """GPT/Codex review of 2c (pass 1): contract 2d asks for the available
+    source/coverage/event counts/limits next to each observation."""
+    html = INDEX.read_text(encoding='utf-8')
+    body = html[html.index('function renderTrendUnit('):]
+    body = body[:body.index('\n}\n')]
+    for field in ('source', 'access_coverage', 'error_coverage', 'events_parsed',
+                  'events_total', 'requested_lines', 'window_hours'):
+        assert field in body, field
