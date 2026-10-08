@@ -1,6 +1,8 @@
 # Trend layer v1.2: server_audit, AI trend context, Web trends — contract proposal
 
-Status: **PROPOSED** (2026-10-08) — roadmap items 2a, 2b, 2c.
+Status: **PROPOSED rev.2** (2026-10-08) — roadmap items 2a, 2b, 2c. rev.2 answers
+GPT/Codex contract review pass 1 (`.ai/REVIEW.md`): exact-id anchor, strictly-before
+history, tri-state `not_evaluated`.
 Implementer: Claude. Reviewer: GPT/Codex. Approval: USER (before RED/GREEN).
 Builds on: `trend_layer_research_summary.md` (Contract v1/v1.1) and stays
 compatible with `event_observation_trends.md` (2d, GPT/Codex): this document
@@ -28,61 +30,81 @@ reads its `kind` field when present and never computes deltas for event checks.
 - **E4.** The Web UI has no trend view. Web reports carry `execution_context`
   since task 2, so the data exists.
 
-## 2a — `server_audit` in trends (`trends.py`, `server_security.py`)
+## 2a — `server_audit` in trends; "not evaluated" is not "resolved" (`trends.py`, `server_security.py`)
 
 1. `_snapshot()`: when a result has no top-level `findings` list and no
    `hardening.score`, but has `sections` (a dict whose values are dicts), the
-   snapshot uses the concatenation of each section's `findings` list, sections
-   in key order. Matched by shape, not by check id. If top-level `findings`
-   exist, they win and sections are ignored (no double counting).
-2. A snapshot gains `unverified`: the number of problem-severity findings with
-   `requires_manual_verification: true`, with or without `id`, for every check.
-   A point gains `unverified` (`None` for error/ambiguous points). `unverified`
-   joins the v1.1 fields compared for in-report ambiguity.
-3. `latest_change` gains one key, `unverified_in_latest` = `unverified` of its
-   `to` point. All existing keys and values are unchanged. Meaning: if it is
-   `> 0` and `resolved` is non-empty, a "resolved" id may be one that the latest
-   run could not evaluate.
-4. In `server_audit`, the two "no access" findings get
-   `requires_manual_verification=True`. Severity, title, detail and id
-   (none) stay the same. Adding ids to them is out of scope.
-5. CLI `netaudit trend <check> <value>`: when `unverified_in_latest > 0` and
-   `resolved` is non-empty, print one extra line:
-   `note: N finding(s) in the latest run could not be verified - "resolved" may mean "not evaluated"`.
-   `--json` carries the field only.
+   snapshot uses each section's `findings` list. Matched by shape, not by check
+   id. If top-level `findings` exist, they win and sections are ignored (no
+   double counting).
+2. **Scope.** Every problem finding belongs to a scope: its section name for a
+   sectioned result, otherwise one scope for the whole result. Internally the
+   snapshot keeps, per scope present in the result, its ids and the number of
+   problem findings with `requires_manual_verification: true` ("unverified",
+   with or without `id`). The public point gains `unverified` (total;
+   `None` for error/ambiguous points). The per-scope data takes part in the
+   v1.1 in-report ambiguity comparison.
+3. **Tri-state diff** (rev.2, GPT/Codex review 3). For an id present in the
+   previous compared run and absent from the latest one:
+   - `resolved` only if its scope is present in the latest result **and** has
+     zero unverified findings there;
+   - otherwise it goes to a new list **`not_evaluated`** and never into
+     `resolved`. For a flat check this is conservative: any unverified finding
+     in the latest run moves every missing id to `not_evaluated`.
+   `new` and `persisting` are unchanged. A false "new" only draws attention,
+   while a false "resolved" claims remediation. `counts_delta`/`total_delta`
+   keep their v1 meaning, which is the change in *observed* counts. CLI, Web
+   and AI must label them that way and not call them proven improvement.
+   `latest_change` = every v1.1 key with identical semantics + `not_evaluated`
+   (list). For runs without unverified findings every value is exactly as in v1.1.
+4. In `server_audit`, the two "no access" findings (nginx config, `sshd_config`)
+   get `requires_manual_verification=True`. Severity, title, detail and id
+   (none) stay the same. With rule 3, an unreadable nginx config moves every
+   `NGX-*` id of the previous run to `not_evaluated`.
+5. CLI `netaudit trend <check> <value>` prints `not evaluated: …` beside
+   `resolved: …` and labels counts as observed counts. `--json` carries the list.
 
-## 2b — deterministic trend in AI analysis; history excludes the run itself
+## 2b — deterministic trend in AI analysis; history and trend strictly before the analyzed run
 
-1. `find_related_reports(report, limit)` skips a candidate that is the same
-   run: same `timestamp` **and** same canonical `results`
-   (`json.dumps(..., sort_keys=True)` after a JSON round trip). The signature
-   does not change. Two distinct runs with the same second and identical
-   results add nothing as history, so skipping one is harmless.
-2. New pure-ish `trends.trend_context(report, window=200, max_units=20, max_ids=20) -> list[dict]`:
-   - for each unit of `snapshots_from_report(report)` whose snapshot has no
-     error, compute the trend over (snapshots of the latest `window` reports,
-     **excluding the same run** by rule 2b.1) + this report's snapshot, oldest
-     first;
-   - include the unit only if `latest_change` is not `None` **and** its `to`
-     point is this report. Errored current runs and first-ever runs are
-     excluded; event-observation units (2d: `latest_change=None`) never appear;
-   - item: `{check_id, key, value, latest_change}`. `new`/`resolved`/`persisting`
-     are each truncated to `max_ids`, and `<list>_omitted: int` is added only when truncated;
-   - at most `max_units` items, in the order of `snapshots_from_report`.
-3. `ai_analyze(report, language=None, history=None, trends=None)`: with a
-   non-empty `trends`, the prompt gains one block after history:
-   "Deterministic changes since the previous run of the same object (computed
-   by NetAudit, authoritative - do not recompute or contradict). `resolved` =
-   the finding id was not reported in the latest run; if
-   `unverified_in_latest > 0` it may mean not evaluated, not fixed." + JSON.
-   With `None` or `[]` the prompt is byte-for-byte unchanged (same rule as
-   `history`).
-4. Callers `cmd_run --ai`, `cmd_analyze`, `api_analyze` pass
-   `trends=trends.trend_context(report)`.
-5. Privacy: items carry check ids, the identity key/value already present in
+1. **Anchor** (rev.2, GPT/Codex review 1–2). "Before report R" uses the same
+   total order as the trend layer: `(timestamp, id)`.
+   - With R's DB id: candidates are rows with `timestamp < R.timestamp`, or
+     the same timestamp and `id < R.id`. This never includes R itself or any
+     later run, and it keeps a distinct run saved in the same second before R.
+   - Without an id (an inline report posted to `/api/analyze` with no
+     `_report_id`): only `timestamp < R.timestamp`. Limitation, documented:
+     same-second earlier runs are skipped, since content is not an identity.
+   - No timestamp and no id: no history, no trend.
+   Ids come from callers: `run --ai` → the id returned by `save_report()`;
+   `analyze <id>` → that id; `/api/analyze` → `report_id`, else an integer
+   `report['_report_id']` (Web runs have it), else none. 2c makes the Web UI
+   keep `_report_id` when it opens a report from history.
+2. `find_related_reports(report, limit=3, report_id=None)` applies the anchor.
+   AI History v1 thus stops returning R as its own history and never presents
+   a later run as "previous".
+3. New `trends.trend_context(report, report_id=None, window=200, max_units=20, max_ids=20) -> list[dict]`:
+   - history snapshots come from the latest `window` reports **before the
+     anchor** (new read helper `storage.report_data_before(...)`, redacted like
+     `recent_report_data()`), followed by R's own snapshots;
+   - a unit is included only if R's snapshot has no error and `latest_change`
+     compares a previous run → R. Errored R, first-ever runs and
+     event-observation units (2d: `latest_change=None`) are not included;
+   - item: `{check_id, key, value, latest_change}`. `new`/`resolved`/
+     `persisting`/`not_evaluated` are each truncated to `max_ids`, and
+     `<list>_omitted: int` is added only when truncated. At most `max_units` items.
+4. `ai_analyze(report, language=None, history=None, trends=None)`: a non-empty
+   `trends` adds one prompt block after history: "Changes since the previous
+   run of the same object, computed by NetAudit from saved reports.
+   `resolved`: the finding id is no longer reported and its area was fully
+   evaluated. `not_evaluated`: no longer reported, but the latest run could not
+   evaluate it, so do not treat it as fixed. `counts_delta`: change in observed
+   counts." + JSON. With `None`/`[]` the prompt is byte-for-byte unchanged.
+5. Callers `run --ai`, `analyze`, `/api/analyze` pass `history` and `trends`
+   built with the same anchor.
+6. Privacy: items carry check ids, the identity key/value already present in
    the report, finding ids, counts and timestamps; no params. A test asserts
    that a fake password in `execution_context` never reaches the prompt.
-6. **Ordering with 2d.** Before 2d lands, the four log checks still get
+7. **Ordering with 2d.** Before 2d lands, the four log checks still get
    state-style `latest_change`. 2b therefore merges **after** 2d, so the AI
    never receives "resolved" for log events.
 
@@ -97,8 +119,10 @@ UI, existing vanilla JS, both languages:
 - New **Trends** tab: table of units (check, key=value, runs, last run).
   Selecting a unit shows the points table (time, critical/high/medium/low,
   total, score, unverified, status ok/error/ambiguous) and, for state units,
-  the latest-change block (counts and score delta, new/resolved/persisting
-  ids, plus the 2a note when `unverified_in_latest > 0`).
+  the latest-change block (observed counts and score delta, new / resolved /
+  not evaluated / persisting ids).
+- Opening a report from history keeps its `_report_id`, so AI analysis of
+  that report uses the exact-id anchor (2b.1).
 - `kind == 'event_observation'` (2d): heading "Log observations", points only,
   no change block and no "resolved/new/improved" wording.
 - All data is rendered with `textContent` or escaped. Tested with a unit value `<img src=x onerror=…>`.
@@ -106,19 +130,26 @@ UI, existing vanilla JS, both languages:
 
 ## RED scenarios (before code)
 
-- 2a: `server_audit` snapshot = sum over sections, ids from all sections;
-  nginx unreadable in the latest run → `unverified_in_latest == 1`, NGX ids in
-  `resolved`; CLI prints the note; a state check without unverified findings
-  keeps every v1.1 value plus `unverified_in_latest == 0`; two in-report
-  instances differing only in `unverified` → ambiguous; top-level findings win
-  over sections.
-- 2b: self-exclusion in `run --ai`, `analyze <id>` and Web analyze (saved and
-  posted report); `trend_context`: previous→current change, current error
-  excluded, first run excluded, caps and `_omitted`; prompt unchanged without
-  trends, block present with trends; no fake password in the prompt.
+- 2a: `server_audit` snapshot = sum over sections, ids from all sections; top-level
+  findings win over sections. nginx readable with `NGX-CONF-001` → unreadable
+  next run: `NGX-CONF-001` in `not_evaluated`, **not** in `resolved`; another
+  section's id that disappeared while that section was fully evaluated is
+  `resolved`. A flat check with one unverified finding in the latest run → all
+  missing ids `not_evaluated`. A state check without unverified findings keeps
+  every v1.1 value, with `not_evaluated == []`. Two in-report instances that
+  differ only in unverified/scope → ambiguous. CLI prints `not evaluated`.
+- 2b: `find_related_reports` with id anchor excludes R and later runs: A→B→C,
+  analyzing B gives history [A] and trend A→B. Two distinct runs in one second
+  (B id 2, C id 3, same results): analyzing C keeps B. Inline report without id
+  uses strictly earlier timestamps. `run --ai`, `analyze <id>` and
+  `/api/analyze` (by `report_id`, by posted `_report_id`, inline) wire the
+  anchor. `trend_context` covers: errored R excluded, first run excluded, caps
+  and `_omitted`. The prompt is unchanged without trends and has the block with
+  them. No fake password in the prompt.
 - 2c: `/api/trends` and `/api/trend` 200/400/404 on the isolated DB; rendered
-  page contains the Trends tab; hostile unit value is not interpreted as HTML
-  (checked in the browser pane with a temporary HOME); event units show no change block.
+  page contains the Trends tab; a hostile unit value is not interpreted as HTML
+  (checked in the browser pane with a temporary HOME); event units show no
+  change block; a history-opened report is analyzed with its `_report_id`.
 
 ## Out of scope
 
