@@ -34,12 +34,17 @@ The count must match the history you expect (the web **History** page). If it
 says `unable to open database file` or shows far fewer reports, you are in the
 wrong account - stop here.
 
-Note the rollback point:
+For layout A, note the git rollback point:
 
 ```bash
-git -C ~/netaudit rev-parse HEAD             # A
-cat ~/netaudit/.deployed_manifest            # B: DEPLOYED_COMMIT
-cp -a ~/netaudit ~/netaudit-pre-1.0          # B only: runtime snapshot for rollback (step 5)
+git -C ~/netaudit rev-parse HEAD
+```
+
+For layout B, note `DEPLOYED_COMMIT` and save the runtime tree for rollback:
+
+```bash
+cat ~/netaudit/.deployed_manifest
+cp -a ~/netaudit ~/netaudit-pre-1.0
 ```
 
 Back up the database (both layouts):
