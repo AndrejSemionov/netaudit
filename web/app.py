@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 import threading
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -26,7 +27,19 @@ from netaudit_pkg import history_capture
 from netaudit_pkg import deployment
 from netaudit_pkg.web_auth import BasicAuthMiddleware, ensure_auth_configured
 
-app = FastAPI(title='NetAudit', version='2.0')
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # always starts, but only actually does something if enabled=true in
+    # settings (see history_capture.get_settings) - otherwise it just sleeps.
+    history_capture.start()
+    try:
+        yield
+    finally:
+        history_capture.stop()
+
+
+app = FastAPI(title='NetAudit', version='2.0', lifespan=_lifespan)
 
 # Real process start time - computed once at import (module load = uvicorn
 # process start), not per-request. Lets /api/health detect a stale process
@@ -42,13 +55,6 @@ import os as _os
 _WEB_HOST = _os.environ.get('NETAUDIT_WEB_HOST', '127.0.0.1')
 ensure_auth_configured(_WEB_HOST)
 app.add_middleware(BasicAuthMiddleware, host=_WEB_HOST)
-
-
-@app.on_event('startup')
-def _start_history_watcher() -> None:
-    # always starts, but only actually does something if enabled=true in
-    # settings (see history_capture.get_settings) - otherwise it just sleeps.
-    history_capture.start()
 
 _tasks: dict[str, dict] = {}
 _tasks_lock = threading.Lock()
