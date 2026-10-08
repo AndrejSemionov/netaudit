@@ -271,7 +271,8 @@ def test_compute_trend_points_in_given_order_with_totals():
     assert [p['timestamp'] for p in trend['points']] == ['t1', 't2']
     assert [p['total'] for p in trend['points']] == [3, 1]
     assert [p['hardening_score'] for p in trend['points']] == [60, 75]
-    assert set(trend['points'][0]) == {'timestamp', 'error', 'counts', 'total', 'hardening_score'}
+    # Contract v1.2 added 'unverified' (docs/research/trend_layer_v1_2_web_ai.md, 2a.2)
+    assert set(trend['points'][0]) == {'timestamp', 'error', 'counts', 'total', 'hardening_score', 'unverified'}
 
 
 def test_compute_trend_latest_change_deltas_and_id_diff():
