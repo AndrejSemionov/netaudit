@@ -223,7 +223,8 @@ def check_ssh_auth_audit(host='', user='root', port=22, key_path='', password=''
     elif selected_source == 'journal':
         selection_reason = 'journal source used (auth.log was not reported available by Discovery)'
     else:
-        selection_reason = 'no usable SSH authentication source (auth.log unavailable and journal collection failed)'
+        selection_reason = ('no usable SSH authentication source '
+                            '(auth.log unavailable or failed to collect, and journal collection failed)')
 
     report = {
         'host': host,
