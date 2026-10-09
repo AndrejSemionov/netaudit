@@ -130,7 +130,7 @@ def check_breach(emails: str = '', use_xposedornot: bool = True, use_hibp: bool 
         return {'error': 'HIBP is selected, but hibp_api_key is not set in settings'}
 
     results = []
-    counts = {'exposed': 0, 'clean': 0, 'error': 0}
+    counts = {'exposed': 0, 'clean': 0, 'error': 0, 'partial': 0}
     last_xon_call = 0.0
 
     for email in address_list:
@@ -171,6 +171,14 @@ def check_breach(emails: str = '', use_xposedornot: bool = True, use_hibp: bool 
             errs = [s['error'] for s in entry['sources'].values() if s.get('error')]
             entry['summary'] = '; '.join(errs)
             counts['error'] += 1
+        elif any_error:
+            # F5 (RA-06): one source answered "not found", another failed -
+            # partial coverage, not "not found in known breaches"
+            answered = [name for name, s in entry['sources'].items() if s['ok']]
+            failed = [f'{name}: {s["error"]}' for name, s in entry['sources'].items() if s.get('error')]
+            entry['severity'] = 'info'
+            entry['summary'] = f'not found via {", ".join(answered)}; not checked: {"; ".join(failed)}'
+            counts['partial'] += 1
         else:
             entry['severity'] = 'ok'
             entry['summary'] = 'not found in known breaches'

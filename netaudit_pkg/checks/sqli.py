@@ -132,13 +132,19 @@ def check_sql_injection(url='', authorization='no', mode='passive (input points 
 
     findings = []
     n_points = len(points['get_params']) + sum(len(f['inputs']) for f in points['forms'])
-    if n_points == 0:
-        findings.append({'severity': 'ok', 'title': 'no input points found',
-                         'detail': 'no GET params or form fields — injection is unlikely here'})
-    else:
+    if n_points:
         findings.append({'severity': 'low', 'title': f'input points found: {n_points}',
                          'detail': f"GET params: {', '.join(points['get_params']) or '—'}; "
                                    f"forms: {len(points['forms'])}"})
+    elif html is not None:
+        findings.append({'severity': 'ok', 'title': 'no input points found',
+                         'detail': 'no GET params or form fields — injection is unlikely here'})
+    if html is None:
+        # F5 (RA-05): an unreachable page used to give the 'ok' above
+        findings.append({'severity': 'info', 'title': 'the page could not be fetched — its forms were not inspected',
+                         'detail': 'curl and httpx both failed (unreachable, DNS, TLS or timeout); '
+                                   'only GET parameters in the URL were checked',
+                         'requires_manual_verification': True})
 
     result = {
         'url': full,
