@@ -34,6 +34,14 @@
   sudo is no longer reported as a missing database.
 - An encrypted SSH key that ssh-agent does not provide fails with an explicit
   error. The SSH `password` field is labelled as the sudo password too.
+- `ssl` reports a failed certificate verification (expired, self-signed,
+  wrong host) instead of `ok` when openssl is installed.
+  `web_security_external` detects servers that still accept TLS 1.0/1.1 on
+  hosts with OpenSSL 3 (it could not before) and says when it could not
+  test them; an unreachable site is an error, not a list of missing
+  headers; a sensitive path that could not be requested is reported as not
+  checked. Security headers are read from the final response of a redirect
+  chain.
 - Removed the unused `SSHExecutor.needs_sudo_password()`.
 - Web presets no longer store or return SSH passwords; enter the password
   again after applying a preset. Presets saved earlier are stripped when read,
