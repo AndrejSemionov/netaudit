@@ -535,8 +535,10 @@ for example `sudo: a password is required`.
   and the web UI. Without it, the check reports what it would have done and stops.
 - The Anthropic API key is read from an environment variable / local DB, never stored in code or reports.
 - New reports remove SSH password parameters before storage or AI analysis;
-  old reports are redacted when read. Existing SQLite files and older backups
-  may still contain passwords. As the account that runs the NetAudit service
+  old reports are redacted when read. Saved presets never keep passwords: enter
+  the password again after applying a preset. Presets saved by older versions
+  are stripped when read. Existing SQLite files and older backups may still
+  contain passwords, in reports and in presets. As the account that runs the NetAudit service
   (`User=` in its systemd unit), inspect its database without rewriting
   reports:
 
@@ -545,7 +547,9 @@ for example `sudo: a password is required`.
   ```
 
   SQLite may create empty `-wal`/`-shm` sidecar files during this dry-run;
-  check that `reports=` matches the history you expect. The separate `--apply`
+  check that `reports=` matches the history you expect. `presets_affected=`
+  counts saved presets that still hold a password; `--apply` cleans them in
+  the same run. The separate `--apply`
   mode requires an explicit backup path. Review the
   [scrub contract](docs/research/legacy_secret_scrub.md) before using it on a
   database that contains real reports.

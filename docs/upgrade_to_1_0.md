@@ -111,7 +111,8 @@ cd ~/netaudit
 python3 -m netaudit_pkg.scrub_legacy_secrets --database "$HOME/.netaudit/netaudit.db"
 ```
 
-If it prints `affected=N` with N > 0 and `eligible=True`:
+If it prints `affected=N` or `presets_affected=N` (saved Web presets that
+still hold a password) with N > 0, and `eligible=True`:
 
 ```bash
 sudo systemctl stop netaudit

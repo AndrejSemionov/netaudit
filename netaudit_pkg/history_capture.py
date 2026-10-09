@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 
 from . import storage, threat
 from .ssh import HostKeyMismatchError, SSHExecutor
-from .utils import log
+from .utils import is_ip_address, log
 
 try:
     import paramiko
@@ -54,6 +54,10 @@ def get_settings() -> dict:
 
 
 def save_settings(s: dict) -> None:
+    """Raises ValueError (nothing saved) for a non-empty target_ip that is not
+    an IP address - it goes into a RouterOS command."""
+    if s.get('target_ip') and not is_ip_address(s['target_ip']):
+        raise ValueError('target_ip must be an IP address')
     storage.setting_set('history_capture_enabled', 'true' if s.get('enabled') else 'false')
     if 'router' in s: storage.setting_set('history_capture_router', s['router'])
     if 'user' in s: storage.setting_set('history_capture_user', s['user'])
@@ -76,6 +80,10 @@ def _take_snapshot(s: dict) -> None:
         raise RuntimeError('paramiko not installed')
     if not s['target_ip']:
         raise RuntimeError('target_ip not specified')
+    # settings saved before validation existed are checked again here: the
+    # value goes into a RouterOS command between double quotes
+    if not is_ip_address(s['target_ip']):
+        raise RuntimeError('target_ip must be an IP address')
 
     try:
         ssh = SSHExecutor(s['router'], s['user'], s['port'], key_path='', password=s['password']).connect()

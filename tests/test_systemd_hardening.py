@@ -238,17 +238,19 @@ def _systemd_fake(json_stdout='[]', json_exit=0, json_stderr='', text_stdout='',
 
 def test_check_systemd_hardening_sudo_runs_systemd_analyze_itself(monkeypatch):
     """Task 7 (E1): sudo runs systemd-analyze directly (a scoped rule for
-    /usr/bin/systemd-analyze matches), and the unit is one argument."""
+    /usr/bin/systemd-analyze matches), and the unit is one argument. Since
+    task 8 a unit with shell syntax is rejected before connecting
+    (test_command_injection.py); a valid escaped name still needs quoting."""
     fake = ExitCodeFakeSSHExecutor(
         responses={'systemctl status': 'Active: active (running)', '--json=short': '[]'},
         exit_codes={'--json=short': 0},
     )
     monkeypatch.setattr('netaudit_pkg.checks.systemd_hardening.SSHExecutor', lambda *a, **kw: fake)
-    check_systemd_hardening(host='1.2.3.4', unit='nginx.service; id')
+    check_systemd_hardening(host='1.2.3.4', unit='dev-disk-by\\x2duuid.swap')
     sudo_calls = [c.split('; rc=')[0] for c in fake.calls if 'sudo' in c]
     assert sudo_calls == [
-        "{ sudo -n -- systemd-analyze security 'nginx.service; id' --no-pager --json=short",
-        "{ sudo -n -- systemd-analyze security 'nginx.service; id' --no-pager",
+        "{ sudo -n -- systemd-analyze security 'dev-disk-by\\x2duuid.swap' --no-pager --json=short",
+        "{ sudo -n -- systemd-analyze security 'dev-disk-by\\x2duuid.swap' --no-pager",
     ]
 
 

@@ -27,6 +27,7 @@ without writing to disk, df).
 from __future__ import annotations
 
 import re
+import shlex
 
 from ..findings import finding as _finding
 from ..findings import subject_id
@@ -49,7 +50,7 @@ def _find_files(ssh: SSHExecutor, directory: str) -> list[dict]:
     epoch_mtime|size_bytes|filename"""
     # find instead of ls -la - doesn't break on files with spaces/special chars
     # in the name, and gives the needed fields directly via -printf
-    cmd = (f"find {directory!r} -maxdepth 1 -type f "
+    cmd = (f"find {shlex.quote(directory)} -maxdepth 1 -type f "
            r"-printf '%T@|%s|%f\n' 2>&1")
     out, err = ssh.run(cmd)
     if 'No such file or directory' in out or 'No such file or directory' in err:
@@ -102,7 +103,7 @@ def _check_archive_integrity(ssh: SSHExecutor, directory: str, filename: str) ->
 
 def _check_disk_space(ssh: SSHExecutor, directory: str) -> tuple[int | None, str | None]:
     """Returns (percent_used, error)."""
-    out, _err = ssh.run(f"df -P {directory!r} 2>&1 | tail -1")
+    out, _err = ssh.run(f"df -P {shlex.quote(directory)} 2>&1 | tail -1")
     parts = out.split()
     if len(parts) >= 5 and parts[4].endswith('%'):
         try:
@@ -142,6 +143,11 @@ def check_backup(host='', user='root', port=22, key_path='', password='',  # nos
     dir_list = [d.strip() for d in directories.split(',') if d.strip()]
     if not dir_list:
         return {'error': 'no directories specified'}
+    # absolute paths only: a name starting with "-" would be read by `find`
+    # as an expression (`-delete`), and `~` was never expanded inside quotes
+    not_absolute = [d for d in dir_list if not d.startswith('/')]
+    if not_absolute:
+        return {'error': f'backup directories must be absolute paths: {", ".join(not_absolute)}'}
 
     try:
         ssh = SSHExecutor(host, user, port, key_path, password).connect()

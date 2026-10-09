@@ -25,7 +25,7 @@ from collections import defaultdict
 from .. import threat
 from ..registry import register
 from ..ssh import HostKeyMismatchError, SSHExecutor
-from ..utils import run_cmd, tool_available
+from ..utils import is_ip_address, run_cmd, tool_available
 
 try:
     import paramiko
@@ -268,6 +268,9 @@ def check_mikrotik_sniffer(router: str = '192.168.88.1', user: str = 'admin',  #
         return {'error': 'paramiko not installed (pip install paramiko --break-system-packages)'}
     if not target_ip:
         return {'error': 'provide the device IP (target_ip) whose traffic to view'}
+    # target_ip goes into a RouterOS command between double quotes
+    if not is_ip_address(target_ip):
+        return {'error': 'target_ip must be an IP address'}
     port = int(port)
 
     try:

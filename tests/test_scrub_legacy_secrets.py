@@ -306,3 +306,98 @@ def test_cli_requires_explicit_path_and_never_prints_secret(tmp_path, capsys):
     assert scrub.main(['--database', str(db)]) == 0
     assert scrub.main(['--database', str(db), '--apply']) != 0
     assert SECRET not in (capsys.readouterr().out + capsys.readouterr().err)
+
+
+# ===========================================================================
+# Task 8 (D2-A): the presets table is scanned and scrubbed with the reports
+# ===========================================================================
+
+def _add_presets(path: Path, *presets: list | str) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute('CREATE TABLE IF NOT EXISTS presets (id INTEGER PRIMARY KEY, name TEXT UNIQUE, '
+                     'checks TEXT NOT NULL, created_at TEXT)')
+        for i, checks in enumerate(presets):
+            payload = checks if isinstance(checks, str) else json.dumps(checks)
+            conn.execute('INSERT INTO presets (name, checks, created_at) VALUES (?,?,?)',
+                         (f'p{i}', payload, '2026-01-01'))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _raw_presets(path: Path) -> list[str]:
+    conn = sqlite3.connect(f'{path.as_uri()}?mode=ro', uri=True)
+    try:
+        return [r[0] for r in conn.execute('SELECT checks FROM presets ORDER BY id')]
+    finally:
+        conn.close()
+
+
+_PRESET_WITH_PW = [{'id': 'server_audit', 'params': {'host': 'a', 'password': SECRET}},
+                   {'id': 'cve_audit', 'instances': [{'host': 'b', 'password': SECRET}]}]
+_PRESET_CLEAN = [{'id': 'mtr', 'params': {'target': '8.8.8.8'}}]
+
+
+def test_dry_run_counts_presets(tmp_path):
+    db = _db(tmp_path, _report({'host': 'a'}))
+    _add_presets(db, _PRESET_WITH_PW, _PRESET_CLEAN)
+    before = _raw_presets(db)
+    scan = scrub.scan_database(db)
+    assert (scan.presets_total, scan.presets_affected, scan.presets_malformed) == (2, 1, 0)
+    assert (scan.affected, scan.eligible) == (0, True)
+    assert _raw_presets(db) == before
+
+
+def test_apply_scrubs_presets_and_reports_together(tmp_path):
+    db = _db(tmp_path, _report({'host': 'a', 'password': SECRET}))
+    _add_presets(db, _PRESET_WITH_PW, _PRESET_CLEAN)
+    backup = tmp_path / 'original.db'
+    result = scrub.apply_scrub(db, backup)
+    assert (result.status, result.affected, result.presets_affected) == ('complete', 1, 1)
+    assert all(SECRET not in raw for raw in _raw(db) + _raw_presets(db))
+    assert [json.loads(raw) for raw in _raw_presets(db)] == [
+        [{'id': 'server_audit', 'params': {'host': 'a'}}, {'id': 'cve_audit', 'instances': [{'host': 'b'}]}],
+        _PRESET_CLEAN,
+    ]
+    assert SECRET in _raw_presets(backup)[0]
+
+
+def test_apply_scrubs_presets_when_reports_are_clean(tmp_path):
+    db = _db(tmp_path, _report({'host': 'a'}))
+    _add_presets(db, _PRESET_WITH_PW)
+    result = scrub.apply_scrub(db, tmp_path / 'original.db')
+    assert (result.status, result.affected, result.presets_affected) == ('complete', 0, 1)
+    assert SECRET not in _raw_presets(db)[0]
+    assert scrub.apply_scrub(db, tmp_path / 'again.db').status == 'noop'
+
+
+@pytest.mark.parametrize('bad', ['not-json', '42', '{"id": "x"}'])
+def test_malformed_preset_blocks_apply_before_backup(tmp_path, bad):
+    db = _db(tmp_path, _report({'host': 'a', 'password': SECRET}))
+    _add_presets(db, bad)
+    assert scrub.scan_database(db).presets_malformed == 1
+    backup = tmp_path / 'backup.db'
+    with pytest.raises(scrub.ScrubError):
+        scrub.apply_scrub(db, backup)
+    assert not backup.exists()
+    assert SECRET in _raw(db)[0]
+
+
+def test_database_without_presets_table(tmp_path):
+    db = _db(tmp_path, _report({'host': 'a', 'password': SECRET}))
+    scan = scrub.scan_database(db)
+    assert (scan.presets_total, scan.presets_affected) == (0, 0)
+    assert scrub.apply_scrub(db, tmp_path / 'b.db').status == 'complete'
+
+
+def test_cli_reports_preset_counts_without_secrets(tmp_path, capsys):
+    db = _db(tmp_path, _report({'host': 'a'}))
+    _add_presets(db, _PRESET_WITH_PW)
+    assert scrub.main(['--database', str(db)]) == 0
+    out = capsys.readouterr().out
+    assert 'presets=1 presets_affected=1 presets_malformed=0' in out
+    assert scrub.main(['--database', str(db), '--apply', '--backup', str(tmp_path / 'b.db')]) == 0
+    out = capsys.readouterr().out
+    assert 'presets_affected=1' in out
+    assert SECRET not in out

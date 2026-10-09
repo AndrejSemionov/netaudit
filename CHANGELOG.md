@@ -18,6 +18,15 @@
 - An encrypted SSH key that ssh-agent does not provide fails with an explicit
   error. The SSH `password` field is labelled as the sudo password too.
 - Removed the unused `SSHExecutor.needs_sudo_password()`.
+- Web presets no longer store or return SSH passwords; enter the password
+  again after applying a preset. Presets saved earlier are stripped when read,
+  and `scrub_legacy_secrets` now also removes passwords from the `presets`
+  table (dry-run prints `presets=`, `presets_affected=`, `presets_malformed=`).
+- Command injection fixes: `cve_audit` quotes paths found on the target
+  (WordPress and composer.lock locations, which any user who can write under
+  `/var/www` or `/home` controls); `systemd_hardening` accepts only valid unit
+  names; `backup_check` accepts only absolute directories and quotes them;
+  the MikroTik `target_ip` must be an IP address.
 
 ## 1.0.0 — 2026-10-08
 
