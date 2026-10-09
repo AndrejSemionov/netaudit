@@ -29,6 +29,7 @@ import re
 from dataclasses import dataclass, field
 
 from .ssh import SSHExecutor
+from .ssh_utils import describe_sudo_refusal, run_sudo_with_exit_code
 
 
 @dataclass
@@ -48,6 +49,9 @@ class NginxConfig:
     # the distinction matters for a consumer deciding whether to report
     # "couldn't read config" vs "read an empty config").
     readable: bool = False
+    # why the config could not be read, when that is known: sudo refused
+    # (with the reason - task 10) or nginx -T itself failed. None otherwise.
+    error: str | None = None
     server_tokens: str | None = None  # 'off' / 'on' / None if not explicitly set
     ssl_protocols: list[str] = field(default_factory=list)
     has_ssl_certificate: bool = False
@@ -68,22 +72,38 @@ def collect_nginx_config(ssh: SSHExecutor) -> NginxConfig:
     the whole /etc/nginx tree depending on umask), so a non-root SSH user
     gets empty output from a plain `nginx -T` even though the binary itself
     ran fine - readable stays False and every downstream control silently
-    has nothing to evaluate. ssh.sudo() already handles both passwordless
-    and password-based sudo (see ssh.py), so this is a one-line fix at the
-    single collection point rather than something either consumer
-    (audit_nginx, nginx_hardening) should work around individually.
+    has nothing to evaluate. The sudo call goes through
+    ssh_utils.run_sudo_with_exit_code() (sudo runs `nginx` itself; password
+    on stdin when one is set), so a refusal is reported with its reason in
+    NginxConfig.error instead of a generic "requires root" (task 10).
     """
     out, _ = ssh.run('which nginx || echo NONE')
     if 'NONE' in out:
         return NginxConfig(installed=False)
 
     ver, _ = ssh.run('nginx -v 2>&1')
-    conf, _ = ssh.sudo('nginx -T 2>/dev/null')
+    version = ver.strip()
+    result = run_sudo_with_exit_code(ssh, ['nginx', '-T'])
+    error = read_error(ssh, result)
+    if error is not None:
+        return NginxConfig(installed=True, version=version, readable=False, error=error)
+    if not result.stdout:
+        return NginxConfig(installed=True, version=version, readable=False)
 
-    if not conf:
-        return NginxConfig(installed=True, version=ver.strip(), readable=False)
+    return _parse_nginx_config(result.stdout, version=version)
 
-    return _parse_nginx_config(conf, version=ver.strip())
+
+def read_error(ssh: SSHExecutor, result) -> str | None:
+    """Why a privileged `nginx -T` gave no usable config, or None when it
+    completed with exit 0. Shared with nginx_config_v2."""
+    if not result.completed:
+        return f'{result.command} did not complete'
+    if result.sudo_error:
+        return describe_sudo_refusal(ssh, result)
+    if result.exit_code != 0:
+        detail = result.stderr.strip()[-300:] or result.stdout.strip()[-300:]
+        return f'{result.command} failed (exit {result.exit_code}): {detail}'
+    return None
 
 
 def _strip_comments(conf: str) -> str:

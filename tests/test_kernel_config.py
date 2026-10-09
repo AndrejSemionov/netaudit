@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from netaudit_pkg.kernel_config import _parse_sysctl_a, collect_kernel_config
+from tests.conftest import _SUDO_WRAP_RE
 
 # ===========================================================================
 # Fixture builders
@@ -282,8 +283,14 @@ def test_rp_filter_two_parses_correctly_not_conflated_with_bool():
 # ===========================================================================
 
 class _FakeSSH:
-    """Minimal fake SSHExecutor recording which method (run vs sudo) was
-    called for which command, without touching real SSH at all."""
+    """Minimal fake SSHExecutor recording which commands ran under sudo and
+    which ran plainly, without touching real SSH at all. Since task 10 the
+    sudo call arrives through run() as ssh_utils.run_sudo_with_exit_code()'s
+    wrapper; it is recorded in sudo_calls by its inner command and answered
+    with exit code 0 (sudo works on this fake host)."""
+
+    password = ''
+    sudo_password = ''
 
     def __init__(self, sysctl_output: str, uname_output: str = '7.0.0-29-generic\n'):
         self._sysctl_output = sysctl_output
@@ -291,16 +298,16 @@ class _FakeSSH:
         self.run_calls: list[str] = []
         self.sudo_calls: list[str] = []
 
-    def run(self, cmd: str):
+    def run(self, cmd: str, timeout: int = 20, stdin_data: str | None = None):
+        m = _SUDO_WRAP_RE.match(cmd)
+        if m:
+            inner = cmd.split(' -- ', 1)[1].split('; rc=', 1)[0]
+            self.sudo_calls.append(inner)
+            out = self._sysctl_output if inner == 'sysctl -a' else ''
+            return f'{out}\n{m.group(1)}:0\n', ''
         self.run_calls.append(cmd)
         if cmd == 'uname -r':
             return self._uname_output, ''
-        return '', ''
-
-    def sudo(self, cmd: str):
-        self.sudo_calls.append(cmd)
-        if cmd == 'sysctl -a':
-            return self._sysctl_output, ''
         return '', ''
 
 

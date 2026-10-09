@@ -1526,6 +1526,7 @@ def test_audit_nginx_hardening_end_to_end_16_components():
 
     ssh.run.side_effect = run_side_effect
     ssh.sudo.side_effect = sudo_side_effect
+    _sudo_mock(ssh, sudo_side_effect)
 
     result = audit_nginx_hardening(ssh)
     assert result['installed'] is True
@@ -1567,9 +1568,28 @@ def test_hardening_score_unavailable_when_tier2_unreadable():
 
     ssh.run.side_effect = run_side_effect
     ssh.sudo.side_effect = sudo_side_effect
+    _sudo_mock(ssh, sudo_side_effect)
 
     result = audit_nginx_hardening(ssh)
     assert result['installed'] is True
     assert 'hardening' not in result
     assert 'error' in result
     assert 'Tier-2' in result['error']
+
+
+def _sudo_mock(ssh, sudo_side_effect):
+    """Since task 10 nginx -T runs under sudo through run_sudo_with_exit_code(),
+    i.e. ssh.run() with a wrapped command: answer it from `sudo_side_effect`
+    (the old ssh.sudo() fake) with exit code 0."""
+    import re
+    plain = ssh.run.side_effect
+    ssh.password = ''
+    ssh.sudo_password = ''
+
+    def run(cmd, *args, **kwargs):
+        m = re.match(r"^\{ sudo -n -- (.*?); rc=.*'(__NETAUDIT_RC_[0-9a-f]+__)'", cmd)
+        if m:
+            out, err = sudo_side_effect(m.group(1))
+            return f'{out}\n{m.group(2)}:0\n', err
+        return plain(cmd, *args, **kwargs)
+    ssh.run.side_effect = run

@@ -1031,7 +1031,7 @@ def audit_nginx_hardening(ssh: SSHExecutor) -> dict:
         # weighted_score()'s own contract that a score with zero applicable
         # components is undefined, not a fake number.
         return {'installed': True, 'version': cfg.version,
-                'error': 'nginx -T requires root — no read access to the config'}
+                'error': cfg.error or 'nginx -T returned no config'}
 
     cfg_v2 = collect_nginx_config_v2(ssh)
     if not cfg_v2.readable:
@@ -1042,7 +1042,7 @@ def audit_nginx_hardening(ssh: SSHExecutor) -> dict:
         # collectors disagreed, not routine no-root - still handled
         # explicitly rather than assumed impossible.
         return {'installed': True, 'version': cfg.version,
-                'error': 'nginx -T (Tier-2 collection) requires root — no read access to the config; '
+                'error': f'{cfg_v2.error or "nginx -T (Tier-2 collection) returned no config"}; '
                          'the 16-component hardening score needs both legacy and Tier-2 data'}
 
     components = _build_components(cfg) + _build_tier2_components(cfg_v2)
@@ -1078,14 +1078,15 @@ def audit_nginx_hardening(ssh: SSHExecutor) -> dict:
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
         {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key) / sudo password', 'default': ''},
+        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key)', 'default': ''},
+        {'name': 'sudo_password', 'type': 'password', 'label': 'Sudo password (if sudo asks for one)', 'default': ''},
     ],
     required_tools=[],
     description='Scores nginx TLS, security headers, configuration and exposure against '
                 'docs/checks/nginx_hardening.md (16 controls: 9 Tier-1 + 7 Tier-2, '
                 '0-100 hardening score). Read-only.',
 )
-def check_nginx_hardening(host='', user='root', port=22, key_path='', password='') -> dict:  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
+def check_nginx_hardening(host='', user='root', port=22, key_path='', password='', sudo_password='') -> dict:  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
     """Public registry entrypoint - opens its own SSH session when run
     standalone, then delegates to audit_nginx_hardening(). Callers that
     already hold an open SSHExecutor (e.g. a future combined nginx run
@@ -1097,7 +1098,7 @@ def check_nginx_hardening(host='', user='root', port=22, key_path='', password='
         return {'error': 'host not specified'}
 
     try:
-        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+        ssh = SSHExecutor(host, user, port, key_path, password, sudo_password=sudo_password).connect()
     except HostKeyMismatchError as e:
         return {'error': str(e)}
     # SSH libraries can fail with transport, auth, or socket errors; keep the check isolated.

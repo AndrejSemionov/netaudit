@@ -233,18 +233,14 @@ def test_current_behavior_none_field_defaults_fail_safe():
 # refactor's own test suite can point back at exactly what changed and why.
 # ===========================================================================
 
-def test_current_behavior_does_not_use_sudo():
-    # confirms today's implementation calls ssh.run(), not ssh.sudo() - a
-    # FakeSSHExecutor response keyed only on a sudo-specific marker would
-    # NOT be reachable by the current code, since run() and sudo() are
-    # indistinguishable to FakeSSHExecutor's _match() (both just look up
-    # substrings) - so this test instead confirms the actual command issued
-    # doesn't request privilege escalation via any `sudo` prefix.
+def test_reads_sshd_t_and_nothing_else_under_sudo():
+    # Updated in task 10, as the original version of this test asked: the
+    # SSHConfig-based rewrite reads `sshd -T` under sudo (collect_ssh_config()),
+    # and since task 7/10 that sudo call is visible in the command text
+    # (ssh_utils.run_sudo_with_exit_code()). The only privileged command is
+    # sshd -T itself.
     ssh = _ssh(SSHD_CONFIG_HARDENED)
     audit_ssh_hardening(ssh)
-    assert all('sudo' not in c for c in ssh.calls), (
-        "audit_ssh_hardening() issued a command containing 'sudo' - if this now "
-        "fails, the refactor has changed how the config is read (expected once "
-        "the SSHConfig-based rewrite lands, since collect_ssh_config() uses "
-        "ssh.sudo() for `sshd -T` - update/remove this test as part of that change)"
-    )
+    sudo_calls = [c for c in ssh.calls if 'sudo' in c]
+    assert sudo_calls
+    assert all(c.startswith('{ sudo -n -- sshd -T; ') for c in sudo_calls)

@@ -4,8 +4,9 @@ Secret params never leave the check call.
 report['execution_context'] records the params a check was run with (Report
 Identity / Execution Context Contract v1) so history and trends can tell which
 object a report is about. Some params are credentials - the SSH `password`
-of 18 checks - and must not end up in the saved report, in /api/report, or in
-the prompt ai_analyze() sends to the AI provider.
+of 18 checks and the `sudo_password` of the SSH checks that use sudo (task
+10) - and must not end up in the saved report, in /api/report, or in the
+prompt ai_analyze() sends to the AI provider.
 
 Redaction is by param NAME, not by CheckSpec metadata: reports saved before
 this module existed carry no spec, and storage must not depend on the
@@ -23,7 +24,7 @@ Saved Web presets hold the same params and get the same treatment
 
 from __future__ import annotations
 
-SECRET_PARAM_NAMES = frozenset({'password'})
+SECRET_PARAM_NAMES = frozenset({'password', 'sudo_password'})
 
 
 def redact_params(params: dict) -> dict:

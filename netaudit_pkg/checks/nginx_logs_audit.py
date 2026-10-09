@@ -156,7 +156,7 @@ def audit_nginx_logs(ssh: SSHExecutor, lines: int = DEFAULT_TAIL_LINES) -> dict:
     if not cfg.installed:
         return {'installed': False}
     if not cfg.readable:
-        return {'installed': True, 'error': 'nginx -T requires root — no read access to the config'}
+        return {'installed': True, 'error': cfg.error or 'nginx -T returned no config'}
 
     discovery_evidence = collect_log_discovery(ssh)
     discovery_report = build_report(discovery_evidence)
@@ -254,7 +254,8 @@ def audit_nginx_logs(ssh: SSHExecutor, lines: int = DEFAULT_TAIL_LINES) -> dict:
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
         {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key) / sudo password', 'default': ''},
+        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key)', 'default': ''},
+        {'name': 'sudo_password', 'type': 'password', 'label': 'Sudo password (if sudo asks for one)', 'default': ''},
         {'name': 'lines', 'type': 'number', 'label': 'Lines to collect per source', 'default': DEFAULT_TAIL_LINES},
     ],
     required_tools=[],
@@ -264,7 +265,7 @@ def audit_nginx_logs(ssh: SSHExecutor, lines: int = DEFAULT_TAIL_LINES) -> dict:
                 'across every server block\'s resolved, deduped log destinations. Read-only — collects a '
                 'bounded tail of recent log content per source, never full files.',
 )
-def check_nginx_logs_audit(host='', user='root', port=22, key_path='', password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
+def check_nginx_logs_audit(host='', user='root', port=22, key_path='', password='', sudo_password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                             lines=DEFAULT_TAIL_LINES) -> dict:
     """Public registry entrypoint — opens its own SSH session when run
     standalone, then delegates to audit_nginx_logs(). Callers that already
@@ -276,7 +277,7 @@ def check_nginx_logs_audit(host='', user='root', port=22, key_path='', password=
         return {'error': 'host not specified'}
 
     try:
-        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+        ssh = SSHExecutor(host, user, port, key_path, password, sudo_password=sudo_password).connect()
     except HostKeyMismatchError as e:
         return {'error': str(e)}
     # SSH libraries can fail with transport, auth, or socket errors; keep the check isolated.

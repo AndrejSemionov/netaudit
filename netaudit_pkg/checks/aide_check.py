@@ -153,7 +153,8 @@ def _init_database(ssh: SSHExecutor, host: str) -> dict:
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
         {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key) / sudo password', 'default': ''},
+        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key)', 'default': ''},
+        {'name': 'sudo_password', 'type': 'password', 'label': 'Sudo password (if sudo asks for one)', 'default': ''},
         {'name': 'mode', 'type': 'select', 'label': 'Mode',
          'options': ['check for changes', 'reinitialize the database'],
          'default': 'check for changes'},
@@ -167,7 +168,7 @@ def _init_database(ssh: SSHExecutor, host: str) -> dict:
                 '"check" mode compares against an existing database (read-only); "init" overwrites '
                 'the reference database and requires confirmation, same as auto-installing aide.',
 )
-def check_aide(host='', user='root', port=22, key_path='', password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
+def check_aide(host='', user='root', port=22, key_path='', password='', sudo_password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                 mode='check for changes', auto_install=False, confirm_modify='no') -> dict:
     if paramiko is None:
         return {'error': 'paramiko not installed'}
@@ -184,7 +185,7 @@ def check_aide(host='', user='root', port=22, key_path='', password='',  # nosec
                 'hint': 'set "Confirm: this may install packages / reinitialize the AIDE database" to proceed'}
 
     try:
-        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+        ssh = SSHExecutor(host, user, port, key_path, password, sudo_password=sudo_password).connect()
     except HostKeyMismatchError as e:
         return {'error': str(e)}
     # SSH libraries can fail with transport, auth, or socket errors; keep the check isolated.

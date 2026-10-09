@@ -381,7 +381,7 @@ def test_cli_dash_value_prompts_with_getpass(monkeypatch):
 SUDO_CHECKS = {'server_audit', 'nginx_hardening', 'kernel_hardening', 'ssh_hardening', 'systemd_hardening',
                'lynis_audit', 'rootkit_check', 'aide_check', 'docker_audit', 'ssh_audit', 'ssh_auth_audit',
                'nginx_logs_audit', 'kern_log_audit', 'fail2ban_logs_audit'}
-NO_SUDO_SSH_CHECKS = {'backup_check', 'cve_audit', 'log_discovery_audit'}
+NO_SUDO_SSH_CHECKS = {'backup_check', 'cve_audit', 'log_discovery'}
 
 
 def test_sudo_checks_have_sudo_password_after_password():

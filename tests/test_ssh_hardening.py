@@ -168,7 +168,8 @@ def test_audit_ssh_hardening_score_unreadable_config(fake_ssh):
     result = audit_ssh_hardening_score(fake_ssh)
     assert result['installed'] is True
     assert 'error' in result
-    assert 'requires root' in result['error']
+    # task 10: see tests/test_sudo_password.py for the sudo-refusal wording
+    assert result['error'] == 'sshd -T returned no effective configuration'
     assert 'hardening' not in result
 
 

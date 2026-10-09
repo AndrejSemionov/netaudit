@@ -26,6 +26,7 @@ Installing tools:
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import sys
@@ -48,6 +49,7 @@ https://github.com/AndrejSemionov/netaudit
   netaudit run ssl web_security_external --url https://example.com
   netaudit run --quick --url https://example.com
   netaudit run --quick --host 1.2.3.4 --user root
+  netaudit run kernel_hardening --host 1.2.3.4 --sudo_password -   (asks, no echo)
   netaudit list
   netaudit trend ssh_hardening 1.2.3.4
   netaudit web
@@ -95,6 +97,10 @@ def cmd_run(args):
         sys.exit(1)
 
     selected = []
+    # a password-type param given as "-" is asked for (no echo) instead of
+    # being typed on the command line, where ps and shell history see it;
+    # asked once per param name for the whole run (task 10)
+    asked: dict[str, str] = {}
     for check_id in check_ids:
         spec_params = {}
         avail = {c['id']: c for c in list_available()}
@@ -102,6 +108,10 @@ def cmd_run(args):
             for p in avail[check_id]['params']:
                 if p['name'] in extra:
                     v = extra[p['name']]
+                    if p['type'] == 'password' and v == '-':
+                        if p['name'] not in asked:
+                            asked[p['name']] = getpass.getpass(f'{p["name"]} for {check_id}: ')
+                        v = asked[p['name']]
                     spec_params[p['name']] = int(v) if p['type'] == 'number' and str(v).isdigit() else v
         selected.append({'id': check_id, 'params': spec_params})
 

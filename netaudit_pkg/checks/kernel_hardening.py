@@ -41,7 +41,7 @@ that spec, it does not re-derive it. In particular:
 from __future__ import annotations
 
 from ..findings import finding as _finding
-from ..kernel_config import KernelConfig, collect_kernel_config
+from ..kernel_config import KernelConfig, collect_kernel_config, missing_audited_keys
 from ..registry import register
 from ..scoring import Component, weighted_score
 from ..ssh import HostKeyMismatchError, SSHExecutor
@@ -517,10 +517,18 @@ def audit_kernel_hardening_score(ssh: SSHExecutor) -> dict:
     identical handling of the same shape of failure (no partial score).
     """
     cfg = collect_kernel_config(ssh)
-    if not cfg.readable:
-        result = {'readable': False,
-                   'error': 'sysctl -a requires root — no read access to the effective '
-                            'kernel configuration'}
+    missing = missing_audited_keys(cfg) if cfg.collected_without_sudo else []
+    if not cfg.readable or missing:
+        if missing:
+            # task 10: sudo refused and the SSH user could not read some of
+            # the 16 keys - no partial score, name what is missing and why
+            error = (f'{cfg.sudo_reason}; without sudo these sysctl keys could not be read: '
+                     f'{", ".join(missing)}')
+        elif cfg.sudo_reason:
+            error = f'{cfg.sudo_reason}; sysctl -a without sudo returned nothing'
+        else:
+            error = 'sysctl -a returned no readable kernel configuration'
+        result = {'readable': False, 'error': error}
         if cfg.kernel_version:
             # uname -r needs no privilege and is collected independently of
             # sysctl -a (see kernel_config.py's collect_kernel_config()) -
@@ -533,12 +541,17 @@ def audit_kernel_hardening_score(ssh: SSHExecutor) -> dict:
     hardening = weighted_score(_build_components(cfg))
     findings = _build_findings(cfg)
 
-    return {
+    result = {
         'readable': True,
         'kernel_version': cfg.kernel_version,
         'hardening': hardening,
         'findings': findings,
     }
+    if cfg.collected_without_sudo:
+        # all 16 keys were readable as the SSH user (task 10)
+        result['collected_without_sudo'] = True
+        result['sudo_note'] = cfg.sudo_reason
+    return result
 
 
 # ===========================================================================
@@ -552,7 +565,8 @@ def audit_kernel_hardening_score(ssh: SSHExecutor) -> dict:
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
         {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key) / sudo password', 'default': ''},
+        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key)', 'default': ''},
+        {'name': 'sudo_password', 'type': 'password', 'label': 'Sudo password (if sudo asks for one)', 'default': ''},
     ],
     required_tools=[],
     risk_level='READ_ONLY',
@@ -562,7 +576,7 @@ def audit_kernel_hardening_score(ssh: SSHExecutor) -> dict:
                 'docs/checks/kernel_hardening.md (16 controls, 0-100 hardening score). '
                 'Read-only.',
 )
-def check_kernel_hardening(host='', user='root', port=22, key_path='', password='') -> dict:  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
+def check_kernel_hardening(host='', user='root', port=22, key_path='', password='', sudo_password='') -> dict:  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
     """Public registry entrypoint - opens its own SSH session when run
     standalone, then delegates to audit_kernel_hardening_score(). Callers
     that already hold an open SSHExecutor should call
@@ -575,7 +589,7 @@ def check_kernel_hardening(host='', user='root', port=22, key_path='', password=
         return {'error': 'host not specified'}
 
     try:
-        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+        ssh = SSHExecutor(host, user, port, key_path, password, sudo_password=sudo_password).connect()
     except HostKeyMismatchError as e:
         return {'error': str(e)}
     # SSH libraries can fail with transport, auth, or socket errors; keep the check isolated.

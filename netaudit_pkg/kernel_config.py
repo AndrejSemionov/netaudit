@@ -20,10 +20,12 @@ with 3 `permission denied` errors, all on `kernel.apparmor_*` keys (outside
 this module's scope regardless, see docs/checks/kernel_hardening.md section
 1). With `sudo -S sysctl -a`, 1081 lines, 0 permission-denied errors. All 16
 keys this collector actually reads happened to be unrestricted even without
-sudo on that VM - but this collector always uses ssh.sudo() anyway,
+sudo on that VM - but this collector always tries sudo first anyway,
 deliberately not relying on "these particular keys are unrestricted today"
-holding true on every future host (same reasoning ssh_config.py's `sshd -T`
-docstring gives for its own unconditional ssh.sudo() use).
+holding true on every future host. Only when sudo itself refuses (no or a
+wrong sudo password, sudoers) does it read `sysctl -a` as the SSH user, and
+the consumer then requires every audited key to be present (task 10,
+docs/research/sudo_password.md C5).
 
 Deliberately data-only and deliberately narrow: KernelConfig holds only the
 16 fields docs/checks/kernel_hardening.md's spec actually scores, plus
@@ -41,6 +43,31 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .ssh import SSHExecutor
+from .ssh_utils import (
+    describe_sudo_refusal,
+    run_command_with_exit_code,
+    run_sudo_with_exit_code,
+)
+
+# KernelConfig field -> the sysctl key it is read from (the 16 audited keys)
+AUDITED_SYSCTL_KEYS = {
+    'randomize_va_space': 'kernel.randomize_va_space',
+    'dmesg_restrict': 'kernel.dmesg_restrict',
+    'kptr_restrict': 'kernel.kptr_restrict',
+    'yama_ptrace_scope': 'kernel.yama.ptrace_scope',
+    'suid_dumpable': 'fs.suid_dumpable',
+    'ip_forward': 'net.ipv4.ip_forward',
+    'ipv6_forwarding': 'net.ipv6.conf.all.forwarding',
+    'tcp_syncookies': 'net.ipv4.tcp_syncookies',
+    'icmp_echo_ignore_broadcasts': 'net.ipv4.icmp_echo_ignore_broadcasts',
+    'accept_source_route': 'net.ipv4.conf.all.accept_source_route',
+    'accept_redirects': 'net.ipv4.conf.all.accept_redirects',
+    'secure_redirects': 'net.ipv4.conf.all.secure_redirects',
+    'send_redirects': 'net.ipv4.conf.all.send_redirects',
+    'log_martians': 'net.ipv4.conf.all.log_martians',
+    'rp_filter_all': 'net.ipv4.conf.all.rp_filter',
+    'rp_filter_default': 'net.ipv4.conf.default.rp_filter',
+}
 
 
 @dataclass
@@ -72,6 +99,10 @@ class KernelConfig:
 
     readable: bool = False
     kernel_version: str = ''
+    # task 10: sudo refused, so `sysctl -a` was read as the SSH user
+    # (sudo_reason says why sudo refused); see collect_kernel_config()
+    collected_without_sudo: bool = False
+    sudo_reason: str | None = None
 
     randomize_va_space: int | None = None
     dmesg_restrict: bool | None = None
@@ -97,18 +128,37 @@ def collect_kernel_config(ssh: SSHExecutor) -> KernelConfig:
     SSH session and parse the result into a KernelConfig. Read-only -
     neither command changes anything on the target.
 
-    `sysctl -a` runs via ssh.sudo(), not ssh.run() - see this module's
-    docstring for why this is unconditional rather than "only if the VM
-    needs it." `uname -r` needs no privilege and runs via plain ssh.run().
+    `sysctl -a` runs under sudo first (ssh_utils.run_sudo_with_exit_code(),
+    password on stdin when one is set) - see this module's docstring for
+    why. When sudo itself refuses (task 10, docs/research/sudo_password.md
+    C5), it is read again as the SSH user: on the project VM every audited
+    key was readable that way. The result then has collected_without_sudo
+    and sudo_reason; keys the user could not read stay None, and the
+    consumer decides what that means. `uname -r` needs no privilege.
     """
     ver_out, _ = ssh.run('uname -r')
     kernel_version = ver_out.strip()
 
-    out, _err = ssh.sudo('sysctl -a')
-    if not out.strip():
+    result = run_sudo_with_exit_code(ssh, ['sysctl', '-a'])
+    if result.completed and result.exit_code == 0 and result.stdout.strip():
+        return _parse_sysctl_a(result.stdout, kernel_version=kernel_version)
+    if not result.sudo_error:
         return KernelConfig(readable=False, kernel_version=kernel_version)
 
-    return _parse_sysctl_a(out, kernel_version=kernel_version)
+    reason = describe_sudo_refusal(ssh, result)
+    # denied keys go to stderr; stdout holds every key this user may read
+    out, code = run_command_with_exit_code(ssh, 'sysctl -a 2>/dev/null')
+    if code is None or not out.strip():
+        return KernelConfig(readable=False, kernel_version=kernel_version, sudo_reason=reason)
+    cfg = _parse_sysctl_a(out, kernel_version=kernel_version)
+    cfg.collected_without_sudo = True
+    cfg.sudo_reason = reason
+    return cfg
+
+
+def missing_audited_keys(cfg: KernelConfig) -> list[str]:
+    """sysctl keys of the 16 audited ones that have no value in cfg."""
+    return [key for name, key in AUDITED_SYSCTL_KEYS.items() if getattr(cfg, name) is None]
 
 
 def _parse_sysctl_a(output: str, kernel_version: str = '') -> KernelConfig:

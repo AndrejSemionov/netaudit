@@ -28,15 +28,25 @@ import re
 
 import pytest
 
+# ssh_utils.run_sudo_with_exit_code()'s wrapper: { sudo -n -- <argv>; ...'<marker>'... }
+_SUDO_WRAP_RE = re.compile(r"^\{ sudo (?:-n|-S -p '') -- .*'(__NETAUDIT_RC_[0-9a-f]+__)'")
+
 
 class FakeSSHExecutor:
     """
     Stands in for netaudit_pkg.ssh.SSHExecutor in tests. Construct with a
     `responses` dict mapping a substring of the command to a (stdout, stderr)
-    tuple; `run()` and `sudo()` both consult it. `password` mirrors the real
-    attribute: ssh_utils.run_sudo_with_exit_code() reads it to choose
+    tuple; `run()` and `sudo()` both consult it. `password`/`sudo_password`
+    mirror the real attributes: ssh_utils.run_sudo_with_exit_code() reads
+    `sudo_password` (falls back to `password`, as SSHExecutor does) to choose
     `sudo -S` (password on stdin) over `sudo -n`. Every `stdin_data` passed
     to run() is recorded in `stdin_data`, in call order.
+
+    This fake models a host where every sudo command succeeds: a command
+    wrapped by ssh_utils.run_sudo_with_exit_code() gets its canned response
+    plus the completion marker with exit code 0 - the same thing `sudo()`
+    returned before collectors moved to that helper. Tests of sudo refusals
+    and exit codes use ExitCodeFakeSSHExecutor.
 
     Every constructor arg from the real SSHExecutor is accepted and ignored,
     so `FakeSSHExecutor` can be substituted 1:1 wherever `SSHExecutor(...)` is
@@ -45,10 +55,11 @@ class FakeSSHExecutor:
 
     def __init__(self, *args, responses: dict[str, tuple[str, str]] | None = None,
                  installed_tools: set[str] | None = None,
-                 password: str = '', **kwargs):
+                 password: str = '', sudo_password: str | None = None, **kwargs):
         self.responses = responses or {}
         self.installed_tools = installed_tools if installed_tools is not None else set()
         self.password = password
+        self.sudo_password = sudo_password if sudo_password is not None else password
         self.calls: list[str] = []
         self.stdin_data: list[str | None] = []
         self.closed = False
@@ -71,7 +82,11 @@ class FakeSSHExecutor:
 
     def run(self, cmd: str, timeout: int = 20, stdin_data: str | None = None) -> tuple[str, str]:
         self.stdin_data.append(stdin_data)
-        return self._match(cmd)
+        out, err = self._match(cmd)
+        m = _SUDO_WRAP_RE.match(cmd)
+        if m:
+            return f'{out}\n{m.group(1)}:0\n', err
+        return out, err
 
     def sudo(self, cmd: str, timeout: int = 20) -> tuple[str, str]:
         return self._match(cmd)

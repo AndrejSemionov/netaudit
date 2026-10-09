@@ -87,7 +87,9 @@ def test_audit_kernel_hardening_score_unreadable_config(fake_ssh):
     result = audit_kernel_hardening_score(fake_ssh)
     assert result['readable'] is False
     assert 'error' in result
-    assert 'requires root' in result['error']
+    # task 10: sudo worked but returned nothing; a refused sudo falls back to
+    # sysctl -a without sudo (tests/test_sudo_password.py)
+    assert result['error'] == 'sysctl -a returned no readable kernel configuration'
     assert 'hardening' not in result
     # uname -r is independent of sysctl -a and still captured, same as
     # ssh_hardening still returns cfg.version in its N/A branch.
@@ -124,7 +126,8 @@ def test_audit_kernel_hardening_score_single_sysctl_call(fake_ssh):
     — per kernel_config.py's collector docstring."""
     fake_ssh.responses = _kernel_responses(_SYSCTL_A_HARDENED)
     audit_kernel_hardening_score(fake_ssh)
-    sysctl_calls = [c for c in fake_ssh.calls if c == 'sysctl -a']
+    # since task 10 the sudo call is the run_sudo_with_exit_code() wrapper
+    sysctl_calls = [c for c in fake_ssh.calls if 'sysctl -a' in c]
     assert len(sysctl_calls) == 1
 
 

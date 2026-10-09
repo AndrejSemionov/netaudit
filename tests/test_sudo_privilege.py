@@ -376,11 +376,13 @@ def test_encrypted_key_gets_a_clear_connect_error(monkeypatch, tmp_path):
     assert 'encrypted' in str(exc.value)
 
 
-PASSWORD_LABEL = 'SSH password (if no key) / sudo password'
-PASSWORD_LABEL_RU = 'Пароль SSH (если без ключа) / пароль sudo'
+# task 10 split the field: `password` is the SSH login password only, the
+# sudo password has its own `sudo_password` field (tests/test_sudo_password.py)
+PASSWORD_LABEL = 'SSH password (if no key)'
+PASSWORD_LABEL_RU = 'Пароль SSH (если без ключа)'
 
 
-def test_ssh_check_password_label_says_it_is_also_the_sudo_password():
+def test_ssh_check_password_label_is_the_ssh_login_password():
     import netaudit_pkg.checks  # noqa: F401 - registers every check
     from netaudit_pkg.registry import registry
 
