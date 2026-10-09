@@ -804,13 +804,28 @@ function t(key) {
 //    comment), only the DISPLAYED label changes. So options are keyed by
 //    Russian value with an 'en' translation on top - ru locale shows the
 //    key as-is, en locale looks up the en translation.
+// Russian labels for params many SSH checks share; a check's own
+// translation (I18N_CHECKS[id].params) still wins over these.
+const COMMON_PARAM_RU = {
+  host: 'Хост',
+  user: 'Пользователь',
+  port: 'SSH-порт',
+  key_path: 'Путь к ключу',
+  password: 'Пароль SSH (если без ключа)',
+  sudo_password: 'Пароль sudo (если sudo его спрашивает)',
+  lines: 'Сколько последних строк читать',
+  window_hours: 'Окно обнаружения, ч',
+};
+function commonParamLabel(p) {
+  return (CURRENT_LANG !== 'en' && COMMON_PARAM_RU[p.name]) || p.label;
+}
 function tCheck(check) {
   const tr = I18N_CHECKS[check.id];
   if (!tr) {
     return {
       label: check.label,
       description: check.description,
-      paramLabel: (p) => p.label,
+      paramLabel: (p) => commonParamLabel(p),
       optLabel: (o) => o,
     };
   }
@@ -819,7 +834,7 @@ function tCheck(check) {
   return {
     label,
     description,
-    paramLabel: (p) => (CURRENT_LANG === 'en' ? p.label : ((tr.params && tr.params[p.name] && tr.params[p.name].ru) || p.label)),
+    paramLabel: (p) => (CURRENT_LANG === 'en' ? p.label : ((tr.params && tr.params[p.name] && tr.params[p.name].ru) || commonParamLabel(p))),
     optLabel: (o) => (tr.options && tr.options[o] && tr.options[o][CURRENT_LANG]) || o,
   };
 }
