@@ -11,7 +11,11 @@ for the original inventory this is modeled on.
 
 from __future__ import annotations
 
+import pytest
+
 from netaudit_pkg.checks.log_discovery_audit import (
+    JournalInfo,
+    LogDiscoveryReport,
     LogFileState,
     SourceType,
     _file_verdict,
@@ -119,6 +123,27 @@ def test_verdict_collection_failure_is_not_confirmed_absent():
     ev = _file_evidence('/var/log/auth.log', '', stat_completed=False, stat_exit=None)
     v = _file_verdict(ev, SourceType.AUTH_LOG)
     assert v.available is False
+
+
+@pytest.mark.parametrize('completed,exit_code,output', [
+    (True, 1, 'stat: Permission denied'),
+    (False, None, ''),
+    (True, 0, 'unparseable stat output'),
+])
+def test_f4_unknown_stat_is_not_reported_as_absent(completed, exit_code, output):
+    ev = _file_evidence('/var/log/auth.log', output,
+                        stat_completed=completed, stat_exit=exit_code)
+    v = _file_verdict(ev, SourceType.AUTH_LOG)
+    assert v.available is False
+    assert v.availability_unknown is True
+    report = LogDiscoveryReport(
+        fixed_sources=[v], nginx_sources=[], nginx_rotated_count=0,
+        journal=JournalInfo(False, None, None, None), logrotate=[],
+    )
+    findings = build_findings(report)
+    auth_findings = [f for f in findings if '/var/log/auth.log' in f['title']]
+    assert any('could not determine' in f['title'] for f in auth_findings)
+    assert not any('not found' in f['title'] for f in auth_findings)
 
 
 def test_verdict_zero_byte_is_stale_empty_not_error():
