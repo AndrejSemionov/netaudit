@@ -924,7 +924,11 @@ def test_query_osv_wordpress_package_unaffected_by_debian_version(isolated_db, m
     assert captured['payload']['queries'][0]['package']['ecosystem'] == 'WordPress'
 
 
-def test_query_osv_network_failure_does_not_raise(isolated_db, monkeypatch):
+def test_query_osv_network_failure_is_a_collection_error_not_an_empty_answer(isolated_db, monkeypatch):
+    """F1 (RA-02): OSV unreachable used to set the package to [] - read
+    downstream as "OSV answered, no vulnerabilities" -> 'no known CVEs
+    found'. Replaces test_query_osv_network_failure_does_not_raise, which
+    pinned exactly that. Still no exception."""
     def fake_post(*a, **kw):
         raise httpx.HTTPError('connection refused')
 
@@ -933,8 +937,41 @@ def test_query_osv_network_failure_does_not_raise(isolated_db, monkeypatch):
         [{'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Linux'}],
         os_id='debian', version_id='13',
     )
-    assert result['nginx'] == []  # empty, not an exception
-    assert collection_errors == set()
+    assert 'nginx' not in result
+    assert collection_errors == {'nginx'}
+
+
+def test_query_osv_non_json_answer_is_a_collection_error(isolated_db, monkeypatch):
+    def fake_post(url, json, timeout):
+        class R:
+            def raise_for_status(self): pass
+            def json(self): raise ValueError('Expecting value: line 1 column 1')
+        return R()
+
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    result, collection_errors = query_osv(
+        [{'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Linux'}],
+        os_id='debian', version_id='13',
+    )
+    assert 'nginx' not in result
+    assert collection_errors == {'nginx'}
+
+
+def test_query_osv_outage_keeps_cached_answers_and_caches_nothing_new(isolated_db, monkeypatch):
+    isolated_db.cve_set('openssh::1:9.6p1-3::Debian:13', ['CVE-CACHED'])
+
+    def fake_post(*a, **kw):
+        raise httpx.ConnectError('OSV unreachable')
+
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    result, collection_errors = query_osv(
+        [{'name': 'openssh', 'version': '1:9.6p1-3', 'ecosystem': 'Linux'},
+         {'name': 'nginx', 'version': '1.24.0', 'ecosystem': 'Linux'}],
+        os_id='debian', version_id='13',
+    )
+    assert result == {'openssh': ['CVE-CACHED']}
+    assert collection_errors == {'nginx'}
+    assert isolated_db.cve_get('nginx::1.24.0::Debian:13') is None
 
 
 def test_query_osv_mixed_ecosystems_in_one_batch(isolated_db, monkeypatch):
@@ -1673,6 +1710,51 @@ def test_full_flow_osv_short_batch_reports_collection_error_not_ok(monkeypatch, 
     # and nginx, which DID get an answer, must be unaffected
     nginx_finding = next(f for f in result['findings'] if f['package'] == 'nginx')
     assert nginx_finding['severity'] == 'ok'
+
+
+def test_full_flow_osv_outage_reports_collection_errors_not_ok(monkeypatch, isolated_db):
+    """F1 (RA-02): with OSV down, no package may read as 'no known CVEs
+    found'."""
+    fake = ExitCodeFakeSSHExecutor(
+        responses={
+        "dpkg-query -W -f='${Version}' nginx": '1.28.3-1~deb13u2',
+        "dpkg-query -W -f='${Version}' openssh-client": '1:9.6p1-3',
+        'nginx -v': ('nginx version: nginx/1.28.3', ''),
+        "apt-cache show 'nginx=1.28.3-1~deb13u2'": ('Package: nginx\nOrigin: Debian\n', ''),
+        'ssh -V': ('OpenSSH_9.6p1 Debian-3', ''),
+        'apt-cache show openssh-client=1:9.6p1-3': ('Package: openssh-client\nOrigin: Debian\n', ''),
+        "grep -E '^(ID|VERSION_ID)='": ('ID=debian\nVERSION_ID="13"\n', '')
+        },
+        exit_codes={
+        "dpkg-query -W -f='${Version}' nginx": 0,
+        "dpkg-query -W -f='${Version}' openssh-client": 0,
+        },
+    )
+    monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
+
+    def fake_post(*a, **kw):
+        raise httpx.ConnectError('OSV unreachable')
+
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    result = check_cve_audit(host='1.2.3.4')
+
+    assert result['summary']['ok'] == 0
+    assert result['summary']['collection_error'] == 2
+    for name in ('nginx', 'openssh'):
+        f = next(f for f in result['findings'] if f['package'] == name)
+        assert f['severity'] == 'info'
+        assert f['requires_manual_verification'] is True
+        assert 'does NOT mean no CVEs were found' in f['title']
+
+
+def test_full_flow_nothing_detected_is_an_error_not_a_clean_result(monkeypatch, isolated_db):
+    """F1 (RA-10): `uname -r` always yields the running kernel on a
+    reachable Linux host, so an empty package list means collection failed."""
+    fake = FakeSSHExecutor(responses={})
+    monkeypatch.setattr('netaudit_pkg.checks.cve_audit.SSHExecutor', lambda *a, **kw: fake)
+    result = check_cve_audit(host='1.2.3.4')
+    assert result['packages'] == []
+    assert 'not a clean result' in result['error']
 
 
 def test_full_flow_no_packages_summary_includes_collection_error_key(monkeypatch, isolated_db):
