@@ -260,7 +260,7 @@ def test_check_systemd_hardening_sudo_refusal_names_sudo(monkeypatch):
     result = check_systemd_hardening(host='1.2.3.4', unit='nginx.service')
     assert result['error'] == 'sudo refused systemd-analyze: sudo: a password is required'
     assert 'NOPASSWD' in result['hint']
-    assert 'password' in result['hint']
+    assert '"Sudo password"' in result['hint']  # the field's name since task 10
 
 
 def test_check_systemd_hardening_stderr_warning_does_not_break_json(monkeypatch):
