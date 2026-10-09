@@ -21,7 +21,7 @@ from ..nginx_config import collect_nginx_config
 from ..registry import register
 from ..ssh import HostKeyMismatchError, SSHExecutor
 from ..ssh_config import collect_ssh_config
-from ..utils import run_cmd, tool_available
+from ..utils import last_response_headers, run_cmd, tool_available
 
 try:
     import paramiko
@@ -1081,19 +1081,55 @@ SENSITIVE_PATHS = [
     '/docker-compose.yml', '/.npmrc',
 ]
 
-def _check_tls_version(hostname, version_name, ssl_version) -> bool:
-    """Tries connecting with a specific TLS version. True if the server accepted it."""
+OLD_TLS_VERSIONS = ((ssl.TLSVersion.TLSv1, 'TLS 1.0'), (ssl.TLSVersion.TLSv1_1, 'TLS 1.1'))
+
+
+def _tls_probe_context(version: ssl.TLSVersion) -> ssl.SSLContext:
+    """A client context that offers exactly `version` and nothing else. At
+    OpenSSL 3's default security level a client cannot offer TLS 1.0/1.1 at
+    all, so the level is lowered to 0 for this probe only (F2, RA-03)."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE  # nosec B501 - probing which protocol versions the server accepts, no data is exchanged
+    ctx.set_ciphers('DEFAULT:@SECLEVEL=0')
+    ctx.minimum_version = version
+    ctx.maximum_version = version
+    return ctx
+
+
+def _client_can_offer(version: ssl.TLSVersion) -> bool:
+    """Whether this host's Python/OpenSSL can send a ClientHello for
+    `version`: an in-memory handshake, no network. Without this, a local
+    inability reads as "the server does not support it"."""
     try:
-        ctx = ssl.SSLContext(ssl_version)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        with (
-            socket.create_connection((hostname, 443), timeout=6) as sock,
-            ctx.wrap_socket(sock, server_hostname=hostname),
-        ):
-            return True
-    except (ssl.SSLError, OSError, ValueError):
+        ctx = _tls_probe_context(version)
+        ctx.wrap_bio(ssl.MemoryBIO(), ssl.MemoryBIO(), server_hostname='probe.invalid').do_handshake()
+    except ssl.SSLWantReadError:
+        return True  # ClientHello written, waiting for a server
+    except (ssl.SSLError, ValueError):
         return False
+    return True
+
+
+def _check_tls_version(hostname: str, version: ssl.TLSVersion) -> str:
+    """'accepted' (the handshake at exactly `version` completed), 'refused'
+    (the server ended the handshake) or 'untested' (this client cannot offer
+    `version`, or the connection failed or timed out)."""
+    if not _client_can_offer(version):
+        return 'untested'
+    try:
+        sock = socket.create_connection((hostname, 443), timeout=6)
+    except OSError:
+        return 'untested'
+    try:
+        with sock, _tls_probe_context(version).wrap_socket(sock, server_hostname=hostname):
+            return 'accepted'
+    except TimeoutError:
+        return 'untested'
+    except (ssl.SSLError, ConnectionError):
+        return 'refused'
+    except OSError:
+        return 'untested'
 
 def _parse_set_cookie_headers(head: str) -> list[str]:
     """Extracts all Set-Cookie lines from raw curl -I response headers.
@@ -1190,51 +1226,63 @@ def check_web_security_external(url='https://example.com') -> dict:
     if not hostname:
         return {'error': f'could not parse URL: {url}'}
     base = f'https://{hostname}'
-    findings = []
+    if not tool_available('curl'):
+        return {'error': 'curl is not installed'}
 
-    # headers
-    if tool_available('curl'):
-        _code, head, _ = run_cmd(['curl', '-s', '-I', '-L', '--max-time', '10', base], timeout=15)
-        hl = head.lower()
-        server_m = re.search(r'server:\s*(.+)', head, re.IGNORECASE)
-        if server_m and re.search(r'\d+\.\d+', server_m.group(1)):
-            findings.append(_finding('low', 'the server discloses its version', f'Server: {server_m.group(1).strip()}',
-                                     id='WEB-HDR-001'))
-        for hdr, sev in [('strict-transport-security', 'medium'), ('x-frame-options', 'low'),
-                         ('x-content-type-options', 'low'), ('content-security-policy', 'low')]:
-            if hdr not in hl:
-                findings.append(_finding(sev, f'missing header {hdr}', id=WEB_MISSING_HEADER_IDS[hdr]))
-        for hdr in ('x-powered-by', 'x-aspnet-version', 'x-aspnetmvc-version'):
-            m = re.search(rf'^{hdr}:\s*(.+)$', head, re.IGNORECASE | re.MULTILINE)
-            if m:
-                findings.append(_finding('low', f'header {hdr} discloses the technology',
-                                          m.group(1).strip(), id=WEB_TECH_HEADER_IDS[hdr]))
-        findings.extend(_audit_cookies(_parse_set_cookie_headers(head)))
-    else:
-        head = ''
+    # headers. Nothing below means anything without this response (F2, RA-04:
+    # an unreachable site used to come back as four "missing header" findings).
+    code, head, err = run_cmd(['curl', '-sS', '-I', '-L', '--max-time', '10', base], timeout=15)
+    if code != 0:
+        return {'url': base, 'error': f'could not fetch {base}: {err.strip() or f"curl exit code {code}"}'}
+    findings = []
+    # presence checks read the final page; Server and cookies every response
+    final = last_response_headers(head)
+    hl = final.lower()
+    server_m = re.search(r'server:\s*(.+)', head, re.IGNORECASE)
+    if server_m and re.search(r'\d+\.\d+', server_m.group(1)):
+        findings.append(_finding('low', 'the server discloses its version', f'Server: {server_m.group(1).strip()}',
+                                 id='WEB-HDR-001'))
+    for hdr, sev in [('strict-transport-security', 'medium'), ('x-frame-options', 'low'),
+                     ('x-content-type-options', 'low'), ('content-security-policy', 'low')]:
+        if hdr not in hl:
+            findings.append(_finding(sev, f'missing header {hdr}', id=WEB_MISSING_HEADER_IDS[hdr]))
+    for hdr in ('x-powered-by', 'x-aspnet-version', 'x-aspnetmvc-version'):
+        m = re.search(rf'^{hdr}:\s*(.+)$', final, re.IGNORECASE | re.MULTILINE)
+        if m:
+            findings.append(_finding('low', f'header {hdr} discloses the technology',
+                                      m.group(1).strip(), id=WEB_TECH_HEADER_IDS[hdr]))
+    findings.extend(_audit_cookies(_parse_set_cookie_headers(head)))
 
     findings.extend(_audit_cors(base))
     findings.extend(_audit_error_page(base))
 
     # outdated TLS
-    old_tls = []
-    if hasattr(ssl, 'PROTOCOL_TLSv1') and _check_tls_version(hostname, 'TLS 1.0', ssl.PROTOCOL_TLSv1):
-        old_tls.append('TLS 1.0')
-    if hasattr(ssl, 'PROTOCOL_TLSv1_1') and _check_tls_version(hostname, 'TLS 1.1', ssl.PROTOCOL_TLSv1_1):
-        old_tls.append('TLS 1.1')
+    tls = {name: _check_tls_version(hostname, version) for version, name in OLD_TLS_VERSIONS}
+    old_tls = [name for name, state in tls.items() if state == 'accepted']
     if old_tls:
         findings.append(_finding('high', 'outdated TLS versions are supported', ', '.join(old_tls), id='WEB-TLS-001'))
+    untested_tls = [name for name, state in tls.items() if state == 'untested']
+    if untested_tls:
+        findings.append(_finding('info', f'could not test {"/".join(untested_tls)}',
+                                 'this host\'s TLS library cannot offer the version, or the connection '
+                                 'failed — not evidence that the server rejects it',
+                                 requires_manual_verification=True))
 
     # sensitive paths
-    exposed = []
-    if tool_available('curl'):
-        for path in SENSITIVE_PATHS:
-            _code, out, _ = run_cmd(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}',
-                                    '--max-time', '6', base + path], timeout=10)
-            if out.strip() == '200':
-                exposed.append(path)
+    exposed, unchecked = [], []
+    for path in SENSITIVE_PATHS:
+        code, out, _ = run_cmd(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}',
+                                '--max-time', '6', base + path], timeout=10)
+        if code != 0:
+            unchecked.append(path)
+        elif out.strip() == '200':
+            exposed.append(path)
     if exposed:
         findings.append(_finding('high', 'sensitive paths are exposed', ', '.join(exposed), id='WEB-PATH-001'))
+    if unchecked:
+        findings.append(_finding('info', f'{len(unchecked)} sensitive path(s) could not be checked',
+                                 'request failed (timeout or connection error), not confirmed absent: '
+                                 + ', '.join(unchecked), requires_manual_verification=True))
 
     if not findings:
         findings.append(_finding('ok', 'no external issues found'))
