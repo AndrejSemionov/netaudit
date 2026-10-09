@@ -151,7 +151,7 @@ def test_instances_differing_only_in_unverified_are_ambiguous():
 
 def test_unreadable_nginx_config_finding_requires_manual_verification():
     ssh = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx version: nginx/1.24.0', ''),
         'nginx -T': ('', ''),
     })

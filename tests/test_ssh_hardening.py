@@ -84,9 +84,9 @@ kexalgorithms diffie-hellman-group14-sha1
 
 def _ssh_responses(sshd_t_output: str, *, installed=True) -> dict:
     if not installed:
-        return {'which sshd': ('NONE', '')}
+        return {'command -v sshd': ('NONE', '')}
     return {
-        'which sshd': ('/usr/sbin/sshd', ''),
+        'command -v sshd': ('/usr/sbin/sshd', ''),
         'sshd -V': ('', 'OpenSSH_10.2p1 Ubuntu-2ubuntu3.5'),
         'sshd -T': (sshd_t_output, ''),
     }
@@ -161,7 +161,7 @@ def test_audit_ssh_hardening_score_not_installed(fake_ssh):
 
 def test_audit_ssh_hardening_score_unreadable_config(fake_ssh):
     fake_ssh.responses = {
-        'which sshd': ('/usr/sbin/sshd', ''),
+        'command -v sshd': ('/usr/sbin/sshd', ''),
         'sshd -V': ('', 'OpenSSH_10.2p1'),
         'sshd -T': ('', ''),
     }
@@ -233,7 +233,7 @@ def test_check_ssh_hardening_happy_path(monkeypatch):
 
 
 def test_check_ssh_hardening_closes_ssh_even_on_error(monkeypatch):
-    fake = FakeSSHExecutor(responses={'which sshd': ('NONE', '')})
+    fake = FakeSSHExecutor(responses={'command -v sshd': ('NONE', '')})
     monkeypatch.setattr('netaudit_pkg.checks.ssh_hardening.SSHExecutor', lambda *a, **kw: fake)
     check_ssh_hardening(host='10.0.0.5')
     assert fake.closed is True

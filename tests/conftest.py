@@ -83,6 +83,10 @@ class FakeSSHExecutor:
     def run(self, cmd: str, timeout: int = 20, stdin_data: str | None = None) -> tuple[str, str]:
         self.stdin_data.append(stdin_data)
         out, err = self._match(cmd)
+        probe = _RC_MARKER_RE.search(cmd) if 'command -v nginx' in cmd or 'command -v sshd' in cmd else None
+        if probe and any(key in cmd for key in self.responses):
+            code = 127 if out == 'NONE' else 0
+            return f'{"" if code else out}\n{probe.group(1)}:{code}\n', err
         m = _SUDO_WRAP_RE.match(cmd)
         if m:
             return f'{out}\n{m.group(1)}:0\n', err

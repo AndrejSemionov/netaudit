@@ -58,8 +58,13 @@ def audit_nginx(ssh: SSHExecutor) -> dict:
     not a specific control's result).
     """
     cfg = collect_nginx_config(ssh)
-    if not cfg.installed:
+    if cfg.installed is False:
         return {'installed': False}
+    if cfg.installed is None:
+        return {'installed': None,
+                'findings': [_finding('low', 'could not determine whether nginx is installed',
+                                      cfg.error or 'nginx presence check was inconclusive',
+                                      requires_manual_verification=True)]}
     if not cfg.readable:
         return {'installed': True, 'version': cfg.version,
                 'findings': [_finding('low', 'no access to the config',

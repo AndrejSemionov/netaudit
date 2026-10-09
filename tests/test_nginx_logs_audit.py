@@ -198,7 +198,7 @@ def test_check_nginx_logs_audit_no_host():
 
 
 def test_check_nginx_logs_audit_not_installed(monkeypatch):
-    fake = FakeSSHExecutor(responses={'which nginx': ('NONE', '')})
+    fake = FakeSSHExecutor(responses={'command -v nginx': ('NONE', '')})
     monkeypatch.setattr('netaudit_pkg.checks.nginx_logs_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_nginx_logs_audit(host='10.0.0.5')
     assert result == {'installed': False}
@@ -206,7 +206,7 @@ def test_check_nginx_logs_audit_not_installed(monkeypatch):
 
 
 def test_check_nginx_logs_audit_closes_ssh_even_on_error(monkeypatch):
-    fake = FakeSSHExecutor(responses={'which nginx': ('NONE', '')})
+    fake = FakeSSHExecutor(responses={'command -v nginx': ('NONE', '')})
     monkeypatch.setattr('netaudit_pkg.checks.nginx_logs_audit.SSHExecutor', lambda *a, **kw: fake)
     check_nginx_logs_audit(host='10.0.0.5')
     assert fake.closed is True

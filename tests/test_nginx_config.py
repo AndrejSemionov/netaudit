@@ -179,7 +179,7 @@ def test_parse_full_config_with_disabled_certificate_and_headers():
 # ===========================================================================
 
 def test_collect_not_installed(fake_ssh):
-    fake_ssh.responses = {'which nginx': ('NONE', '')}
+    fake_ssh.responses = {'command -v nginx': ('NONE', '')}
     cfg = collect_nginx_config(fake_ssh)
     assert cfg.installed is False
     assert cfg.readable is False
@@ -187,7 +187,7 @@ def test_collect_not_installed(fake_ssh):
 
 def test_collect_installed_but_unreadable(fake_ssh):
     fake_ssh.responses = {
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx version: nginx/1.24.0', ''),
         'nginx -T': ('', ''),  # no root -> empty output
     }
@@ -199,7 +199,7 @@ def test_collect_installed_but_unreadable(fake_ssh):
 
 def test_collect_full_config(fake_ssh):
     fake_ssh.responses = {
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx version: nginx/1.24.0', ''),
         'nginx -T': (('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;\n'
                      'ssl_certificate /etc/nginx/cert.pem;'), ''),
@@ -213,7 +213,7 @@ def test_collect_full_config(fake_ssh):
 
 
 def test_collect_only_makes_expected_calls(fake_ssh):
-    fake_ssh.responses = {'which nginx': ('NONE', '')}
+    fake_ssh.responses = {'command -v nginx': ('NONE', '')}
     collect_nginx_config(fake_ssh)
     # not-installed case should short-circuit after the `which` check -
     # no point running `nginx -v`/`nginx -T` against a binary that isn't there

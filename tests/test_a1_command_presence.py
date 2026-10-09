@@ -98,3 +98,31 @@ def test_ssh_hardening_does_not_turn_unknown_probe_into_not_installed():
     result = audit_ssh_hardening_score(ProbeSSH(None))
     assert result.get('installed') is None
     assert result['error']
+
+
+@pytest.mark.parametrize('collect,tool', [
+    (collect_nginx_config, 'nginx'),
+    (collect_nginx_config_v2, 'nginx'),
+    (collect_ssh_config, 'sshd'),
+])
+def test_user_path_lookup_is_never_promoted_to_sudo_command(collect, tool):
+    class UserPathSSH:
+        password = ''
+
+        def __init__(self):
+            self.calls = []
+
+        def run(self, cmd, timeout=20, stdin_data=None):
+            self.calls.append(cmd)
+            marker = re.search(r'(__NETAUDIT_RC_[0-9a-f]+__)', cmd)
+            if f'command -v {tool}' in cmd:
+                return f'/home/audit/bin/{tool}\n{marker.group(1)}:0\n', ''
+            if 'sudo -n --' in cmd:
+                return f'\n{marker.group(1)}:1\n', ''
+            return '', ''
+
+    ssh = UserPathSSH()
+    cfg = collect(ssh)
+    assert cfg.installed is True
+    assert any(f'sudo -n -- {tool} -T' in call for call in ssh.calls)
+    assert not any(f'sudo -n -- /home/audit/bin/{tool}' in call for call in ssh.calls)

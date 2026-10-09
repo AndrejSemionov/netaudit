@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 
 from .nginx_v2_utils import normalize_listen_address
 from .ssh import SSHExecutor
-from .ssh_utils import run_sudo_with_exit_code
+from .ssh_utils import probe_remote_tool, run_sudo_with_exit_code
 
 
 @dataclass(frozen=True)
@@ -193,7 +193,7 @@ class NginxConfigV2:
     None couldn't tell apart.
     """
 
-    installed: bool
+    installed: bool | None
     readable: bool = False
     # why nginx -T gave no config, when known (sudo refusal reason or the
     # command's own failure - task 10); None otherwise
@@ -571,9 +571,11 @@ def collect_nginx_config_v2(ssh: SSHExecutor) -> NginxConfigV2:
     # local import: nginx_config imports nothing from this module
     from .nginx_config import read_error
 
-    out, _ = ssh.run('which nginx || echo NONE')
-    if 'NONE' in out:
+    probe = probe_remote_tool(ssh, 'nginx')
+    if probe.status == 'absent':
         return NginxConfigV2(installed=False)
+    if probe.status == 'unknown':
+        return NginxConfigV2(installed=None, error=probe.detail)
 
     result = run_sudo_with_exit_code(ssh, ['nginx', '-T'])
     error = read_error(ssh, result)

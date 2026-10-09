@@ -29,7 +29,7 @@ import re
 from dataclasses import dataclass, field
 
 from .ssh import SSHExecutor
-from .ssh_utils import describe_sudo_refusal, run_sudo_with_exit_code
+from .ssh_utils import describe_sudo_refusal, probe_remote_tool, run_sudo_with_exit_code
 
 
 @dataclass
@@ -40,7 +40,7 @@ class NginxConfig:
     nginx_hardening for scoring), not to this parser.
     """
 
-    installed: bool
+    installed: bool | None
     version: str = ''
     conf: str = ''
     # None when nginx -T produced no output (e.g. needs root and we don't
@@ -77,11 +77,13 @@ def collect_nginx_config(ssh: SSHExecutor) -> NginxConfig:
     on stdin when one is set), so a refusal is reported with its reason in
     NginxConfig.error instead of a generic "requires root" (task 10).
     """
-    out, _ = ssh.run('which nginx || echo NONE')
-    if 'NONE' in out:
+    probe = probe_remote_tool(ssh, 'nginx')
+    if probe.status == 'absent':
         return NginxConfig(installed=False)
+    if probe.status == 'unknown':
+        return NginxConfig(installed=None, error=probe.detail)
 
-    ver, _ = ssh.run('nginx -v 2>&1')
+    ver, _ = ssh.run('PATH=/usr/sbin:/sbin:"$PATH" nginx -v 2>&1')
     version = ver.strip()
     result = run_sudo_with_exit_code(ssh, ['nginx', '-T'])
     error = read_error(ssh, result)

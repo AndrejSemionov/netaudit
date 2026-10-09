@@ -27,7 +27,7 @@ def _baseline_responses():
     fixture every time."""
     return {
         # nginx
-        'which nginx': '/usr/sbin/nginx',
+        'command -v nginx': '/usr/sbin/nginx',
         'nginx -v': 'nginx/1.24.0',
         'nginx -T': ('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;\n'
                      'add_header Strict-Transport-Security "max-age=1" always;\n'
@@ -45,6 +45,7 @@ def _baseline_responses():
         'ss -tlnp': '',
         "grep -rh '^\\s*bind-address' /etc/mysql/": '',
         # ssh
+        'command -v sshd': '/usr/sbin/sshd',
         'sshd -T': 'permitrootlogin prohibit-password\npasswordauthentication no\n'
                    'permitemptypasswords no\nport 22\nmaxauthtries 6',
     }
@@ -54,6 +55,8 @@ def _baseline_exit_codes():
     return {
         # nginx -T / sshd -T run under sudo through run_sudo_with_exit_code()
         # since task 10, so they need an exit code like every wrapped command
+        'command -v nginx': 0,
+        'command -v sshd': 0,
         'nginx -T': 0,
         'sshd -T': 0,
         'command -v fail2ban-client': 127,

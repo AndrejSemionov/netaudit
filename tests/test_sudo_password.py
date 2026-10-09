@@ -258,8 +258,8 @@ def test_nginx_hardening_error_carries_the_diagnostic(bin_dir, monkeypatch):
 def test_ssh_hardening_error_carries_the_diagnostic(monkeypatch):
     from netaudit_pkg.checks.ssh_hardening import check_ssh_hardening
     fake = ExitCodeFakeSSHExecutor(
-        responses={'which sshd': '/usr/sbin/sshd', 'sshd -V': 'OpenSSH_9.6', 'sudo -n -- sshd -T': ''},
-        exit_codes={'sudo -n -- sshd -T': 1},
+        responses={'command -v sshd': '/usr/sbin/sshd', 'sshd -V': 'OpenSSH_9.6', 'sudo -n -- sshd -T': ''},
+        exit_codes={'command -v sshd': 0, 'sudo -n -- sshd -T': 1},
         stderrs={'sudo -n -- sshd -T': 'sudo: a password is required\n'})
     monkeypatch.setattr('netaudit_pkg.checks.ssh_hardening.SSHExecutor', lambda *a, **kw: fake)
     result = check_ssh_hardening(host='h')

@@ -67,12 +67,12 @@ maxauthtries 10
 
 def _ssh(conf: str) -> FakeSSHExecutor:
     """Builds a FakeSSHExecutor whose responses match the commands
-    collect_ssh_config() actually issues (which sshd / sshd -V / sshd -T),
+    collect_ssh_config() actually issues (command -v sshd / sshd -V / sshd -T),
     not the pre-refactor cat-sshd_config command - audit_ssh_hardening()
     now goes through collect_ssh_config() for all of these.
     """
     return FakeSSHExecutor(responses={
-        'which sshd': ('/usr/sbin/sshd', ''),
+        'command -v sshd': ('/usr/sbin/sshd', ''),
         'sshd -V': ('', 'OpenSSH_10.2p1 Ubuntu-2ubuntu3.5'),
         'sshd -T': (conf, ''),
     })
@@ -88,7 +88,7 @@ def test_current_behavior_unreadable_config_returns_low_finding():
     # trend layer v1.2 (2a.4): an unreadable config "could not evaluate",
     # so the finding now also carries requires_manual_verification
     assert result == {'findings': [{'severity': 'low', 'title': 'no access to sshd_config',
-                                     'detail': '', 'confidence': 'high',
+                                     'detail': 'sshd presence check did not complete', 'confidence': 'high',
                                      'requires_manual_verification': True}]}
 
 
