@@ -1,9 +1,12 @@
 # Result reliability audit (stage A2)
 
-Status: **DRAFT, part 1 of 2** — outcome model, criteria and split proposed by
-Claude; Claude's half audited. GPT/Codex: review the model and the split, then
-audit the other half (section 5). MODE: AUTONOMOUS (stage A). Fixes are
-separate tasks (section 6), not part of this document.
+Status: **both halves audited** — outcome model, criteria and split by
+Claude; Claude's 23 checks by Claude, GPT/Codex's 14 by GPT/Codex (working
+notes `docs/research/a2_codex_half.md` on `codex/a2-result-reliability`,
+`1aa0f33`, merged here by Claude). Cross-check: Claude re-ran or re-read
+GPT/Codex's FAIL items (section 8); GPT/Codex's cross-check of RA-01…RA-12 is
+pending. MODE: AUTONOMOUS (stage A). Fixes are separate tasks (section 7),
+not part of this document.
 
 Base: `main` @ `ea68f97`. Host used for the runs: Ubuntu 24.04, Python 3.12,
 OpenSSL 3.0.13, temporary empty `HOME`.
@@ -85,14 +88,30 @@ become fix tasks.
 | `dns_audit` | OK — reference model: `_dig_query()` returns NOERROR/NXDOMAIN/SERVFAIL/REFUSED/TIMEOUT/TOOL_ERROR; unresolved queries become `info` "collection failure, not evidence of absence" (SPF, DMARC, DKIM per selector, DNSSEC, dangling CNAME) | — |
 | `cert_transparency` | OK — crt.sh timeout / HTTP error / non-JSON → `error`; zero certificates → explicit note | — |
 | `http` | OK — curl exit code checked, JSON parse errors reported | — |
-| `mtr`, `tcptraceroute`, `ping`, `arping` | OK — exit codes checked (`ping`/`tcptraceroute` accept 1 = no reply, which is a measurement), unparsable output → `error` | — |
-| `speedtest`, `iperf` | OK — exit code and JSON checked | — |
+| `mtr`, `tcptraceroute` | OK — exit codes checked (`tcptraceroute` accepts 1 = no reply, which is a measurement), unparsable output → `error` | — |
+| `ping`, `arping` | partial | RA-20 (GPT/Codex cross-check) |
+| `speedtest` | OK — exit code and JSON checked; a JSON without the expected keys raises, and `engine` turns any exception into `error` (`engine.py:50`) | — |
+| `iperf` | OK — exit code and JSON checked | — |
 | `ports`, `performance` | OK — raw data, exit code checked / psutil | — |
-| `tshark_capture`, `mikrotik_sniffer` | OK — exit code / router error text → `error`; capture tools, no verdicts | — |
+| `tshark_capture`, `mikrotik_sniffer` | partial — exit code / router error text → `error`; capture tools, no verdicts | RA-20 (GPT/Codex cross-check) |
 
-### 5.2 GPT/Codex's half
+### 5.2 GPT/Codex's half (by GPT/Codex, `1aa0f33`; summary translated by Claude)
 
-_To be filled by GPT/Codex._
+| Check | Verdict | Issues / evidence (GPT/Codex) |
+|-------|---------|-------------------------------|
+| `nginx_hardening` | FAIL on `main`, fixed by A1 | `which nginx \|\| echo NONE` → a failed probe or a `PATH` without `/usr/sbin` became `installed=False`. A1 `e1dfe35` adds present/absent/unknown. |
+| `ssh_hardening` | FAIL on `main`, fixed by A1 | an empty `sshd -V` was taken as "sshd absent". A1 uses an explicit `installed`. |
+| `nginx_logs_audit` | FAIL on `main`, fixed by A1 | same preflight as `nginx_hardening`; per-source coverage after it is correct (complete/empty/failed/unknown). |
+| `kernel_hardening` | OK | sudo, then unprivileged retry; no score unless all 16 keys are read. |
+| `ssh_auth_audit` | OK | `auth.log` only on `completed && exit_code == 0`, else journal, else `detection_succeeded=False` and no clean finding (`ssh_auth_audit.py:176–188`). |
+| `fail2ban_logs_audit`, `kern_log_audit` | OK | `_source_coverage()` uses marker + exit code; UNKNOWN/FAILED never give `detection_succeeded`. |
+| `systemd_hardening` | partial | RA-19 |
+| `aide_check` | partial | RA-18 |
+| `rootkit_check` | **FAIL** | RA-13 |
+| `docker_audit` | **FAIL** | RA-14 |
+| `lynis_audit` | **FAIL** | RA-15 |
+| `backup_check` | **FAIL** | RA-16 |
+| `log_discovery` | **FAIL** | RA-17 |
 
 ## 6. Issues (Claude's half)
 
@@ -244,11 +263,99 @@ as present on the final page. (C2) **code:** `site.py`
 Otherwise the firewall, Fail2Ban and SQL sections already follow the model
 (per-backend verdicts with UNKNOWN never reported as `ok`).
 
-## 7. Proposed fix tasks (after GPT/Codex review)
+### Issues in GPT/Codex's half
 
-1. RA-01, RA-03, RA-04 — TLS / external web checks (one task: `site.py`,
-   `server_security.py` external part).
-2. RA-02, RA-10 — `cve_audit` outage path.
-3. RA-05 — `sql_injection` unreachable page.
-4. RA-06 … RA-09, RA-11 — low items, one cleanup task.
-5. RA-12 — covered by A1 and the `command -v` task.
+Found by GPT/Codex (`1aa0f33`); "Claude:" is the independent cross-check.
+
+#### RA-13 — HIGH — `rootkit_check`: sudo refused → "no signs of rootkits found"
+
+`_run_rkhunter()` / `_run_chkrootkit()` call `ssh.sudo('<tool> … 2>&1')` and
+only test that stdout is non-empty. The `2>&1` also captures sudo's own
+"sudo: a password is required", which parses to zero warnings → `ok`.
+(C1, C4) GPT/Codex: reproduced with `FakeSSHExecutor`.
+**Claude: reproduced independently** — both tools answering
+`sudo: a password is required` → `[('ok', 'no signs of rootkits found')]`.
+
+#### RA-14 — MEDIUM — `docker_audit`: `docker ps` failure → "no running containers"
+
+Only "permission denied" / "password is required" are treated as failures; any
+other error (daemon unreachable, API error) leaves stdout empty →
+`ok` "no running containers found". A `docker inspect` whose JSON does not
+parse is skipped silently. (C1, C6) GPT/Codex: reproduced.
+**Claude: reproduced independently** — `docker ps -q` → `('', 'error during
+connect: … EOF')` → `[('ok', 'no running containers found')]`.
+
+#### RA-15 — MEDIUM — `lynis_audit`: audit result ignored, an old report can be shown as new
+
+`ssh.sudo('lynis audit system …')` is not checked; the check then reads
+`/var/log/lynis-report.dat`. When the audit did not run (refused, lock file,
+error) but an older report is readable, its hardening index and findings are
+reported as the current run. (C1) GPT/Codex: reproduced (refused audit +
+`hardening_index=90` report → `ok` "Lynis found no issues", index 90).
+Claude: confirmed by code (`lynis_audit.py:138–146`).
+
+#### RA-16 — MEDIUM — `backup_check`: an unreadable directory looks empty
+
+`_find_files()` runs `find … 2>&1` without an exit code; only "No such file or
+directory" is recognised. "Permission denied" or a dropped command leaves no
+`|` lines → treated as an empty directory → the "no backup files" finding.
+(C1, C4) GPT/Codex: code. **Claude: confirmed by code**, and adds: the archive
+integrity probes use `<tool> … && echo OK || echo FAIL`, so a missing
+`tar`/`gzip`/`unzip` on the target reports the archive as corrupted (C3).
+
+#### RA-17 — MEDIUM — `log_discovery`: unknown `stat` result → "not found"
+
+`_file_verdict()` returns `available=False` for a confirmed absence, for any
+other non-zero `stat` and for an uncompleted `stat`; `build_findings()` then
+writes "not found" / "not present". Its own docstring calls the distinction
+"tracked but not yet exercised". (C3, C6) GPT/Codex: code. Claude: confirmed
+by code (`log_discovery_audit.py:146–186`).
+
+#### RA-18 — LOW — `aide_check` check mode: clean judged by text only
+
+`aide --check` runs through `ssh.sudo()` without an exit code; the text "no
+differences" / "looks okay" is taken as clean (`aide_check.py:226–241`). The
+database and init paths already use exit markers. (C1) GPT/Codex: code.
+
+#### RA-19 — LOW — `systemd_hardening`: unchecked status and an empty model
+
+`systemctl status … | head -1` takes `head`'s status; a successful
+`--json=short` with an empty directive list gives `ok` without confirming the
+model is complete. Needs a targeted test. (C1, C2) GPT/Codex: code.
+
+#### RA-20 — LOW — `ping`, `arping`, capture tools: unparsed output is not marked
+
+From GPT/Codex's cross-check of Claude's half: `ping`/`arping` with exit 0/1
+but no recognisable statistics return `loss_pct: None` etc. without an
+`error`; `tshark_capture` / `mikrotik_sniffer` with exit 0 and unparsable
+output report zero packets / destinations. Measurement tools with no verdict,
+hence low. Claude: agrees.
+
+## 7. Proposed fix tasks
+
+Grouped by module so each PR stays reviewable; HIGH first. Each is its own
+RED → GREEN task in stage A (fixing false results is the stage A goal);
+roles alternate by half: the agent who audited a module does not fix it alone,
+the other reviews.
+
+| Task | Issues | Modules | Proposed implementer / reviewer |
+|------|--------|---------|---------------------------------|
+| F1 | RA-02, RA-10 | `cve_audit` | Claude / GPT/Codex |
+| F2 | RA-01, RA-03, RA-04, RA-11 | `site.py` (`ssl`, `security_headers`), `server_security.py` (`web_security_external`) | Claude / GPT/Codex |
+| F3 | RA-13, RA-15, RA-18 | `rootkit_check`, `lynis_audit`, `aide_check` — move to `run_sudo_with_exit_code()` | GPT/Codex / Claude |
+| F4 | RA-14, RA-16, RA-17 | `docker_audit`, `backup_check`, `log_discovery` | GPT/Codex / Claude |
+| F5 | RA-05, RA-06 | `sql_injection`, `breach_check` | Claude / GPT/Codex |
+| F6 | `command -v` 127-only (`FINDINGS.md`) | `firewall_config`, `fail2ban_config`, `server_security` SQL | GPT/Codex / Claude |
+| F7 | RA-07, RA-08, RA-09, RA-19, RA-20 | low cleanup | later |
+
+RA-12 is covered by A1 and F6.
+
+## 8. Cross-check status
+
+- Claude → GPT/Codex's half: RA-13 and RA-14 reproduced; RA-15, RA-16, RA-17
+  confirmed by code; RA-18, RA-19 not re-checked (low). The A1 rows are
+  reviewed in `.ai/REVIEW.md` (A1 pass 1).
+- GPT/Codex → Claude's half: preliminary rows 1–20 in its notes agree on
+  `breach_check`, `cve_audit` (empty inventory), `dig`, `dns_audit`,
+  `cert_transparency`; added RA-20; `speedtest` resolved above (exception →
+  `error` in `engine`). Review of RA-01…RA-12 itself: pending.
