@@ -360,14 +360,14 @@ def test_guard_ignores_test_files_and_intentional_raises(env):
 
 
 def test_repository_code_passes_the_guard():
-    """Every tracked Python file outside tests/ that raises NotImplementedError
-    marks it intentional, so deploying this repository is never blocked."""
-    files = subprocess.run(['git', 'ls-files', '*.py'], cwd=REPO, check=True,
-                           capture_output=True, text=True).stdout.split()
-    for rel in files:
-        if rel.startswith('tests/'):
-            continue
-        for line in (REPO / rel).read_text(encoding='utf-8').splitlines():
+    """Every project Python file outside tests/ that raises NotImplementedError
+    marks it intentional, so deploying this repository is never blocked.
+    Reads the files directly, not via git: deploy.sh runs this suite in the
+    runtime copy (~/netaudit), which is not a git repository."""
+    code = [REPO / 'netaudit.py', *(REPO / 'netaudit_pkg').rglob('*.py'), *(REPO / 'web').rglob('*.py')]
+    assert len(code) > 20
+    for path in code:
+        for line in path.read_text(encoding='utf-8').splitlines():
             if 'raise NotImplementedError' in line:
-                assert 'deploy-guard: intentional' in line, rel
+                assert 'deploy-guard: intentional' in line, path
 
