@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from netaudit_pkg.checks.nginx_hardening import audit_nginx_hardening
+from netaudit_pkg.checks.server_security import audit_ssh_hardening
 from netaudit_pkg.checks.ssh_hardening import audit_ssh_hardening_score
 from netaudit_pkg.nginx_config import NginxConfig, collect_nginx_config
 from netaudit_pkg.nginx_config_v2 import collect_nginx_config_v2
@@ -98,6 +99,23 @@ def test_ssh_hardening_does_not_turn_unknown_probe_into_not_installed():
     result = audit_ssh_hardening_score(ProbeSSH(None))
     assert result.get('installed') is None
     assert result['error']
+
+
+@pytest.mark.parametrize('code', [1, 127])
+def test_server_audit_ssh_section_reports_confirmed_absence(code):
+    result = audit_ssh_hardening(ProbeSSH(code))
+    assert result == {'installed': False}
+
+
+def test_server_audit_ssh_section_reports_unknown_probe_for_manual_verification():
+    result = audit_ssh_hardening(ProbeSSH(None))
+    assert result['installed'] is None
+    assert len(result['findings']) == 1
+    finding = result['findings'][0]
+    assert finding['severity'] == 'low'
+    assert finding['title'] == 'could not determine whether sshd is installed'
+    assert finding['requires_manual_verification'] is True
+    assert 'sshd presence check did not complete' in finding['detail']
 
 
 @pytest.mark.parametrize('collect,tool', [
