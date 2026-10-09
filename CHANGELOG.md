@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `deploy.sh` (layout B) backs up the files it changes and the database before
+  copying, rolls back by itself when tests, the restart or the smoke test fail,
+  and has `./deploy.sh --rollback`. It deploys everything since the last
+  deployed commit (not only the last pull), removes files deleted in git, and
+  treats HTTP 401 from the smoke test (Basic Auth on) as a warning.
+- In the Russian interface, the SSH fields shared by many checks (host, user,
+  port, key, SSH and sudo passwords, log lines) are translated even where the
+  check itself has no translation yet.
 - SSH checks that use sudo have a separate **Sudo password** field
   (`sudo_password`). It goes to `sudo -S` on stdin and is never stored; when it
   is empty the SSH password is used, as before. The `password` field is now the
