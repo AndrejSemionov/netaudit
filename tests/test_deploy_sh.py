@@ -51,6 +51,8 @@ printf '\n%s' "$code"
 _FAKE_PYTHON = r'''#!/bin/sh
 if [ "$1" = "-m" ] && [ "$2" = "pytest" ]; then
   echo "fake pytest"
+  # runs in the runtime copy, after the files are copied (deploy.sh step 5)
+  if [ -n "${FAKE_PYTEST_SIDE_EFFECT:-}" ]; then sh -c "$FAKE_PYTEST_SIDE_EFFECT"; fi
   exit "${FAKE_PYTEST_RC:-0}"
 fi
 exec "$REAL_PYTHON" "$@"
@@ -371,3 +373,64 @@ def test_repository_code_passes_the_guard():
             if 'raise NotImplementedError' in line:
                 assert 'deploy-guard: intentional' in line, path
 
+
+# ===========================================================================
+# Rev.2 (A0 review of PR #10): the manifest is part of the deploy
+# ===========================================================================
+
+def test_read_only_manifest_is_replaced_and_the_deploy_succeeds(env):
+    """E6 as GPT/Codex reproduced it: the manifest write used to fail after
+    the trap was off - new code running, old commit in the manifest, exit 1
+    and no rollback."""
+    (env.runtime / '.deployed_manifest').chmod(0o400)
+    head = _change(env)
+    result = env.run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'DEPLOYMENT SUCCESS' in result.stdout
+    assert env.manifest_commit() == head
+
+
+def test_manifest_write_failure_rolls_back(env):
+    before = _tree(env.runtime)
+    _change(env)
+    result = env.run(FAKE_PYTEST_SIDE_EFFECT='mkdir .deployed_manifest.new')
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'ROLLED BACK' in result.stdout
+    assert _tree(env.runtime) == before  # code and manifest as before the deploy
+    assert env.restarts() == 2
+
+
+def test_read_only_manifest_does_not_break_the_rollback(env):
+    """E8: restore_backup's plain cp could not replace a read-only manifest."""
+    before = _tree(env.runtime)
+    (env.runtime / '.deployed_manifest').chmod(0o400)
+    _change(env)
+    result = env.run(FAKE_PYTEST_RC='1')
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'ROLLED BACK' in result.stdout
+    assert 'ROLLBACK FAILED' not in result.stdout
+    assert _tree(env.runtime) == before
+
+
+@pytest.mark.skipif(hasattr(os, 'geteuid') and os.geteuid() == 0,
+                    reason='root removes the locked backup anyway')
+def test_retention_failure_after_a_finished_deploy_is_a_warning(env):
+    """E7: the deploy is done once the manifest is written; failing to
+    remove an old backup must not turn it into a failure."""
+    env.backups.mkdir(mode=0o700)
+    old = [env.backups / f'20000101T00000{i}.000000000Z-old' for i in range(5)]
+    for d in old:
+        d.mkdir()
+    locked = old[0] / 'locked'
+    locked.mkdir()
+    (locked / 'file').write_text('x')
+    locked.chmod(0o500)
+    try:
+        head = _change(env)
+        result = env.run()
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert 'DEPLOYMENT SUCCESS' in result.stdout
+        assert 'WARNING' in result.stdout and str(env.backups) in result.stdout
+        assert env.manifest_commit() == head
+    finally:
+        locked.chmod(0o700)
