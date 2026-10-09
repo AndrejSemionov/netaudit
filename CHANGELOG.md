@@ -44,6 +44,10 @@
   `/var/www` or `/home` controls); `systemd_hardening` accepts only valid unit
   names; `backup_check` accepts only absolute directories and quotes them;
   the MikroTik `target_ip` must be an IP address.
+- `cve_audit`: when the OSV vulnerability database cannot be reached (or
+  answers with an error or non-JSON), packages are reported as "CVE matching
+  could not be completed" instead of "no known CVEs found". A host where
+  not even the running kernel was detected is reported as an error.
 
 ## 1.0.0 — 2026-10-08
 
