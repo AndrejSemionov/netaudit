@@ -85,7 +85,7 @@ class Env:
         _exe(self.bin / 'systemctl', _FAKE_SYSTEMCTL)
         _exe(self.bin / 'curl', _FAKE_CURL)
         _exe(self.bin / 'python3', _FAKE_PYTHON)
-        _git(self.mirror, 'init', '-q', '-b', 'main')
+        _git(self.mirror, 'init', '-q')  # no -b: git < 2.28 on the target host
         _git(self.mirror, 'config', 'user.email', 'test@example.invalid')
         _git(self.mirror, 'config', 'user.name', 'test')
 
@@ -343,3 +343,31 @@ def test_not_implemented_guard_stops_before_any_backup_or_copy(env):
     assert result.returncode == 1
     assert _tree(env.runtime) == before
     assert env.backup_dirs() == []
+
+
+def test_guard_ignores_test_files_and_intentional_raises(env):
+    """The guard is for half-finished code. Test files may contain the text
+    (this very file does), and a reserved code path marked
+    `# deploy-guard: intentional` is finished code (log_collection.py's
+    FULL/WINDOW modes). Neither may block a deploy."""
+    head = env.commit({
+        'tests/test_stub.py': "def test():\n    src = 'raise NotImplementedError'\n",
+        'reserved.py': "def f(mode):\n    raise NotImplementedError('reserved')  # deploy-guard: intentional\n",
+    })
+    result = env.run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert env.manifest_commit() == head
+
+
+def test_repository_code_passes_the_guard():
+    """Every tracked Python file outside tests/ that raises NotImplementedError
+    marks it intentional, so deploying this repository is never blocked."""
+    files = subprocess.run(['git', 'ls-files', '*.py'], cwd=REPO, check=True,
+                           capture_output=True, text=True).stdout.split()
+    for rel in files:
+        if rel.startswith('tests/'):
+            continue
+        for line in (REPO / rel).read_text(encoding='utf-8').splitlines():
+            if 'raise NotImplementedError' in line:
+                assert 'deploy-guard: intentional' in line, rel
+
