@@ -39,7 +39,7 @@ import re
 from ..findings import finding as _finding
 from ..registry import CONFIRM_MODIFY, confirm_param, register
 from ..ssh import HostKeyMismatchError, SSHExecutor
-from ..ssh_utils import run_sudo_with_exit_code
+from ..ssh_utils import describe_sudo_refusal, run_sudo_with_exit_code
 
 try:
     import paramiko
@@ -226,23 +226,37 @@ def check_aide(host='', user='root', port=22, key_path='', password='', sudo_pas
         # ~7 minutes end to end (confirmed via `time aide --check`), same
         # ballpark as --init - a low timeout here would kill a
         # legitimate scan on any server with a non-trivial filesystem.
-        out, _err = ssh.sudo(f'aide --config {AIDE_CONFIG} --check 2>&1', timeout=900)
+        check = run_sudo_with_exit_code(ssh, ['aide', '--config', AIDE_CONFIG, '--check'], timeout=900)
 
     finally:
         ssh.close()
 
+    if not check.completed:
+        return {'error': 'aide --check did not complete'}
+    if check.sudo_error:
+        return {'error': f'sudo refused aide --check: {check.sudo_error}',
+                'hint': describe_sudo_refusal(ssh, check)}
+    if check.exit_code not in range(8):
+        name = AIDE_ERROR_CODES.get(check.exit_code)
+        code = f'exit {check.exit_code}: {name}' if name else f'exit {check.exit_code}'
+        return {'error': f'aide --check failed ({code})',
+                'detail': '\n'.join(p for p in (check.stdout.strip(), check.stderr.strip()) if p)[-500:]}
+
+    out = check.stdout
     summary = _parse_summary(out)
-    if summary is None and out.startswith('sudo:'):
-        # `2>&1` puts sudo's own refusal on stdout (task 7)
-        return {'error': f'sudo refused aide --check: {out.splitlines()[0].strip()}'}
     if summary is None:
         # AIDE reports "no changes" with different wording if nothing changed at all -
         # or there's genuinely no Summary block, in which case don't pretend we parsed it
-        if 'no differences' in out.lower() or 'looks okay' in out.lower():
+        if check.exit_code == 0 and ('no differences' in out.lower() or 'looks okay' in out.lower()):
             return {'host': host, 'mode': 'check',
                     'findings': [_finding('ok', 'no changes found — the filesystem matches the database')],
                     'summary': {'high': 0, 'medium': 0, 'low': 0, 'ok': 1}}
         return {'error': 'failed to parse aide --check output', 'detail': out.strip()[-500:]}
+
+    change_bits = (1 if summary['added'] else 0) | (2 if summary['removed'] else 0) | (4 if summary['changed'] else 0)
+    if check.exit_code != change_bits:
+        return {'error': 'aide --check exit status disagrees with its summary',
+                'detail': f'exit {check.exit_code}, summary change bits {change_bits}'}
 
     findings = []
     if summary['added'] > 0:

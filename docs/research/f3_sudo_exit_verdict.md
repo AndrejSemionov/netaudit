@@ -1,6 +1,7 @@
 # F3 — confirmed execution for rootkit, Lynis, AIDE
 
-Status: DRAFT. USER approved F1–F7 autonomous follow-up to A2 on 2026-10-09.
+Status: implemented locally; awaiting Claude's independent review. USER approved
+F1–F7 autonomous follow-up to A2 on 2026-10-09.
 Implementer: GPT/Codex; independent reviewer: Claude. Base: `origin/main` @
 `ea68f97`. Scope: RA-13, RA-15, RA-18 in
 `docs/research/result_reliability_audit.md`. No automatic installation or
@@ -60,3 +61,12 @@ new sudoers rules are introduced.
 - [rkhunter manual: nonzero on error or warning](https://man.archlinux.org/man/extra/rkhunter/rkhunter.8.en)
 - [Lynis manual: exit codes, including 78 with error-on-warnings](https://man.archlinux.org/man/extra/lynis/lynis.8.en)
 - Existing AIDE bitmask/error mapping: `netaudit_pkg/checks/aide_check.py`.
+
+## Verification
+
+RED `0f69dcc`: all eight F3 cases failed for the expected false-result paths.
+GREEN: 67 focused tests passed; broad suite excluding eight files using Web
+TestClient: 2150 passed with a temporary HOME. Full Ruff, compileall,
+Bandit and `git diff --check` passed. The Codex environment's Web TestClient
+hang is unrelated to these three SSH checks; Claude will run the full suite
+as part of independent review.
