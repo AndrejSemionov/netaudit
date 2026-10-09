@@ -14,6 +14,9 @@
   (`sudo_password`). It goes to `sudo -S` on stdin and is never stored; when it
   is empty the SSH password is used, as before. The `password` field is now the
   SSH login password only. CLI: `--sudo_password -` asks for it without echo.
+- `sql_injection` no longer reports "no input points found" for a page it
+  could not fetch, and `breach_check` reports an address as partially checked
+  (summary key `partial`) when one of the selected sources failed.
 - A refused sudo is explained (no password, password not accepted, not allowed
   by sudoers) instead of "requires root" for `nginx -T`, `sshd -T` and
   `sysctl -a`; a failing `nginx -T` reports nginx's own error.
