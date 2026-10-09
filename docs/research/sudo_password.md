@@ -1,9 +1,9 @@
 # Sudo password for SSH audits — contract proposal (task 10)
 
-Status: **DRAFT rev.1** (2026-10-09). USER requested the task with a written
-spec (items 1–9, constraints, done-criterion; `.ai/TASK.md`, task 10) and
-chose a **separate "Sudo password" field**. Implementer: Claude (proposed).
-Reviewer: GPT/Codex. USER approves this contract before RED/GREEN.
+Status: **APPROVED by USER rev.1** (2026-10-09, «Да, AUTONOMOUS»). USER
+requested the task with a written spec (items 1–9, constraints,
+done-criterion; `.ai/TASK.md`, task 10) and chose a **separate "Sudo
+password" field**. Implementer: Claude. Reviewer: GPT/Codex.
 Branch: `fix/sudo-password` from `main` @ `d157421` (PR #8 and #9 merged).
 
 ## Evidence
