@@ -753,16 +753,28 @@ web/
 
 ## SSH и sudo
 
-SSH-проверки принимают два вида учётных данных:
+SSH-проверки принимают такие учётные данные:
 
 - `key_path` — закрытый ключ для входа по SSH. Поля для пароля ключа (passphrase) в NetAudit
   нет: зашифрованный ключ работает, только если он уже загружен в ssh-agent (CLI). У
   веб-службы под systemd агента нет, поэтому её учётной записи нужен незашифрованный ключ,
   который может читать только она. Если зашифрованный ключ не пришёл из агента, проверка
   завершается явной ошибкой «private key … is encrypted».
-- `password` («Пароль SSH (если без ключа) / пароль sudo») — пароль входа по SSH, когда ключ
-  не задан, и пароль sudo во всех случаях (`sudo -S`). Без него каждый вызов sudo идёт как
-  `sudo -n` (без запроса пароля).
+- `password` («Пароль SSH (если без ключа)») — пароль входа по SSH, используется, только
+  если ключ не задан.
+- `sudo_password` («Пароль sudo (если sudo его спрашивает)») — в проверках, которые что-то
+  запускают под sudo. Передаётся `sudo -S` через stdin, никогда не в командной строке. Если
+  поле пустое, используется пароль SSH (по умолчанию sudo спрашивает пароль самого
+  пользователя); если пусты оба, каждый вызов sudo идёт как `sudo -n` (без запроса пароля).
+  Как и `password`, не сохраняется в отчётах, пресетах и не уходит в AI. В CLI
+  `--sudo_password -` запрашивает его без вывода на экран:
+  `netaudit run kernel_hardening --host 1.2.3.4 --sudo_password -` (значение, набранное в
+  командной строке, видно в `ps` и истории shell).
+
+Если sudo отказал, проверка пишет причину: пароль не указан, пароль не принят или sudoers не
+разрешает команду. `kernel_hardening` в этом случае читает `sysctl -a` без sudo и выполняет
+аудит полностью, если доступны все проверяемые ключи (в результате —
+`collected_without_sudo`); для `nginx -T` и `sshd -T` нужен root, такого запасного пути нет.
 
 sudo запускает саму команду, а не shell, поэтому узкое правило `sudoers` на один бинарник
 работает. Эти сборщики выполняют под sudo ровно такие команды:
@@ -773,6 +785,9 @@ sudo запускает саму команду, а не shell, поэтому �
 | `server_audit` → firewall | `ufw status`, `nft list ruleset`, `iptables -S` |
 | `systemd_hardening` | `systemd-analyze security <unit> --no-pager --json=short`, `systemd-analyze security <unit> --no-pager` |
 | Logs Audit (файлы журналов, доступные только root) | `tail -n <lines> <path>` (`lines` по умолчанию 200) |
+| `nginx_hardening`, `server_audit` → nginx | `nginx -T` |
+| `ssh_hardening`, `server_audit` → SSH | `sshd -T` |
+| `kernel_hardening` | `sysctl -a` (без sudo, если sudo отказал, см. выше) |
 | `aide_check` | `test -f /var/lib/aide/aide.db`, `test -f /var/lib/aide/aide.db.gz`, `aide --config /etc/aide/aide.conf --check`; с `mode=init`: `aide --config /etc/aide/aide.conf --init`, `mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db` (или пара `.gz`) |
 
 Пример (редактировать через `visudo -f /etc/sudoers.d/netaudit`; пути к бинарникам проверить на
