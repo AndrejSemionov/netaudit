@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- SSH checks that use sudo have a separate **Sudo password** field
+  (`sudo_password`). It goes to `sudo -S` on stdin and is never stored; when it
+  is empty the SSH password is used, as before. The `password` field is now the
+  SSH login password only. CLI: `--sudo_password -` asks for it without echo.
+- A refused sudo is explained (no password, password not accepted, not allowed
+  by sudoers) instead of "requires root" for `nginx -T`, `sshd -T` and
+  `sysctl -a`; a failing `nginx -T` reports nginx's own error.
+  `kernel_hardening` reads `sysctl -a` without sudo when sudo refuses and runs
+  in full when every audited key is readable.
 - sudo now runs the real command instead of `sh -c '<command>'` for the
   Fail2Ban and firewall parts of `server_audit`, `systemd_hardening`, Logs
   Audit reads of root-only files, and `aide_check`. Narrow `sudoers` rules for

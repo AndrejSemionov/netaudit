@@ -471,7 +471,7 @@ def audit_ssh_hardening_score(ssh: SSHExecutor) -> dict:
         # legitimate opinion. No hardening score at all, matching
         # nginx_hardening's identical handling of the same shape of failure.
         return {'installed': True, 'version': cfg.version,
-                'error': 'sshd -T requires root — no read access to the effective configuration'}
+                'error': cfg.error or 'sshd -T returned no effective configuration'}
 
     hardening = weighted_score(_build_components(cfg))
     findings = _build_findings(cfg)
@@ -495,14 +495,15 @@ def audit_ssh_hardening_score(ssh: SSHExecutor) -> dict:
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
         {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key) / sudo password', 'default': ''},
+        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key)', 'default': ''},
+        {'name': 'sudo_password', 'type': 'password', 'label': 'Sudo password (if sudo asks for one)', 'default': ''},
     ],
     required_tools=[],
     description='Scores sshd authentication, authentication limits, forwarding and '
                 'cryptography against docs/checks/ssh_hardening.md (14 controls, 0-100 '
                 'hardening score). Read-only.',
 )
-def check_ssh_hardening(host='', user='root', port=22, key_path='', password='') -> dict:  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
+def check_ssh_hardening(host='', user='root', port=22, key_path='', password='', sudo_password='') -> dict:  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
     """Public registry entrypoint - opens its own SSH session when run
     standalone, then delegates to audit_ssh_hardening_score(). Callers that
     already hold an open SSHExecutor should call audit_ssh_hardening_score(ssh)
@@ -513,7 +514,7 @@ def check_ssh_hardening(host='', user='root', port=22, key_path='', password='')
         return {'error': 'host not specified'}
 
     try:
-        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+        ssh = SSHExecutor(host, user, port, key_path, password, sudo_password=sudo_password).connect()
     except HostKeyMismatchError as e:
         return {'error': str(e)}
     # SSH libraries can fail with transport, auth, or socket errors; keep the check isolated.

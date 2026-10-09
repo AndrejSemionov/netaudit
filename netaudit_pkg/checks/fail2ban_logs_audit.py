@@ -186,7 +186,8 @@ def audit_fail2ban_logs(ssh: SSHExecutor, lines: int = DEFAULT_TAIL_LINES) -> di
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
         {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key) / sudo password', 'default': ''},
+        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key)', 'default': ''},
+        {'name': 'sudo_password', 'type': 'password', 'label': 'Sudo password (if sudo asks for one)', 'default': ''},
         {'name': 'lines', 'type': 'number', 'label': 'Lines to collect', 'default': DEFAULT_TAIL_LINES},
     ],
     required_tools=[],
@@ -196,7 +197,7 @@ def audit_fail2ban_logs(ssh: SSHExecutor, lines: int = DEFAULT_TAIL_LINES) -> di
                 'from the fail2ban jail-status check (current configuration/state) — this check is about '
                 'what fail2ban has actually done, per its own log.',
 )
-def check_fail2ban_logs_audit(host='', user='root', port=22, key_path='', password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
+def check_fail2ban_logs_audit(host='', user='root', port=22, key_path='', password='', sudo_password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                                lines=DEFAULT_TAIL_LINES) -> dict:
     """Public registry entrypoint — opens its own SSH session when run
     standalone, then delegates to audit_fail2ban_logs(). Callers that
@@ -208,7 +209,7 @@ def check_fail2ban_logs_audit(host='', user='root', port=22, key_path='', passwo
         return {'error': 'host not specified'}
 
     try:
-        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+        ssh = SSHExecutor(host, user, port, key_path, password, sudo_password=sudo_password).connect()
     except HostKeyMismatchError as e:
         return {'error': str(e)}
     # SSH libraries can fail with transport, auth, or socket errors; keep the check isolated.

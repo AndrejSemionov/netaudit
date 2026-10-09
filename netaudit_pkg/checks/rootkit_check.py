@@ -122,7 +122,8 @@ def _run_chkrootkit(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
         {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key) / sudo password', 'default': ''},
+        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key)', 'default': ''},
+        {'name': 'sudo_password', 'type': 'password', 'label': 'Sudo password (if sudo asks for one)', 'default': ''},
         {'name': 'use_rkhunter', 'type': 'checkbox', 'label': 'Run rkhunter', 'default': True},
         {'name': 'use_chkrootkit', 'type': 'checkbox', 'label': 'Run chkrootkit', 'default': True},
         {'name': 'auto_install', 'type': 'checkbox', 'label': 'Install missing tools',
@@ -135,7 +136,7 @@ def _run_chkrootkit(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
                 'is enabled and confirmed. Both tools produce '
                 'false positives — findings need manual verification, not a ready-made verdict.',
 )
-def check_rootkit(host='', user='root', port=22, key_path='', password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
+def check_rootkit(host='', user='root', port=22, key_path='', password='', sudo_password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                    use_rkhunter=True, use_chkrootkit=True, auto_install=False,
                    confirm_modify='no') -> dict:
     if paramiko is None:
@@ -150,7 +151,7 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='',  # no
                 'hint': 'set "Confirm: this may install packages on the target" to proceed'}
 
     try:
-        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+        ssh = SSHExecutor(host, user, port, key_path, password, sudo_password=sudo_password).connect()
     except HostKeyMismatchError as e:
         return {'error': str(e)}
     # SSH libraries can fail with transport, auth, or socket errors; keep the check isolated.

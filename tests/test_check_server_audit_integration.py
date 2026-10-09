@@ -52,6 +52,10 @@ def _baseline_responses():
 
 def _baseline_exit_codes():
     return {
+        # nginx -T / sshd -T run under sudo through run_sudo_with_exit_code()
+        # since task 10, so they need an exit code like every wrapped command
+        'nginx -T': 0,
+        'sshd -T': 0,
         'command -v fail2ban-client': 127,
         'command -v ufw': 127,
         'nft list ruleset': 0,

@@ -120,19 +120,20 @@ REMOTE_SUDO_CHECKS = {
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
         {'name': 'port', 'type': 'number', 'label': 'Port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key) / sudo password', 'default': ''},
+        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key)', 'default': ''},
+        {'name': 'sudo_password', 'type': 'password', 'label': 'Sudo password (if sudo asks for one)', 'default': ''},
     ],
     required_tools=[],
     description='Read-only audit of a remote server: ports, firewall, fail2ban, login logs.',
 )
 def check_ssh_audit(host: str = '', user: str = 'root', port: int = 22,  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
-                    key_path: str = '', password: str = '') -> dict:
+                    key_path: str = '', password: str = '', sudo_password: str = '') -> dict:
     if paramiko is None:
         return {'error': 'paramiko not installed (pip install paramiko --break-system-packages)'}
     if not host:
         return {'error': 'host not specified'}
     try:
-        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+        ssh = SSHExecutor(host, user, port, key_path, password, sudo_password=sudo_password).connect()
     except HostKeyMismatchError as e:
         return {'error': str(e)}
     # SSH libraries can fail with transport, auth, or socket errors; keep the check isolated.

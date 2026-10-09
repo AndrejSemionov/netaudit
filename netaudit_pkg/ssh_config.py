@@ -36,6 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .ssh import SSHExecutor
+from .ssh_utils import describe_sudo_refusal, run_sudo_with_exit_code
 
 
 @dataclass
@@ -75,6 +76,9 @@ class SSHConfig:
 
     readable: bool = False
     version: str = ''
+    # why `sshd -T` gave nothing, when known (sudo refusal reason or the
+    # command's own failure - task 10); None otherwise
+    error: str | None = None
 
     # Legacy informational field — not a scoring input for any Tier-1
     # control (docs/checks/ssh_hardening.md section 6.6: changing the SSH
@@ -132,11 +136,20 @@ def collect_ssh_config(ssh: SSHExecutor) -> SSHConfig:
     ver_out, ver_err = ssh.run('sshd -V 2>&1')
     version = (ver_out or ver_err).strip().splitlines()[0] if (ver_out or ver_err) else ''
 
-    out, _err = ssh.sudo('sshd -T')
-    if not out.strip():
+    result = run_sudo_with_exit_code(ssh, ['sshd', '-T'])
+    if not result.completed:
+        return SSHConfig(readable=False, version=version, error='sshd -T did not complete')
+    if result.sudo_error:
+        # task 10: say why sudo refused instead of a generic "requires root"
+        return SSHConfig(readable=False, version=version, error=describe_sudo_refusal(ssh, result))
+    if result.exit_code != 0:
+        detail = result.stderr.strip()[-300:] or result.stdout.strip()[-300:]
+        return SSHConfig(readable=False, version=version,
+                         error=f'sshd -T failed (exit {result.exit_code}): {detail}')
+    if not result.stdout.strip():
         return SSHConfig(readable=False, version=version)
 
-    return _parse_sshd_t(out, version=version)
+    return _parse_sshd_t(result.stdout, version=version)
 
 
 def _parse_sshd_t(output: str, version: str = '') -> SSHConfig:

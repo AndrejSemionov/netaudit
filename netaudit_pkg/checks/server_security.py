@@ -62,7 +62,8 @@ def audit_nginx(ssh: SSHExecutor) -> dict:
         return {'installed': False}
     if not cfg.readable:
         return {'installed': True, 'version': cfg.version,
-                'findings': [_finding('low', 'no access to the config', 'nginx -T requires root',
+                'findings': [_finding('low', 'no access to the config',
+                                         cfg.error or 'nginx -T returned no config',
                                          requires_manual_verification=True)]}
 
     findings = []
@@ -948,7 +949,8 @@ def audit_ssh_hardening(ssh: SSHExecutor) -> dict:
     """
     cfg = collect_ssh_config(ssh)
     if not cfg.readable:
-        return {'findings': [_finding('low', 'no access to sshd_config', requires_manual_verification=True)]}
+        return {'findings': [_finding('low', 'no access to sshd_config', cfg.error or '',
+                                      requires_manual_verification=True)]}
 
     findings = []
 
@@ -1011,21 +1013,22 @@ def audit_ssh_hardening(ssh: SSHExecutor) -> dict:
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
         {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key) / sudo password', 'default': ''},
+        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key)', 'default': ''},
+        {'name': 'sudo_password', 'type': 'password', 'label': 'Sudo password (if sudo asks for one)', 'default': ''},
         {'name': 'fail2ban_mode', 'type': 'select', 'label': 'fail2ban status command',
          'options': ['client', 'status-wrapper'], 'default': 'client'},
     ],
     required_tools=[],
     description='Full server security audit over SSH: nginx, fail2ban, firewall, MySQL, SSH hardening. Read-only.',
 )
-def check_server_audit(host='', user='root', port=22, key_path='', password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
+def check_server_audit(host='', user='root', port=22, key_path='', password='', sudo_password='',  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
                         fail2ban_mode='client') -> dict:
     if paramiko is None:
         return {'error': 'paramiko not installed'}
     if not host:
         return {'error': 'host not specified'}
     try:
-        ssh = SSHExecutor(host, user, port, key_path, password).connect()
+        ssh = SSHExecutor(host, user, port, key_path, password, sudo_password=sudo_password).connect()
     except HostKeyMismatchError as e:
         return {'error': str(e)}
     # SSH libraries can fail with transport, auth, or socket errors; keep the check isolated.

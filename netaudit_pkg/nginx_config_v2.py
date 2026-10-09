@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 
 from .nginx_v2_utils import normalize_listen_address
 from .ssh import SSHExecutor
+from .ssh_utils import run_sudo_with_exit_code
 
 
 @dataclass(frozen=True)
@@ -194,6 +195,9 @@ class NginxConfigV2:
 
     installed: bool
     readable: bool = False
+    # why nginx -T gave no config, when known (sudo refusal reason or the
+    # command's own failure - task 10); None otherwise
+    error: str | None = None
     http_directives: dict[str, list[str]] = field(default_factory=dict)
     http_add_headers: list[AddHeader] = field(default_factory=list)
     servers: list[ServerBlock] = field(default_factory=list)
@@ -560,18 +564,22 @@ def collect_nginx_config_v2(ssh: SSHExecutor) -> NginxConfigV2:
     `nginx -T` output) is explicitly deferred, so this function does not
     attempt it.
 
-    `ssh.sudo()`'s passwordless-sudo check is cached after the first
-    call (see ssh.py's SSHExecutor.sudo()), so calling this after
-    collect_nginx_config() on the same SSHExecutor does not repeat that
-    particular sub-cost, even though the `nginx -T` command itself still
-    runs twice.
+    The privileged call goes through ssh_utils.run_sudo_with_exit_code(),
+    like collect_nginx_config(); a refusal or failure is kept in
+    NginxConfigV2.error (task 10).
     """
+    # local import: nginx_config imports nothing from this module
+    from .nginx_config import read_error
+
     out, _ = ssh.run('which nginx || echo NONE')
     if 'NONE' in out:
         return NginxConfigV2(installed=False)
 
-    conf, _ = ssh.sudo('nginx -T 2>/dev/null')
-    if not conf:
+    result = run_sudo_with_exit_code(ssh, ['nginx', '-T'])
+    error = read_error(ssh, result)
+    if error is not None:
+        return NginxConfigV2(installed=True, readable=False, error=error)
+    if not result.stdout:
         return NginxConfigV2(installed=True, readable=False)
 
-    return parse_nginx_config_v2(conf)
+    return parse_nginx_config_v2(result.stdout)

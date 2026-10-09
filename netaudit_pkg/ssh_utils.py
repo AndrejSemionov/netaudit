@@ -114,9 +114,10 @@ class SudoResult:
     exit_code is sudo's own status, which is the command's status when sudo
     ran it. sudo_error is the first stderr line starting with `sudo:` when
     the exit code is 1 - sudo itself refused or failed (no password,
-    command outside a scoped rule, wrong password, command not found).
-    Only the `sudo:` prefix is matched: it is the program name, while the
-    message text after it may be localized. command is shlex.join(argv),
+    command outside a scoped rule, wrong password, command not found) - or,
+    failing that, sudo's unprefixed sudoers denial ("... is not allowed to
+    execute ...", "... is not in the sudoers file"). The `sudo:` prefix is the
+    program name and is not localized; the denial texts are English. command is shlex.join(argv),
     the unwrapped command for messages; it never contains the password."""
     completed: bool
     exit_code: int | None
@@ -126,10 +127,42 @@ class SudoResult:
     command: str
 
 
+def _sudo_secret(ssh) -> str:
+    """SSHExecutor.sudo_password (task 10); objects without it (older test
+    doubles) fall back to .password, which is what SSHExecutor itself does."""
+    secret = getattr(ssh, 'sudo_password', None)
+    return secret if secret is not None else ssh.password
+
+
+def describe_sudo_refusal(ssh, result: SudoResult) -> str:
+    """One-line reason for a refused sudo, for check errors (task 10,
+    docs/research/sudo_password.md C4). Matches sudo's English messages;
+    any other text (a localized sudo, an unknown refusal) is shown as is."""
+    message = result.sudo_error or ''
+    text = f'{message}\n{result.stderr}'.lower()
+    command = result.command
+    if 'incorrect password' in text or 'sorry, try again' in text:
+        return f'the sudo password was not accepted for {command}'
+    if 'not allowed to execute' in text or 'not in the sudoers' in text or 'may not run sudo' in text:
+        return f'the SSH user may not run {command} with sudo (sudoers)'
+    if not _sudo_secret(ssh) and ('password is required' in text or 'terminal is required' in text):
+        return (f'sudo needs a password to run {command}: fill in "Sudo password", '
+                f'or allow {command} for this user with a NOPASSWD sudoers rule')
+    return f'sudo refused {command}: {message}'
+
+
+# sudo's sudoers denials carry no "sudo:" prefix: "Sorry, user u is not
+# allowed to execute '...' as root on host." / "u is not in the sudoers file."
+_SUDOERS_DENIAL_MARKERS = ('is not allowed to execute', 'is not in the sudoers file')
+
+
 def _sudo_error(exit_code: int | None, stderr: str) -> str | None:
     if exit_code != 1:
         return None
-    line = next((ln.strip() for ln in stderr.splitlines() if ln.startswith('sudo:')), None)
+    lines = [ln.strip() for ln in stderr.splitlines()]
+    line = next((ln for ln in lines if ln.startswith('sudo:')), None)
+    if line is None:
+        line = next((ln for ln in lines if any(m in ln for m in _SUDOERS_DENIAL_MARKERS)), None)
     return line[:SUDO_ERROR_MAX_LEN] if line else None
 
 
@@ -146,8 +179,9 @@ def run_sudo_with_exit_code(ssh: SSHExecutor, argv: Sequence[str], timeout: int 
     per-module helpers ran `sudo sh -c '<cmd>; marker'`, which asks sudoers
     for `sh` and is refused by any such rule.
 
-    With ssh.password set, `sudo -S -p ''` reads it from stdin, the same rule
-    as SSHExecutor.sudo(). sudo skips stdin when no password is needed
+    With a sudo password (ssh.sudo_password, which falls back to the SSH
+    password), `sudo -S -p ''` reads it from stdin, the same rule as
+    SSHExecutor.sudo(). It is never part of the command line. sudo skips stdin when no password is needed
     (NOPASSWD or a cached timestamp); the command then inherits the
     password line on its stdin. Commands passed here must not read stdin.
 
@@ -160,9 +194,10 @@ def run_sudo_with_exit_code(ssh: SSHExecutor, argv: Sequence[str], timeout: int 
         raise ValueError('argv must not be empty')
     command = shlex.join(argv)
     marker = f'__NETAUDIT_RC_{uuid.uuid4().hex}__'
-    if ssh.password:
+    secret = _sudo_secret(ssh)
+    if secret:
         sudo = "sudo -S -p ''"
-        stdin_data = ssh.password + '\n'
+        stdin_data = secret + '\n'
     else:
         sudo = 'sudo -n'
         stdin_data = None

@@ -486,16 +486,27 @@ introduced once a third independent source shows an actual need for one, not pre
 
 ## SSH and sudo
 
-SSH checks take two credentials:
+SSH checks take these credentials:
 
 - `key_path` — the private key for SSH login. NetAudit has no key-passphrase field: an
   encrypted key works only when ssh-agent already holds it (CLI). The web service under
   systemd has no agent, so give its account an unencrypted key that only that account can
   read. An encrypted key that the agent doesn't provide fails with an explicit
   "private key … is encrypted" error.
-- `password` ("SSH password (if no key) / sudo password") — the SSH login password when no
-  key is set, and the sudo password in every case (`sudo -S`). Without it, every sudo call
-  is `sudo -n` (no password prompt).
+- `password` ("SSH password (if no key)") — the SSH login password, used only when no key
+  is set.
+- `sudo_password` ("Sudo password (if sudo asks for one)") — in the checks that run
+  something under sudo. It goes to `sudo -S` on stdin, never on a command line. When it is
+  empty, the SSH password is used (sudo asks for the user's own password by default); when
+  both are empty, every sudo call is `sudo -n` (no password prompt). Like `password`, it is
+  never saved in reports, presets or the AI prompt. In the CLI, `--sudo_password -` asks for
+  it without echo: `netaudit run kernel_hardening --host 1.2.3.4 --sudo_password -` (a value
+  typed on the command line is visible in `ps` and shell history).
+
+When sudo refuses, the check says why: no password given, the password was not accepted,
+or sudoers does not allow the command. `kernel_hardening` then reads `sysctl -a` as the SSH
+user and runs in full if every audited key is readable (the result says
+`collected_without_sudo`); `nginx -T` and `sshd -T` need root and have no such fallback.
 
 sudo runs the real command, not a shell, so a narrow `sudoers` rule for one binary works.
 These collectors run exactly these commands under sudo:
@@ -506,6 +517,9 @@ These collectors run exactly these commands under sudo:
 | `server_audit` → firewall | `ufw status`, `nft list ruleset`, `iptables -S` |
 | `systemd_hardening` | `systemd-analyze security <unit> --no-pager --json=short`, `systemd-analyze security <unit> --no-pager` |
 | Logs Audit (log files readable only by root) | `tail -n <lines> <path>` (`lines` defaults to 200) |
+| `nginx_hardening`, `server_audit` → nginx | `nginx -T` |
+| `ssh_hardening`, `server_audit` → SSH | `sshd -T` |
+| `kernel_hardening` | `sysctl -a` (without sudo if sudo refuses, see above) |
 | `aide_check` | `test -f /var/lib/aide/aide.db`, `test -f /var/lib/aide/aide.db.gz`, `aide --config /etc/aide/aide.conf --check`; with `mode=init`: `aide --config /etc/aide/aide.conf --init`, `mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db` (or the `.gz` pair) |
 
 Example (edit with `visudo -f /etc/sudoers.d/netaudit`; check binary paths with `command -v` on

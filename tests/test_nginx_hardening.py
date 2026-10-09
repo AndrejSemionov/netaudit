@@ -175,7 +175,9 @@ def test_audit_nginx_hardening_unreadable_config(fake_ssh):
     result = audit_nginx_hardening(fake_ssh)
     assert result['installed'] is True
     assert 'error' in result
-    assert 'requires root' in result['error']
+    # task 10: empty output after a successful sudo says so; a refused sudo
+    # names its reason (tests/test_sudo_password.py)
+    assert result['error'] == 'nginx -T returned no config'
     assert 'hardening' not in result
 
 

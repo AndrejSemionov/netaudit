@@ -90,14 +90,20 @@ class SSHExecutor:
     """
 
     def __init__(self, host: str, user: str = 'root', port: int = 22,
-                 key_path: str = '', password: str = '', timeout: int = 10):  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
+                 key_path: str = '', password: str = '', timeout: int = 10,  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
+                 sudo_password: str = ''):  # nosec B107 - same
         if paramiko is None:
             raise RuntimeError('paramiko is not installed')
         self.host = host
         self.user = user
         self.port = int(port)
         self.key_path = key_path
+        # `password` is the SSH login password, used only when there is no
+        # key_path (see connect()). `sudo_password` is what `sudo -S` gets on
+        # stdin; when it is not set, the SSH password is used, which is what
+        # sudo asks for by default (the invoking user's own password). Task 10.
         self.password = password
+        self.sudo_password = sudo_password or password
         self.timeout = timeout
         self.client: paramiko.SSHClient | None = None
 
@@ -193,9 +199,9 @@ class SSHExecutor:
         ssh-agent), and this method must never be extended to treat key
         material as sudo credential material.
         """
-        if self.password:
+        if self.sudo_password:
             stdin, so, se = self.client.exec_command(f'sudo -S -p "" {cmd}', timeout=timeout)  # nosec B601 - SSHExecutor core purpose: remote exec_command with fixed, non-shell-form commands
-            stdin.write(self.password + '\n')
+            stdin.write(self.sudo_password + '\n')
             stdin.flush()
             stdin.channel.shutdown_write()
             return so.read().decode(errors='replace'), se.read().decode(errors='replace')
