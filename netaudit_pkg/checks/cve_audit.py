@@ -605,7 +605,8 @@ def query_osv(packages: list[dict], os_id: str | None = None,
     list means OSV was successfully queried and reported no known vulns.
 
     collection_errors is the set of package names that SHOULD have gotten
-    an OSV answer but didn't, because OSV's own response contained fewer
+    an OSV answer but didn't: the batch request failed (unreachable, HTTP
+    error, a body that isn't JSON), or OSV's own response contained fewer
     entries than were queried (see below) - this is a distinct third
     state from both of the above, and deliberately not folded into the
     result dict as another None: None there already means "ecosystem
@@ -664,10 +665,13 @@ def query_osv(packages: list[dict], os_id: str | None = None,
         )
         resp.raise_for_status()
         batch = resp.json().get('results', [])
-    except httpx.HTTPError:
-        # OSV is unreachable - don't fail the whole check, just skip CVE data for unqueried ones
+    except (httpx.HTTPError, ValueError):
+        # OSV unreachable, an HTTP error, or a body that isn't JSON: these
+        # packages were asked about and got no answer - a collection error,
+        # never [] (which reads as "OSV answered, no vulnerabilities").
+        # Nothing is cached; cached answers above are kept.
         for p, _ecosystem in to_query:
-            result.setdefault(p['name'], [])
+            collection_errors.add(p['name'])
         return result, collection_errors
 
     for (p, ecosystem), r in zip(to_query, batch):
@@ -772,7 +776,11 @@ def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> 
         ssh.close()
 
     if not packages:
+        # `uname -r` alone always yields the running kernel on a reachable
+        # Linux host, so an empty list means collection failed (F1, RA-10).
         return {'host': host, 'packages': [], 'findings': [],
+                'error': 'no packages detected, not even the running kernel (uname -r) — '
+                         'package collection failed; this is not a clean result',
                 'summary': {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'ok': 0,
                             'not_supported': 0, 'third_party_repo': 0, 'collection_error': 0}}
 
