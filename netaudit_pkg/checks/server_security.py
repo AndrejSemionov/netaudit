@@ -923,12 +923,11 @@ def audit_ssh_hardening(ssh: SSHExecutor) -> dict:
        `sshd -T` resolves this correctly server-side; this function no
        longer does its own precedence reasoning at all.
 
-    External return shape is unchanged from before this refactor (same
-    keys: 'port', 'root_login', 'password_auth', 'max_auth_tries',
-    'findings'; same finding text/severity for the three checks this
-    function has always covered) except for the two fixes above, which
-    change VALUES this function returns for the same input in cases where
-    the old parsing was wrong - not the shape. Findings now carry stable
+    For a readable config, the return shape is unchanged (same keys:
+    'port', 'root_login', 'password_auth', 'max_auth_tries', 'findings').
+    A confirmed missing sshd returns installed=False; an inconclusive
+    presence check returns installed=None with a manual-verification finding.
+    Findings now carry stable
     id= values (SSH-AUTH-001/002/003) matching docs/checks/ssh_hardening.md's
     control catalogue, added fresh in this refactor (the pre-refactor
     findings had no id= at all - see test_audit_ssh_hardening_legacy.py,
@@ -953,6 +952,13 @@ def audit_ssh_hardening(ssh: SSHExecutor) -> dict:
     test_current_behavior_none_field_defaults_fail_safe.
     """
     cfg = collect_ssh_config(ssh)
+    if cfg.installed is False:
+        return {'installed': False}
+    if cfg.installed is None:
+        return {'installed': None,
+                'findings': [_finding('low', 'could not determine whether sshd is installed',
+                                      cfg.error or 'sshd presence check was inconclusive',
+                                      requires_manual_verification=True)]}
     if not cfg.readable:
         return {'findings': [_finding('low', 'no access to sshd_config', cfg.error or '',
                                       requires_manual_verification=True)]}
