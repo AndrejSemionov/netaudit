@@ -32,7 +32,7 @@ cmd="$1"; shift
 case "$cmd" in
   restart)
     n=$(cat "$FAKE_STATE/restarts" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$FAKE_STATE/restarts"
-    date '+%a %Y-%m-%d %H:%M:%S %Z' > "$FAKE_STATE/started"
+    date -u '+%a %Y-%m-%d %H:%M:%S UTC' > "$FAKE_STATE/started"
     if [ "$n" -le "${FAKE_INACTIVE_RESTARTS:-0}" ]; then echo 0 > "$FAKE_STATE/active"; else echo 1 > "$FAKE_STATE/active"; fi
     ;;
   show) cat "$FAKE_STATE/started" 2>/dev/null || echo "" ;;
@@ -128,8 +128,11 @@ class Env:
         path = self.state / 'restarts'
         return int(path.read_text()) if path.exists() else 0
 
-    def backup_dirs(self) -> list[Path]:
-        return sorted(p for p in self.backups.iterdir() if p.is_dir()) if self.backups.exists() else []
+    def backup_dirs(self, include_rolled_back: bool = False) -> list[Path]:
+        if not self.backups.exists():
+            return []
+        return sorted(p for p in self.backups.iterdir()
+                      if p.is_dir() and (include_rolled_back or not p.name.endswith('.rolled-back')))
 
     def manifest_commit(self) -> str:
         for line in (self.runtime / '.deployed_manifest').read_text().splitlines():
@@ -176,9 +179,12 @@ def test_success_deploys_changes_removes_deleted_files_and_keeps_a_private_backu
         assert conn.execute('SELECT count(*) FROM reports').fetchone()[0] == 1
     finally:
         conn.close()
-    for path in backup.rglob('*'):
-        if path.is_file():
-            assert stat.S_IMODE(path.stat().st_mode) & 0o077 == 0, path
+    for name in ('netaudit.db', 'added.txt', 'manifest'):
+        assert stat.S_IMODE((backup / name).stat().st_mode) == 0o600, name
+    # code files keep their mode, so a rollback restores it; the 0700
+    # directory keeps them private
+    assert stat.S_IMODE((backup / 'files' / 'app.py').stat().st_mode) == \
+        stat.S_IMODE((env.mirror / 'app.py').stat().st_mode)
 
 
 def test_everything_since_the_last_deployed_commit_is_deployed(env):
@@ -294,8 +300,10 @@ def test_manual_rollback_restores_the_previous_deploy(env):
     assert result.returncode == 0, result.stdout + result.stderr
     assert _tree(env.runtime) == before
     assert env.restarts() == restarts + 1
-    assert env.backup_dirs() == []
-    assert 'git checkout' in result.stdout
+    assert env.backup_dirs() == []  # nothing left to roll back to
+    [used] = env.backup_dirs(include_rolled_back=True)
+    assert (used / 'netaudit.db').exists()  # the database copy stays for a manual restore
+    assert 'git -C' in result.stdout and 'checkout' in result.stdout
 
 
 def test_manual_rollback_without_a_backup_fails_cleanly(env):
@@ -307,6 +315,19 @@ def test_manual_rollback_without_a_backup_fails_cleanly(env):
 # ===========================================================================
 # Retention and the existing guard
 # ===========================================================================
+
+def test_rollback_restores_file_modes(env):
+    script = env.mirror / 'run.sh'
+    env.commit({'run.sh': '#!/bin/sh\n'})
+    script.chmod(0o755)
+    _git(env.mirror, 'add', '-A')
+    _git(env.mirror, 'commit', '-q', '-m', 'exec')
+    env.install()
+    (env.runtime / 'run.sh').chmod(0o755)
+    env.commit({'run.sh': '#!/bin/sh\necho 2\n'})
+    assert env.run(FAKE_PYTEST_RC='1').returncode == 1
+    assert stat.S_IMODE((env.runtime / 'run.sh').stat().st_mode) == 0o755
+
 
 def test_only_the_last_five_backups_are_kept(env):
     for i in range(6):
