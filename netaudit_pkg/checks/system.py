@@ -120,7 +120,7 @@ REMOTE_SUDO_CHECKS = {
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
         {'name': 'port', 'type': 'number', 'label': 'Port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
+        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key) / sudo password', 'default': ''},
     ],
     required_tools=[],
     description='Read-only audit of a remote server: ports, firewall, fail2ban, login logs.',

@@ -1,5 +1,7 @@
 """
-Shared helper for recovering a command's exit code over SSHExecutor.run().
+Shared helpers for recovering a command's exit code over SSHExecutor.run():
+run_command_with_exit_code() for unprivileged commands and
+run_sudo_with_exit_code() for commands under sudo (see its docstring).
 
 SSHExecutor.run() (see ssh.py) returns only (stdout, stderr) - no exit
 code - because it's the shared executor for every SSH-based check module
@@ -48,7 +50,10 @@ rather than a one-off need.
 
 from __future__ import annotations
 
+import shlex
 import uuid
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 from .ssh import SSHExecutor
 
@@ -91,3 +96,88 @@ def run_command_with_exit_code(ssh: SSHExecutor, cmd: str, timeout: int = 20) ->
     except ValueError:
         return body, None
     return body.rstrip('\n'), code
+
+
+# ===========================================================================
+# Exit-code recovery through sudo
+# ===========================================================================
+
+SUDO_ERROR_MAX_LEN = 200
+
+
+@dataclass(frozen=True)
+class SudoResult:
+    """Uninterpreted result of one command run under sudo.
+
+    completed/exit_code follow run_command_with_exit_code(): completed=False
+    means the exit status could not be recovered (exit_code is None).
+    exit_code is sudo's own status, which is the command's status when sudo
+    ran it. sudo_error is the first stderr line starting with `sudo:` when
+    the exit code is 1 - sudo itself refused or failed (no password,
+    command outside a scoped rule, wrong password, command not found).
+    Only the `sudo:` prefix is matched: it is the program name, while the
+    message text after it may be localized. command is shlex.join(argv),
+    the unwrapped command for messages; it never contains the password."""
+    completed: bool
+    exit_code: int | None
+    stdout: str
+    stderr: str
+    sudo_error: str | None
+    command: str
+
+
+def _sudo_error(exit_code: int | None, stderr: str) -> str | None:
+    if exit_code != 1:
+        return None
+    line = next((ln.strip() for ln in stderr.splitlines() if ln.startswith('sudo:')), None)
+    return line[:SUDO_ERROR_MAX_LEN] if line else None
+
+
+def run_sudo_with_exit_code(ssh: SSHExecutor, argv: Sequence[str], timeout: int = 20) -> SudoResult:
+    """Runs argv under sudo and recovers its exit code.
+
+    sudo runs only the real command; the completion-marker group around it
+    runs as the SSH user:
+
+        { sudo -n -- <argv>; rc=$?; printf '\\n%s:%s\\n' '<marker>' "$rc"; }
+
+    so a scoped sudoers rule (e.g. NOPASSWD for /usr/sbin/nft only, or a
+    fail2ban status wrapper) matches the binary it names. The previous
+    per-module helpers ran `sudo sh -c '<cmd>; marker'`, which asks sudoers
+    for `sh` and is refused by any such rule.
+
+    With ssh.password set, `sudo -S -p ''` reads it from stdin, the same rule
+    as SSHExecutor.sudo(). sudo skips stdin when no password is needed
+    (NOPASSWD or a cached timestamp); the command then inherits the
+    password line on its stdin. Commands passed here must not read stdin.
+
+    argv is joined with shlex.join(): every element is one argument, so no
+    shell syntax (pipes, `;`, redirections) can reach the remote shell.
+    """
+    if isinstance(argv, str):
+        raise TypeError('argv must be a sequence of arguments, not a command string')
+    if not argv:
+        raise ValueError('argv must not be empty')
+    command = shlex.join(argv)
+    marker = f'__NETAUDIT_RC_{uuid.uuid4().hex}__'
+    if ssh.password:
+        sudo = "sudo -S -p ''"
+        stdin_data = ssh.password + '\n'
+    else:
+        sudo = 'sudo -n'
+        stdin_data = None
+    wrapped = f"{{ {sudo} -- {command}; rc=$?; printf '\\n%s:%s\\n' '{marker}' \"$rc\"; }}"
+    if stdin_data is None:
+        out, err = ssh.run(wrapped, timeout=timeout)
+    else:
+        out, err = ssh.run(wrapped, timeout=timeout, stdin_data=stdin_data)
+
+    if marker not in out:
+        return SudoResult(completed=False, exit_code=None, stdout=out, stderr=err, sudo_error=None, command=command)
+    body, _, tail = out.rpartition(marker)
+    try:
+        code = int(tail.lstrip(':').strip())
+    except ValueError:
+        return SudoResult(completed=False, exit_code=None, stdout=body, stderr=err, sudo_error=None, command=command)
+    return SudoResult(completed=True, exit_code=code, stdout=body.rstrip('\n'), stderr=err,
+                      sudo_error=_sudo_error(code, err), command=command)

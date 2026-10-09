@@ -264,8 +264,9 @@ python3 netaudit.py run server_audit --host 1.2.3.4 --user root \
 
 If that server's `sudoers` is scoped to a narrow status-only wrapper instead of the raw
 `fail2ban-client` binary (see "Checks" above for why and an example wrapper script), switch to
-`status-wrapper` — otherwise the fail2ban section of the report comes back as `low: could not
-determine fail2ban status` instead of real jail data:
+`status-wrapper` — otherwise sudo refuses `fail2ban-client` and the fail2ban section of the
+report comes back as `low: fail2ban is installed, but status could not be confirmed even with
+sudo` (with sudo's message) instead of real jail data:
 
 ```bash
 python3 netaudit.py run server_audit --host 1.2.3.4 --user root \
@@ -283,10 +284,9 @@ ssh youruser@1.2.3.4 'sudo -n /usr/local/bin/fail2ban-status-only; echo "exit=$?
 ```
 
 `exit=0` on the first one → use `client` (the default, no need to pass `--fail2ban_mode` at
-all). `exit=0` only on the second → use `status-wrapper`. If a password is supplied for this
-check (see the password example just above), `fail2ban_mode` doesn't matter at all — both
-produce identical results, since `sudo -S` with a real password doesn't depend on `sudoers`
-scoping the way `sudo -n` does.
+all). `exit=0` only on the second → use `status-wrapper`. A password only replaces
+`NOPASSWD`: with full sudo rights (`ALL`) both modes work, but a rule scoped to one command
+permits only that command, with or without a password. See "SSH and sudo" below.
 
 **Add AI analysis** (needs an Anthropic API key, see "Getting started" above) — append `--ai`
 to any `run`:
@@ -357,12 +357,10 @@ in one connection:
       # /etc/sudoers.d/netaudit-fail2ban
       your_username ALL=(root) NOPASSWD: /usr/local/bin/fail2ban-status-only
       ```
-      **Important:** if a password is supplied for this host (the "Password (if not using a
-      key)" field), `fail2ban_mode` doesn't matter — both modes behave identically, because
-      sudo uses the password directly and doesn't depend on how `sudoers` is scoped. The
-      difference between `client` and `status-wrapper` only matters when connecting **by SSH
-      key with no password** — then `sudo -n` is used, and the mode you pick has to match
-      whatever is actually permitted in that server's `sudoers`. See "Common examples" below
+      **Important:** the mode has to match what that server's `sudoers` permits. A password
+      (the "SSH password (if no key) / sudo password" field) only replaces `NOPASSWD`: with
+      full sudo rights (`ALL`) both modes work, but a rule scoped to the wrapper permits only
+      the wrapper, with or without a password. See "SSH and sudo" below. See "Common examples" below
       for exact CLI invocations of both modes, and how to check which one you need on a given
       server before running the audit.
 - **firewall**: actual parsing of ufw/nftables/iptables, detecting "effectively open" (ACCEPT
@@ -485,6 +483,46 @@ the same explicit coverage semantics, but each was built independently — they 
 internal event models and a different definition of "coverage uncertainty" suited to each log
 format. That divergence is intentional for now: a common abstraction across log sources is only
 introduced once a third independent source shows an actual need for one, not preemptively.
+
+## SSH and sudo
+
+SSH checks take two credentials:
+
+- `key_path` — the private key for SSH login. NetAudit has no key-passphrase field: an
+  encrypted key works only when ssh-agent already holds it (CLI). The web service under
+  systemd has no agent, so give its account an unencrypted key that only that account can
+  read. An encrypted key that the agent doesn't provide fails with an explicit
+  "private key … is encrypted" error.
+- `password` ("SSH password (if no key) / sudo password") — the SSH login password when no
+  key is set, and the sudo password in every case (`sudo -S`). Without it, every sudo call
+  is `sudo -n` (no password prompt).
+
+sudo runs the real command, not a shell, so a narrow `sudoers` rule for one binary works.
+These collectors run exactly these commands under sudo:
+
+| Check | Commands |
+|---|---|
+| `server_audit` → Fail2Ban | `fail2ban-client status`, `fail2ban-client status <jail>` (or the status wrapper, `fail2ban_mode=status-wrapper`) |
+| `server_audit` → firewall | `ufw status`, `nft list ruleset`, `iptables -S` |
+| `systemd_hardening` | `systemd-analyze security <unit> --no-pager --json=short`, `systemd-analyze security <unit> --no-pager` |
+| Logs Audit (log files readable only by root) | `tail -n <lines> <path>` (`lines` defaults to 200) |
+| `aide_check` | `test -f /var/lib/aide/aide.db`, `test -f /var/lib/aide/aide.db.gz`, `aide --config /etc/aide/aide.conf --check`; with `mode=init`: `aide --config /etc/aide/aide.conf --init`, `mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db` (or the `.gz` pair) |
+
+Example (edit with `visudo -f /etc/sudoers.d/netaudit`; check binary paths with `command -v` on
+the target):
+
+```
+audit ALL=(root) NOPASSWD: /usr/sbin/nft list ruleset, /usr/sbin/iptables -S, /usr/sbin/ufw status
+audit ALL=(root) NOPASSWD: /usr/bin/systemd-analyze security nginx.service --no-pager --json=short
+audit ALL=(root) NOPASSWD: /usr/bin/systemd-analyze security nginx.service --no-pager
+audit ALL=(root) NOPASSWD: /usr/bin/tail -n 200 /var/log/auth.log
+```
+
+List exact arguments. A `*` in a sudoers rule matches spaces too, so
+`/usr/bin/tail -n * /var/log/auth.log` would also let the account read any other file.
+Other SSH checks still pass shell command strings to sudo; give them full sudo rights (a
+password, or `NOPASSWD: ALL`). When sudo refuses a command, the report shows sudo's own message,
+for example `sudo: a password is required`.
 
 ## Security
 

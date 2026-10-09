@@ -220,7 +220,7 @@ def test_run_sudo_with_exit_code_success():
         responses={'fail2ban-client status': 'Status\n|- Number of jail:\t1'},
         exit_codes={'fail2ban-client status': 0},
     )
-    result = _run_sudo_with_exit_code(fake, 'fail2ban-client status')
+    result = _run_sudo_with_exit_code(fake, ['fail2ban-client', 'status'])
     assert result.completed is True
     assert result.exit_code == 0
     assert 'Number of jail' in result.stdout
@@ -228,9 +228,25 @@ def test_run_sudo_with_exit_code_success():
 
 def test_run_sudo_with_exit_code_collection_failure():
     fake = ExitCodeFakeSSHExecutor()  # no marker ever appears
-    result = _run_sudo_with_exit_code(fake, 'fail2ban-client status')
+    result = _run_sudo_with_exit_code(fake, ['fail2ban-client', 'status'])
     assert result.completed is False
     assert result.exit_code is None
+
+
+def test_sudo_calls_run_the_real_binary_or_wrapper_not_sh():
+    """Task 7 (E1): status-wrapper mode exists for sudoers scoped to the
+    wrapper script; sudo has to run that script itself."""
+    from netaudit_pkg.fail2ban_config import Fail2banCommands, collect_fail2ban_config
+    status_text = 'Status\n|- Number of jail:\t1\n`- Jail list:\tsshd'
+    for mode, prefix in (('client', 'fail2ban-client status'), ('status-wrapper', '/usr/local/bin/fail2ban-status-only')):
+        fake = ExitCodeFakeSSHExecutor(
+            responses={'command -v fail2ban-client': '/usr/bin/fail2ban-client', f'{prefix} sshd': 'Currently banned:\t0',
+                       prefix: status_text},
+            exit_codes={'command -v fail2ban-client': 0, f'{prefix} sshd': 0, prefix: 0},
+        )
+        collect_fail2ban_config(fake, commands=Fail2banCommands(mode=mode))
+        sudo_calls = [c.split(';')[0] for c in fake.calls if 'sudo' in c]
+        assert sudo_calls == [f'{{ sudo -n -- {prefix}', f'{{ sudo -n -- {prefix} sshd'], mode
 
 
 # ===========================================================================
@@ -275,10 +291,11 @@ class UnprivDistinctFake(ExitCodeFakeSSHExecutor):
     module's docstring, "Privilege model".
 
     `unpriv_responses`/`unpriv_exit_codes` behave exactly like the base
-    class's `responses`/`exit_codes` dicts but only apply to calls made
-    through .run() (i.e. run_command_with_exit_code()'s unprivileged
-    path); .sudo() calls fall through to the base class's normal
-    substring matching.
+    class's `responses`/`exit_codes` dicts but only apply to unprivileged
+    calls (run_command_with_exit_code()). Since task 7 the sudo calls also
+    arrive through .run(), as `{ sudo -n -- <cmd>; ...}`
+    (ssh_utils.run_sudo_with_exit_code()); those fall through to the base
+    class's normal substring matching and are tagged SUDO:.
     """
     def __init__(self, *args, unpriv_responses: dict[str, str] | None = None,
                  unpriv_exit_codes: dict[str, int] | None = None, **kwargs):
@@ -286,7 +303,10 @@ class UnprivDistinctFake(ExitCodeFakeSSHExecutor):
         self._unpriv_responses = unpriv_responses or {}
         self._unpriv_exit_codes = unpriv_exit_codes or {}
 
-    def run(self, cmd, timeout=20):
+    def run(self, cmd, timeout=20, stdin_data=None):
+        if cmd.startswith('{ sudo '):
+            self.calls.append(f'SUDO:{cmd}')
+            return self._respond(cmd)
         self.calls.append(f'RUN:{cmd}')
         for substr, stdout in self._unpriv_responses.items():
             if substr in cmd:
@@ -297,10 +317,6 @@ class UnprivDistinctFake(ExitCodeFakeSSHExecutor):
                 if marker and code is not None:
                     return f'{stdout}\n{marker}:{code}\n', ''
                 return stdout, ''  # no exit code registered -> collection failure shape
-        return self._respond(cmd)
-
-    def sudo(self, cmd, timeout=20):
-        self.calls.append(f'SUDO:{cmd}')
         return self._respond(cmd)
 
 
@@ -498,12 +514,12 @@ def test_collect_per_jail_partial_collection_preserves_each_jails_own_result():
     status_text = 'Status\n|- Number of jail:\t3\n`- Jail list:\tsshd, nginx-auth, recidive'
 
     class PartialFailFake(ExitCodeFakeSSHExecutor):
-        def sudo(self, cmd, timeout=20):
-            self.calls.append(cmd)
-            if 'status nginx-auth' in cmd:
+        def run(self, cmd, timeout=20, stdin_data=None):
+            if cmd.startswith('{ sudo ') and 'status nginx-auth' in cmd:
                 # simulate a dropped/incomplete sudo call for this one jail only
+                self.calls.append(cmd)
                 return 'partial garbage, no marker here', ''
-            return self._respond(cmd)
+            return super().run(cmd, timeout, stdin_data)
 
     fake = PartialFailFake(
         responses={

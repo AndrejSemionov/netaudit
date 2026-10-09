@@ -38,13 +38,13 @@ Scope (Iteration 2 — Collection, per Collection Contract v2 freeze)
 from __future__ import annotations
 
 import shlex
-import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 
 from .checks.log_discovery_audit import LogSource
 from .ssh import SSHExecutor
-from .ssh_utils import run_command_with_exit_code
+from .ssh_utils import run_command_with_exit_code, run_sudo_with_exit_code
 
 
 class CollectionMode(str, Enum):
@@ -65,12 +65,14 @@ class CommandResult:
     the same reason fail2ban_config.py/firewall_config.py/sql_config.py/
     log_discovery.py each keep their own: extraction to a shared type is
     a separate architectural decision, not something to fold into a
-    Collection-Contract pass."""
+    Collection-Contract pass. sudo_error is sudo's own message when sudo
+    itself refused the read (see ssh_utils.SudoResult); None otherwise."""
     completed: bool
     exit_code: int | None
     stdout: str
     stderr: str
     command: str
+    sudo_error: str | None = None
 
 
 @dataclass
@@ -101,46 +103,17 @@ def _to_command_result(stdout: str, exit_code: int | None, command: str) -> Comm
                           stderr='', command=command)
 
 
-def _run_sudo_with_exit_code(ssh: SSHExecutor, cmd: str, timeout: int = 20) -> CommandResult:
-    """Runs `cmd` via SSHExecutor.sudo() and recovers its exit code.
-    Identical approach to fail2ban_config._run_sudo_with_exit_code() /
-    firewall_config._run_sudo_with_exit_code() — see either for the full
-    rationale on why ssh_utils.run_command_with_exit_code()'s shell-group
-    marker wrapping can't be handed to sudo directly, and why the
-    completion marker is instead routed through `sh -c <script>`.
-
-    Kept local to this module rather than extracted to a shared helper —
-    same "wait for a third independent case" principle already applied
-    to fail2ban_config.py/firewall_config.py's own local copies of this
-    exact function.
-
-    Known limitation (see project session notes on
-    _run_sudo_with_exit_code() and scoped sudoers): the `sh -c` wrapping
-    means sudoers authorizes the literal `sh` binary, not the real
-    command inside it — this breaks a no-password scoped NOPASSWD rule
-    limited to one specific executable. Not a practical blocker for
-    collect_file(): a LogSource with requires_sudo=True only reaches
-    this function when a sudo password is available (SSHExecutor.sudo()
-    with a password uses `sudo -S` directly, unaffected by this
-    limitation) — the no-password+scoped-NOPASSWD combination remains
-    the same pre-existing, deliberately-deferred architectural item as
-    for fail2ban/firewall, not something introduced by this module.
-    """
-    marker = f'__NETAUDIT_RC_{uuid.uuid4().hex}__'
-    script = f"{cmd}; rc=$?; printf '%s:%s\\n' {shlex.quote(marker)} \"$rc\""
-    sudo_cmd = f'sh -c {shlex.quote(script)}'
-    out, _ = ssh.sudo(sudo_cmd, timeout=timeout)
-
-    if marker not in out:
-        return CommandResult(completed=False, exit_code=None, stdout=out, stderr='', command=cmd)
-
-    body, _, tail = out.rpartition(marker)
-    code_str = tail.lstrip(':').strip()
-    try:
-        code = int(code_str)
-    except ValueError:
-        return CommandResult(completed=False, exit_code=None, stdout=body, stderr='', command=cmd)
-    return CommandResult(completed=True, exit_code=code, stdout=body.rstrip('\n'), stderr='', command=cmd)
+def _run_sudo_with_exit_code(ssh: SSHExecutor, argv: Sequence[str], timeout: int = 20) -> CommandResult:
+    """Runs argv under sudo via ssh_utils.run_sudo_with_exit_code() (shared
+    with fail2ban_config.py/firewall_config.py/systemd_hardening.py) and
+    maps the result to the Logs Audit CommandResult shape. sudo runs `tail`
+    itself, so a sudoers rule scoped to /usr/bin/tail matches; until task 7
+    this ran `sudo sh -c '<cmd>; marker'`, which sudoers saw as `sh`. A
+    refused sudo is exit 1 with stderr and sudo_error set - the source is
+    then unusable like any other nonzero exit."""
+    r = run_sudo_with_exit_code(ssh, argv, timeout=timeout)
+    return CommandResult(completed=r.completed, exit_code=r.exit_code, stdout=r.stdout,
+                         stderr=r.stderr, command=r.command, sudo_error=r.sudo_error)
 
 
 def _count_lines(result: CommandResult) -> int | None:
@@ -180,7 +153,8 @@ def collect_file(ssh: SSHExecutor, source: LogSource, mode: CollectionMode = Col
     if not source.available:
         return None
 
-    cmd = f'tail -n {lines} {shlex.quote(source.path)}'
+    argv = ['tail', '-n', str(lines), source.path]
+    cmd = shlex.join(argv)
 
     if source.readable:
         stdout, exit_code = run_command_with_exit_code(ssh, cmd, timeout=timeout)
@@ -192,7 +166,7 @@ def collect_file(ssh: SSHExecutor, source: LogSource, mode: CollectionMode = Col
         # function does not re-check requires_sudo itself, since
         # available+not readable has no other meaning in the frozen
         # Discovery Contract v1 LogSource model.
-        result = _run_sudo_with_exit_code(ssh, cmd, timeout=timeout)
+        result = _run_sudo_with_exit_code(ssh, argv, timeout=timeout)
 
     return CollectionResult(
         source_kind=SourceKind.FILE, source_path=source.path, unit_name=None,

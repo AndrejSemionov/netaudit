@@ -39,6 +39,7 @@ import re
 from ..findings import finding as _finding
 from ..registry import CONFIRM_MODIFY, confirm_param, register
 from ..ssh import HostKeyMismatchError, SSHExecutor
+from ..ssh_utils import run_sudo_with_exit_code
 
 try:
     import paramiko
@@ -52,6 +53,24 @@ except ImportError:
 # so every invocation below passes it explicitly rather than relying on a
 # compiled-in default this build doesn't have.
 AIDE_CONFIG = '/etc/aide/aide.conf'
+
+AIDE_DB = '/var/lib/aide/aide.db'
+AIDE_DB_GZ = '/var/lib/aide/aide.db.gz'
+
+# man aide(1), EXIT STATUS: 0 when no error occurred (--init); 14-23 are
+# errors. --check uses 1/2/4 as a bitmask of reported changes.
+AIDE_ERROR_CODES = {
+    14: 'write error',
+    15: 'invalid argument',
+    16: 'unimplemented function',
+    17: 'configuration error',
+    18: 'IO error',
+    19: 'version mismatch',
+    20: 'EXEC error',
+    21: 'lock error',
+    22: 'memory error',
+    23: 'thread error',
+}
 
 SUMMARY_RE = re.compile(
     r'Total number of entries:\s*(\d+).*?'
@@ -77,6 +96,56 @@ def _parse_summary(raw: str) -> dict | None:
         'changed': int(m.group(4)),
     }
 
+def _database_presence_error(ssh: SSHExecutor) -> dict | None:
+    """None when the reference database exists, else the error to return.
+
+    Each `test -f` runs under sudo on its own (the database directory is
+    root-only). Until task 7 this was one `sudo -n test -f A || test -f B`
+    line, which ran only the first test under sudo: on a refused sudo the
+    second, unprivileged test failed and the check said "run init first"."""
+    for path in (AIDE_DB, AIDE_DB_GZ):
+        r = run_sudo_with_exit_code(ssh, ['test', '-f', path])
+        if not r.completed:
+            return {'error': 'could not confirm whether the AIDE database exists'}
+        if r.sudo_error:
+            return {'error': f'sudo refused the AIDE database check: {r.sudo_error}',
+                    'hint': 'set the password field (used for sudo) or allow `test` and `aide` via sudoers'}
+        if r.exit_code == 0:
+            return None
+    return {'error': 'AIDE database not found — run this same check with mode=init first',
+            'hint': f'{AIDE_DB} does not exist'}
+
+
+def _init_database(ssh: SSHExecutor, host: str) -> dict:
+    """Builds a new reference database and activates it. Success only on
+    confirmed exit code 0 from `aide --init` and from one of the `mv`
+    steps (task 7: the old text check reported a refused sudo as
+    "initialized")."""
+    init = run_sudo_with_exit_code(ssh, ['aide', '--config', AIDE_CONFIG, '--init'], timeout=600)
+    if not init.completed:
+        return {'error': 'aide --init did not complete'}
+    if init.sudo_error:
+        return {'error': f'sudo refused aide --init: {init.sudo_error}',
+                'hint': 'set the password field (used for sudo) or allow `aide` and `mv` via sudoers'}
+    if init.exit_code != 0:
+        name = AIDE_ERROR_CODES.get(init.exit_code)
+        code = f'exit {init.exit_code}: {name}' if name else f'exit {init.exit_code}'
+        output = '\n'.join(part for part in (init.stdout.strip(), init.stderr.strip()) if part)
+        return {'error': f'aide --init failed ({code})', 'detail': output[-500:]}
+
+    # --init writes the new database as aide.db.new (or .new.gz); it has to
+    # be renamed into place, otherwise the next --check compares against the
+    # old (or missing) database
+    for src, dst in ((AIDE_DB + '.new', AIDE_DB), (AIDE_DB + '.new.gz', AIDE_DB_GZ)):
+        moved = run_sudo_with_exit_code(ssh, ['mv', src, dst], timeout=30)
+        if moved.completed and moved.exit_code == 0:
+            return {'host': host, 'mode': 'init', 'output_tail': init.stdout.strip()[-800:],
+                    'findings': [_finding('ok', 'AIDE database initialized — you can now run mode=check')],
+                    'summary': {'high': 0, 'medium': 0, 'low': 0, 'ok': 1}}
+    return {'error': 'AIDE database was built but not activated (mv aide.db.new failed)',
+            'detail': (moved.sudo_error or moved.stderr.strip() or moved.stdout.strip())[-500:]}
+
+
 @register(
     id='aide_check', label='File Integrity Monitoring (AIDE, SSH)', category='server', risk_level='MODIFYING',
     params=[
@@ -84,7 +153,7 @@ def _parse_summary(raw: str) -> dict | None:
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
         {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
+        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key) / sudo password', 'default': ''},
         {'name': 'mode', 'type': 'select', 'label': 'Mode',
          'options': ['check for changes', 'reinitialize the database'],
          'default': 'check for changes'},
@@ -139,17 +208,7 @@ def check_aide(host='', user='root', port=22, key_path='', password='',  # nosec
         # (writing a new one as aide.db.new on --init) - these paths are standard
         # for the repo package, a custom aide.conf might differ
         if mode == 'init':
-            out, _err = ssh.sudo(f'aide --config {AIDE_CONFIG} --init 2>&1', timeout=600)
-            # --init writes the new database as aide.db.new, it has to be
-            # explicitly activated by renaming - otherwise the next --check
-            # would compare against the old (or missing) database
-            ssh.sudo('mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db 2>&1 '
-                      '|| mv /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz 2>&1', timeout=30)
-            if 'error' in out.lower() and 'Total number of entries' not in out:
-                return {'error': 'error initializing the AIDE database', 'detail': out.strip()[-500:]}
-            return {'host': host, 'mode': 'init', 'output_tail': out.strip()[-800:],
-                    'findings': [_finding('ok', 'AIDE database initialized — you can now run mode=check')],
-                    'summary': {'high': 0, 'medium': 0, 'low': 0, 'ok': 1}}
+            return _init_database(ssh, host)
 
         # mode == 'check'. Uses sudo, same as the actual --check below - the
         # database directory is root:root (0700-ish) on a standard aide
@@ -158,15 +217,13 @@ def check_aide(host='', user='root', port=22, key_path='', password='',  # nosec
         # rather than absence (confirmed against the real target: `ls
         # /var/lib/aide/` as the unprivileged user returns "Permission
         # denied", not "No such file or directory").
-        db_check, _ = ssh.sudo('test -f /var/lib/aide/aide.db || test -f /var/lib/aide/aide.db.gz '
-                                '&& echo EXISTS || echo MISSING')
-        if 'MISSING' in db_check:
-            return {'error': 'AIDE database not found — run this same check with mode=init first',
-                    'hint': '/var/lib/aide/aide.db does not exist'}
+        db_error = _database_presence_error(ssh)
+        if db_error is not None:
+            return db_error
 
         # timeout=900 (15 min): a full filesystem scan on a real target took
         # ~7 minutes end to end (confirmed via `time aide --check`), same
-        # ballpark as --init above - a low timeout here would kill a
+        # ballpark as --init - a low timeout here would kill a
         # legitimate scan on any server with a non-trivial filesystem.
         out, _err = ssh.sudo(f'aide --config {AIDE_CONFIG} --check 2>&1', timeout=900)
 
@@ -174,6 +231,9 @@ def check_aide(host='', user='root', port=22, key_path='', password='',  # nosec
         ssh.close()
 
     summary = _parse_summary(out)
+    if summary is None and out.startswith('sudo:'):
+        # `2>&1` puts sudo's own refusal on stdout (task 7)
+        return {'error': f'sudo refused aide --check: {out.splitlines()[0].strip()}'}
     if summary is None:
         # AIDE reports "no changes" with different wording if nothing changed at all -
         # or there's genuinely no Summary block, in which case don't pretend we parsed it

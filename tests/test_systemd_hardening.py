@@ -162,11 +162,11 @@ def test_check_systemd_hardening_success_end_to_end(monkeypatch):
         responses={
             'systemctl status': 'Active: active (running)',
             '--json=short': directives,
-            'security nginx.service --no-pager 2>&1': overall_text,
+            'security nginx.service --no-pager;': overall_text,
         },
         exit_codes={
             '--json=short': 0,
-            'security nginx.service --no-pager 2>&1': 0,
+            'security nginx.service --no-pager;': 0,
         },
     )
     monkeypatch.setattr('netaudit_pkg.checks.systemd_hardening.SSHExecutor', lambda *a, **kw: fake)
@@ -227,6 +227,61 @@ def test_check_systemd_hardening_sudo_collection_failure_no_json_error(monkeypat
     assert 'did not complete' in result['error']
 
 
+def _systemd_fake(json_stdout='[]', json_exit=0, json_stderr='', text_stdout='', text_exit=0):
+    return ExitCodeFakeSSHExecutor(
+        responses={'systemctl status': 'Active: active (running)', '--json=short': json_stdout,
+                   'security nginx.service --no-pager;': text_stdout},
+        exit_codes={'--json=short': json_exit, 'security nginx.service --no-pager;': text_exit},
+        stderrs={'--json=short': json_stderr},
+    )
+
+
+def test_check_systemd_hardening_sudo_runs_systemd_analyze_itself(monkeypatch):
+    """Task 7 (E1): sudo runs systemd-analyze directly (a scoped rule for
+    /usr/bin/systemd-analyze matches), and the unit is one argument."""
+    fake = ExitCodeFakeSSHExecutor(
+        responses={'systemctl status': 'Active: active (running)', '--json=short': '[]'},
+        exit_codes={'--json=short': 0},
+    )
+    monkeypatch.setattr('netaudit_pkg.checks.systemd_hardening.SSHExecutor', lambda *a, **kw: fake)
+    check_systemd_hardening(host='1.2.3.4', unit='nginx.service; id')
+    sudo_calls = [c.split('; rc=')[0] for c in fake.calls if 'sudo' in c]
+    assert sudo_calls == [
+        "{ sudo -n -- systemd-analyze security 'nginx.service; id' --no-pager --json=short",
+        "{ sudo -n -- systemd-analyze security 'nginx.service; id' --no-pager",
+    ]
+
+
+def test_check_systemd_hardening_sudo_refusal_names_sudo(monkeypatch):
+    fake = _systemd_fake(json_stdout='', json_exit=1, json_stderr='sudo: a password is required\n')
+    monkeypatch.setattr('netaudit_pkg.checks.systemd_hardening.SSHExecutor', lambda *a, **kw: fake)
+    result = check_systemd_hardening(host='1.2.3.4', unit='nginx.service')
+    assert result['error'] == 'sudo refused systemd-analyze: sudo: a password is required'
+    assert 'NOPASSWD' in result['hint']
+    assert 'password' in result['hint']
+
+
+def test_check_systemd_hardening_stderr_warning_does_not_break_json(monkeypatch):
+    directives = ('[{"set": false, "name": "PrivateNetwork=", "json_field": "PrivateNetwork", '
+                  '"description": "x", "exposure": "0.5"}]')
+    fake = _systemd_fake(json_stdout=directives, json_stderr='Warning: something on stderr\n',
+                         text_stdout='\u2192 Overall exposure level for nginx.service: 4.5 OK\n')
+    monkeypatch.setattr('netaudit_pkg.checks.systemd_hardening.SSHExecutor', lambda *a, **kw: fake)
+    result = check_systemd_hardening(host='1.2.3.4', unit='nginx.service')
+    assert 'error' not in result
+    assert result['overall_exposure'] == 4.5
+
+
+def test_check_systemd_hardening_old_systemd_message_on_stderr(monkeypatch):
+    """Without `2>&1`, systemd-analyze's own complaint arrives on stderr;
+    the specific old-systemd message must still be found there."""
+    fake = _systemd_fake(json_stdout='', json_exit=1, json_stderr='Unknown option --json.\n')
+    monkeypatch.setattr('netaudit_pkg.checks.systemd_hardening.SSHExecutor', lambda *a, **kw: fake)
+    result = check_systemd_hardening(host='1.2.3.4', unit='nginx.service')
+    assert 'not available on this host' in result['error']
+    assert 'Unknown option --json.' in result['detail']
+
+
 def test_check_systemd_hardening_old_systemd_still_gets_specific_message(monkeypatch):
     """A genuinely too-old systemd (no --json=short support) must still
     get the specific 'requires systemd >= 246' message, not the generic
@@ -261,11 +316,11 @@ def test_check_systemd_hardening_overall_score_failure_does_not_lose_directive_f
         responses={
             'systemctl status': 'Active: active (running)',
             '--json=short': directives,
-            'security nginx.service --no-pager 2>&1': 'sudo: a password is required',
+            'security nginx.service --no-pager;': 'sudo: a password is required',
         },
         exit_codes={
             '--json=short': 0,
-            'security nginx.service --no-pager 2>&1': 1,
+            'security nginx.service --no-pager;': 1,
         },
     )
     monkeypatch.setattr('netaudit_pkg.checks.systemd_hardening.SSHExecutor', lambda *a, **kw: fake)
@@ -292,11 +347,11 @@ def test_check_systemd_hardening_overall_score_unparseable_but_completed(monkeyp
         responses={
             'systemctl status': 'Active: active (running)',
             '--json=short': directives,
-            'security nginx.service --no-pager 2>&1': 'unexpected output format, no summary line',
+            'security nginx.service --no-pager;': 'unexpected output format, no summary line',
         },
         exit_codes={
             '--json=short': 0,
-            'security nginx.service --no-pager 2>&1': 0,
+            'security nginx.service --no-pager;': 0,
         },
     )
     monkeypatch.setattr('netaudit_pkg.checks.systemd_hardening.SSHExecutor', lambda *a, **kw: fake)

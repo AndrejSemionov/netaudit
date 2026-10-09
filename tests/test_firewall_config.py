@@ -198,22 +198,21 @@ def test_collect_ufw_command_v_collection_failure():
 # _run_sudo_with_exit_code — sudo-flavored exit-code recovery
 # ===========================================================================
 
-def test_run_sudo_with_exit_code_uses_sh_dash_c_wrapping():
-    """The command sent to ssh.sudo() must be `sh -c <quoted script>`,
-    NOT a bare `{ cmd; ...; }` shell group - sudo can't parse `{` as an
-    argument (it's a shell reserved word, not an executable). This is a
-    regression test for the exact bug found while designing this
-    function: naively reusing ssh_utils.run_command_with_exit_code()'s
-    wrapping style against ssh.sudo() would silently break."""
+def test_run_sudo_with_exit_code_runs_sudo_on_the_real_binary():
+    """Task 7 (E1): sudo must run `nft` itself, not `sh -c '<script>'`.
+    The completion marker is printed by the SSH user's shell around the
+    sudo call, so a sudoers rule scoped to /usr/sbin/nft matches. This
+    replaces test_run_sudo_with_exit_code_uses_sh_dash_c_wrapping, which
+    asserted the defect."""
     fake = ExitCodeFakeSSHExecutor(
         responses={'nft list ruleset': 'table inet filter { }'},
         exit_codes={'nft list ruleset': 0},
     )
-    _run_sudo_with_exit_code(fake, 'nft list ruleset')
+    _run_sudo_with_exit_code(fake, ['nft', 'list', 'ruleset'])
     assert len(fake.calls) == 1
     sent = fake.calls[0]
-    assert sent.startswith('sh -c ')
-    assert not sent.lstrip().startswith('{')
+    assert sent.startswith('{ sudo -n -- nft list ruleset; ')
+    assert 'sh -c' not in sent
 
 
 def test_run_sudo_with_exit_code_success():
@@ -221,17 +220,44 @@ def test_run_sudo_with_exit_code_success():
         responses={'iptables -S': '-P INPUT DROP\n-A INPUT -p tcp --dport 22 -j ACCEPT'},
         exit_codes={'iptables -S': 0},
     )
-    result = _run_sudo_with_exit_code(fake, 'iptables -S')
+    result = _run_sudo_with_exit_code(fake, ['iptables', '-S'])
     assert result.completed is True
     assert result.exit_code == 0
     assert '-P INPUT DROP' in result.stdout
+    assert result.sudo_error is None
 
 
 def test_run_sudo_with_exit_code_collection_failure():
     fake = ExitCodeFakeSSHExecutor()  # nothing registered
-    result = _run_sudo_with_exit_code(fake, 'iptables -S')
+    result = _run_sudo_with_exit_code(fake, ['iptables', '-S'])
     assert result.completed is False
     assert result.exit_code is None
+
+
+def test_run_sudo_with_exit_code_reports_sudo_refusal():
+    fake = ExitCodeFakeSSHExecutor(
+        responses={'iptables -S': ''},
+        exit_codes={'iptables -S': 1},
+        stderrs={'iptables -S': 'sudo: a password is required\n'},
+    )
+    result = _run_sudo_with_exit_code(fake, ['iptables', '-S'])
+    assert (result.completed, result.exit_code) == (True, 1)
+    assert result.sudo_error == 'sudo: a password is required'
+    assert result.command == 'iptables -S'
+
+
+def test_collectors_send_sudo_to_the_real_binaries():
+    fake = ExitCodeFakeSSHExecutor(
+        responses={'command -v ufw': '/usr/sbin/ufw', 'ufw status': 'Status: active',
+                   'nft list ruleset': '', 'iptables -S': '-P INPUT ACCEPT'},
+        exit_codes={'command -v ufw': 0, 'ufw status': 0, 'nft list ruleset': 0, 'iptables -S': 0},
+    )
+    collect_ufw(fake)
+    collect_nftables_live(fake)
+    collect_iptables_live(fake)
+    sudo_calls = [c for c in fake.calls if 'sudo' in c]
+    assert [c.split(';')[0] for c in sudo_calls] == [
+        '{ sudo -n -- ufw status', '{ sudo -n -- nft list ruleset', '{ sudo -n -- iptables -S']
 
 
 # ===========================================================================

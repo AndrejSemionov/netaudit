@@ -39,8 +39,9 @@ from tests.conftest import ExitCodeFakeSSHExecutor
 # Evidence-building helpers
 # ===========================================================================
 
-def _cr(completed=True, exit_code=0, stdout='', command='') -> CommandResult:
-    return CommandResult(completed=completed, exit_code=exit_code, stdout=stdout, command=command)
+def _cr(completed=True, exit_code=0, stdout='', command='', sudo_error=None) -> CommandResult:
+    return CommandResult(completed=completed, exit_code=exit_code, stdout=stdout, command=command,
+                         sudo_error=sudo_error)
 
 
 def _evidence(binary_check=None, status_unpriv=None, status_sudo=None, jails=None) -> Fail2banEvidence:
@@ -135,6 +136,31 @@ def test_status_verdict_command_error_from_sudo_nonzero_no_denial_text():
     verdict, ctx = _fail2ban_status_verdict(ev)
     assert verdict == 'COMMAND_ERROR'
     assert ctx['exit_code'] == 1
+
+
+def test_status_verdict_sudo_refusal_is_access_denied():
+    """Task 7 (E2): sudo itself refused (no password, or the command is
+    outside a scoped rule). Before the fix this never reached the
+    verdict: the `sh -c` marker was missing and the result was UNKNOWN
+    (F2B-STAT-001)."""
+    ev = _evidence(status_sudo=_cr(exit_code=1, stdout='', sudo_error='sudo: a password is required'))
+    verdict, ctx = _fail2ban_status_verdict(ev)
+    assert verdict == 'ACCESS_DENIED'
+    assert ctx['exit_code'] == 1
+    assert ctx['sudo_error'] == 'sudo: a password is required'
+
+
+def test_audit_sudo_refusal_is_f2b_stat_003_with_the_sudo_message():
+    fake = ExitCodeFakeSSHExecutor(
+        responses={'command -v fail2ban-client': '/usr/bin/fail2ban-client', 'fail2ban-client status': ''},
+        exit_codes={'command -v fail2ban-client': 0, 'fail2ban-client status': 1},
+        stderrs={'sudo -n -- fail2ban-client status': 'sudo: a password is required\n'},
+    )
+    result = audit_fail2ban(fake)
+    finding = next(f for f in result['findings'] if f.get('id', '').startswith('F2B-STAT'))
+    assert finding['id'] == 'F2B-STAT-003'
+    assert finding['severity'] == 'low'
+    assert 'sudo: a password is required' in finding['detail']
 
 
 def test_status_verdict_unknown_on_none():
@@ -363,11 +389,12 @@ def test_audit_partial_jail_collection_5_of_6_is_low_never_ok():
                    'recidive, sshd, sshd-ddos')
 
     class OneJailFailsFake(ExitCodeFakeSSHExecutor):
-        def sudo(self, cmd, timeout=20):
-            self.calls.append(cmd)
-            if 'status recidive' in cmd:
+        def run(self, cmd, timeout=20, stdin_data=None):
+            # since task 7 the sudo call arrives through run(), as `{ sudo -n -- ...}`
+            if cmd.startswith('{ sudo ') and 'status recidive' in cmd:
+                self.calls.append(cmd)
                 return 'dropped mid-command, no marker', ''
-            return self._respond(cmd)
+            return super().run(cmd, timeout, stdin_data)
 
     fake = OneJailFailsFake(
         responses={
@@ -452,18 +479,15 @@ def test_audit_real_host_shape_46_62_147_41():
                    'recidive, sshd, sshd-ddos')
 
     class RealHostFake(ExitCodeFakeSSHExecutor):
-        def run(self, cmd, timeout=20):
-            self.calls.append(cmd)
-            if 'fail2ban-client status' in cmd:
+        def run(self, cmd, timeout=20, stdin_data=None):
+            # since task 7 sudo calls also arrive here, as `{ sudo -n -- ...}`
+            if 'fail2ban-client status' in cmd and not cmd.startswith('{ sudo '):
+                self.calls.append(cmd)
                 import re as _re
                 m = _re.search(r'__NETAUDIT_RC_[0-9a-f]+__', cmd)
                 if m:
                     return f'{unpriv_error}\n{m.group(0)}:0\n', ''
-            return self._respond(cmd)
-
-        def sudo(self, cmd, timeout=20):
-            self.calls.append(cmd)
-            return self._respond(cmd)
+            return super().run(cmd, timeout, stdin_data)
 
     fake = RealHostFake(
         responses={

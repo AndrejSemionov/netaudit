@@ -102,7 +102,7 @@ DEFAULT_WINDOW_HOURS = 24
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
         {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
+        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key) / sudo password', 'default': ''},
         {'name': 'lines', 'type': 'number', 'label': 'Lines to collect per source', 'default': DEFAULT_TAIL_LINES},
         {'name': 'window_hours', 'type': 'number', 'label': 'Detection window (hours)', 'default': DEFAULT_WINDOW_HOURS},
     ],

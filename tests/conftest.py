@@ -33,9 +33,10 @@ class FakeSSHExecutor:
     """
     Stands in for netaudit_pkg.ssh.SSHExecutor in tests. Construct with a
     `responses` dict mapping a substring of the command to a (stdout, stderr)
-    tuple; `run()` and `sudo()` both consult it. `sudo_calls` is left None by
-    default (uses passwordless sudo); set to True/False to control
-    needs_sudo_password()/ensure_tool_installed() behavior explicitly.
+    tuple; `run()` and `sudo()` both consult it. `password` mirrors the real
+    attribute: ssh_utils.run_sudo_with_exit_code() reads it to choose
+    `sudo -S` (password on stdin) over `sudo -n`. Every `stdin_data` passed
+    to run() is recorded in `stdin_data`, in call order.
 
     Every constructor arg from the real SSHExecutor is accepted and ignored,
     so `FakeSSHExecutor` can be substituted 1:1 wherever `SSHExecutor(...)` is
@@ -44,12 +45,12 @@ class FakeSSHExecutor:
 
     def __init__(self, *args, responses: dict[str, tuple[str, str]] | None = None,
                  installed_tools: set[str] | None = None,
-                 no_password_sudo: bool = True, password: str = '', **kwargs):
+                 password: str = '', **kwargs):
         self.responses = responses or {}
         self.installed_tools = installed_tools if installed_tools is not None else set()
-        self._no_password_sudo = no_password_sudo
         self.password = password
         self.calls: list[str] = []
+        self.stdin_data: list[str | None] = []
         self.closed = False
 
     def connect(self):
@@ -68,14 +69,12 @@ class FakeSSHExecutor:
                 return response
         return ('', '')
 
-    def run(self, cmd: str, timeout: int = 20) -> tuple[str, str]:
+    def run(self, cmd: str, timeout: int = 20, stdin_data: str | None = None) -> tuple[str, str]:
+        self.stdin_data.append(stdin_data)
         return self._match(cmd)
 
     def sudo(self, cmd: str, timeout: int = 20) -> tuple[str, str]:
         return self._match(cmd)
-
-    def needs_sudo_password(self) -> bool:
-        return (not self._no_password_sudo) and not self.password
 
     def is_tool_installed(self, tool: str) -> bool:
         return tool in self.installed_tools
@@ -132,10 +131,14 @@ class ExitCodeFakeSSHExecutor(FakeSSHExecutor):
     """
 
     def __init__(self, *args, responses: dict[str, object] | None = None,
-                 exit_codes: dict[str, int] | None = None, **kwargs):
+                 exit_codes: dict[str, int] | None = None,
+                 stderrs: dict[str, str] | None = None, **kwargs):
         super().__init__(*args, responses={}, **kwargs)
         self._raw_responses = responses or {}
         self._exit_codes = exit_codes or {}
+        # substring -> stderr for that command, independent of the marker:
+        # e.g. sudo's own `sudo: a password is required` next to exit 1
+        self._stderrs = stderrs or {}
 
     def _respond(self, cmd: str) -> tuple[str, str]:
         self.calls.append(cmd)
@@ -152,6 +155,7 @@ class ExitCodeFakeSSHExecutor(FakeSSHExecutor):
                 break
         if matched_substr is not None:
             exit_code = self._exit_codes.get(matched_substr)
+        stderr = next((err for substr, err in self._stderrs.items() if substr in cmd), '')
 
         if marker is None or exit_code is None:
             # No marker in the wrapped command (shouldn't happen for a
@@ -160,21 +164,18 @@ class ExitCodeFakeSSHExecutor(FakeSSHExecutor):
             # simulate a collection failure: raw stdout with no
             # completion marker at all, exactly like a dropped/truncated
             # SSH command.
-            return stdout, ''
-        return f'{stdout}\n{marker}:{exit_code}\n', ''
+            return stdout, stderr
+        return f'{stdout}\n{marker}:{exit_code}\n', stderr
 
-    def run(self, cmd: str, timeout: int = 20) -> tuple[str, str]:
+    def run(self, cmd: str, timeout: int = 20, stdin_data: str | None = None) -> tuple[str, str]:
+        self.stdin_data.append(stdin_data)
         return self._respond(cmd)
 
     def sudo(self, cmd: str, timeout: int = 20) -> tuple[str, str]:
-        # Same marker-recovery logic as run() - firewall_config.py's
-        # _run_sudo_with_exit_code() wraps its script differently (`sh -c
-        # <quoted script>` rather than a bare `{ ... }` group, since sudo
-        # can't parse a shell reserved word as a bare argument - see that
-        # module's docstring), but the marker itself is still just
-        # __NETAUDIT_RC_<hex>__ embedded somewhere in the command text,
-        # which _RC_MARKER_RE finds regardless of the surrounding
-        # shell-quoting style.
+        # Same marker-recovery logic as run(). Collectors built on
+        # ssh_utils.run_sudo_with_exit_code() never reach this: sudo runs
+        # inside the marker group sent through run(), so the marker is
+        # printed by the SSH user's shell, not by a shell under sudo.
         return self._respond(cmd)
 
 

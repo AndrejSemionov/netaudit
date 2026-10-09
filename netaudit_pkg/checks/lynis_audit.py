@@ -98,7 +98,7 @@ def _to_findings(parsed: dict) -> list[dict]:
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
         {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
-        {'name': 'password', 'type': 'password', 'label': 'Password (if not using a key)', 'default': ''},
+        {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key) / sudo password', 'default': ''},
         {'name': 'auto_install', 'type': 'checkbox', 'label': 'Install lynis if missing',
          'default': False},
         confirm_param('Confirm: this may install packages on the target'),

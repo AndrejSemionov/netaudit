@@ -57,50 +57,35 @@ just for symmetry with the other three collectors).
 
 Recovering an exit code through sudo
 --------------------------------------
-netaudit_pkg.ssh_utils.run_command_with_exit_code() (shared with
-cve_audit.py) wraps a command in a bash `{ cmd; rc=$?; printf ...; }`
-group and passes the WHOLE wrapped string to SSHExecutor.run(). That
-exact wrapping cannot be handed to SSHExecutor.sudo() unmodified: sudo
-execve()s its argument directly rather than invoking a shell to parse
-it, and `{ ... }` is a shell reserved word, not something sudo (or any
-non-shell exec) can interpret positioned as an argument - confirmed by
-testing this directly (see this module's PR/session notes): `sudo {
-cmd; }` fails to parse. The fix used here is to route the exit-code
-recovery script through `sh -c <script>`, with the whole script quoted
-via shlex.quote() (never hand-built string concatenation, which risks
-reintroducing exactly the kind of quoting bug this is meant to avoid) -
-see _run_sudo_with_exit_code() below. A base64-encode/decode pipeline
-was considered and rejected: it works, but makes the actual remote
-command opaque in audit/debug logs for no correctness benefit over
-shlex.quote(), which keeps the command human-readable while still being
-provably correctly escaped.
+_run_sudo_with_exit_code() is a thin adapter over
+netaudit_pkg.ssh_utils.run_sudo_with_exit_code(), shared with
+fail2ban_config.py, log_collection.py and systemd_hardening.py: sudo runs
+the real binary (`ufw`, `nft`, `iptables`) and the exit-code marker is
+printed by the SSH user's shell around it, so a sudoers rule scoped to
+one of these binaries matches. Until task 7 this module ran
+`sudo sh -c '<cmd>; marker'`, which asks sudoers for `sh` and was refused
+by every scoped rule (docs/research/sudo_privilege_handling.md).
 
-sudo() prerequisite note
---------------------------
-SSHExecutor.sudo() silently writes an empty string to stdin if no sudo
-password was configured and passwordless sudo isn't available - it does
-NOT raise or otherwise signal "no password was available" itself; that
-signal only shows up as a nonzero sudo exit code once decoded via
-_run_sudo_with_exit_code(). This collector deliberately does NOT call
-SSHExecutor.needs_sudo_password() as an upfront gate before attempting
-each command - each backend's collection is attempted independently and
-reports its own UNKNOWN/reason if sudo authentication fails for it,
-rather than a single needs_sudo_password() check preemptively marking
-all three backends UNKNOWN before even trying. This matters in practice:
-a host might have passwordless sudo configured for some commands via
-sudoers NOPASSWD rules scoped to specific binaries, so "sudo needs a
-password in general" is not always the same fact as "sudo will fail for
-this specific command" - though in the common case (blanket sudo
-access) they usually agree.
+sudo refusal
+--------------
+A refused sudo (no password available, or the command is outside the
+user's sudoers rules) is a confirmed failure: completed=True,
+exit_code=1, and CommandResult.sudo_error carries sudo's own message.
+This collector deliberately has no upfront "does sudo need a password"
+gate - each backend's command is attempted independently and reports its
+own result. A host can permit some commands via scoped NOPASSWD rules and
+not others, so "sudo needs a password in general" is not the same fact as
+"sudo will fail for this specific command".
 """
 
 from __future__ import annotations
 
 import shlex
-import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from .ssh import SSHExecutor
+from .ssh_utils import run_sudo_with_exit_code
 
 # ===========================================================================
 # Evidence data model
@@ -124,12 +109,14 @@ class CommandResult:
     ruleset` on a host with zero configured tables), and any nonzero
     exit_code is a confirmed failure (e.g. permission denied, sudo
     authentication failure, command not found via the shell's own "127"
-    exit convention).
+    exit convention). sudo_error is sudo's own message when sudo itself
+    refused (see ssh_utils.SudoResult); None otherwise.
     """
     completed: bool
     exit_code: int | None
     stdout: str
     command: str  # the original (unwrapped) command, for error messages/debugging
+    sudo_error: str | None = None
 
 
 @dataclass
@@ -175,39 +162,12 @@ NFTABLES_CONFIG_PATHS = (
 # Exit-code recovery over ssh.sudo()
 # ===========================================================================
 
-def _run_sudo_with_exit_code(ssh: SSHExecutor, cmd: str, timeout: int = 20) -> CommandResult:
-    """Runs `cmd` via SSHExecutor.sudo() and recovers its exit code.
-
-    See this module's docstring ("Recovering an exit code through sudo")
-    for why this can't reuse ssh_utils.run_command_with_exit_code()
-    as-is: that helper's `{ cmd; rc=$?; printf ...; }` shell-group
-    wrapping cannot be handed to sudo directly (sudo execve()s its
-    argument rather than invoking a shell to parse `{ }`). This routes
-    the same completion-marker approach through `sh -c <script>`
-    instead, with the whole script safely quoted via shlex.quote().
-
-    Kept local to this module rather than added to ssh_utils.py: only
-    one collector needs a sudo-flavored variant so far (see the
-    quality-audit session notes on not generalizing on a single call
-    site) - ssh_utils.py stays focused on the plain ssh.run() case,
-    which cve_audit.py also needs.
-    """
-    marker = f'__NETAUDIT_RC_{uuid.uuid4().hex}__'
-    script = f"{cmd}; rc=$?; printf '%s:%s\\n' {shlex.quote(marker)} \"$rc\""
-    sudo_cmd = f'sh -c {shlex.quote(script)}'
-    out, _ = ssh.sudo(sudo_cmd, timeout=timeout)
-
-    if marker not in out:
-        return CommandResult(completed=False, exit_code=None, stdout=out, command=cmd)
-
-    body, _, tail = out.rpartition(marker)
-    code_str = tail.lstrip(':').strip()
-    try:
-        code = int(code_str)
-    except ValueError:
-        return CommandResult(completed=False, exit_code=None, stdout=body, command=cmd)
-
-    return CommandResult(completed=True, exit_code=code, stdout=body.rstrip('\n'), command=cmd)
+def _run_sudo_with_exit_code(ssh: SSHExecutor, argv: Sequence[str], timeout: int = 20) -> CommandResult:
+    """Runs argv under sudo (see this module's docstring, "Recovering an
+    exit code through sudo") and maps the result to CommandResult."""
+    r = run_sudo_with_exit_code(ssh, argv, timeout=timeout)
+    return CommandResult(completed=r.completed, exit_code=r.exit_code, stdout=r.stdout,
+                         command=r.command, sudo_error=r.sudo_error)
 
 
 def _cat_file(ssh: SSHExecutor, path: str, timeout: int = 20) -> FileResult:
@@ -288,14 +248,14 @@ def collect_ufw(ssh: SSHExecutor, timeout: int = 20) -> tuple[CommandResult, Com
     presence = _tool_is_present(ssh, 'ufw', timeout=timeout)
     if tool_is_present(presence) is not True:
         return presence, None
-    return presence, _run_sudo_with_exit_code(ssh, 'ufw status', timeout=timeout)
+    return presence, _run_sudo_with_exit_code(ssh, ['ufw', 'status'], timeout=timeout)
 
 
 def collect_nftables_live(ssh: SSHExecutor, timeout: int = 20) -> CommandResult:
     """Runs `nft list ruleset` via sudo and returns raw evidence -
     reflects the actual kernel-loaded ruleset right now, unlike
     collect_nftables_config() below (declared/file evidence only)."""
-    return _run_sudo_with_exit_code(ssh, 'nft list ruleset', timeout=timeout)
+    return _run_sudo_with_exit_code(ssh, ['nft', 'list', 'ruleset'], timeout=timeout)
 
 
 def collect_nftables_config(ssh: SSHExecutor, timeout: int = 20) -> FileResult:
@@ -332,7 +292,7 @@ def collect_iptables_live(ssh: SSHExecutor, timeout: int = 20) -> CommandResult:
     INPUT/FORWARD/OUTPUT chain policies and every rule, in the exact
     syntax iptables itself uses (needed for server_security.py's
     unconditional-ACCEPT-rule detection, not just chain policy)."""
-    return _run_sudo_with_exit_code(ssh, 'iptables -S', timeout=timeout)
+    return _run_sudo_with_exit_code(ssh, ['iptables', '-S'], timeout=timeout)
 
 
 def collect_firewall_config(ssh: SSHExecutor, timeout: int = 20) -> FirewallEvidence:

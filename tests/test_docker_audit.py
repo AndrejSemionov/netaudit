@@ -235,37 +235,6 @@ def test_empty_host_rejected():
 # (hiding real containers instead of reporting inaccessible ones).
 # ===========================================================================
 
-def test_needs_sudo_password_no_longer_blocks_the_check(monkeypatch):
-    """Direct regression for the upfront-gate removal: even when
-    FakeSSHExecutor is configured to report needs_sudo_password()=True
-    (no_password_sudo=False, password=''), check_docker_audit() must
-    still attempt the real sudo docker ps/inspect commands rather than
-    returning an error before trying."""
-    class SudoFallbackExecutor(FakeSSHExecutor):
-        def run(self, cmd, timeout=20):
-            if 'docker ps -q' in cmd:
-                return ('', 'permission denied')
-            return super().run(cmd, timeout)
-
-        def sudo(self, cmd, timeout=20):
-            if 'docker ps -q' in cmd:
-                return ('abc123\n', '')
-            if 'docker inspect' in cmd:
-                return (_container_json(user='root', image='app:latest'), '')
-            return super().sudo(cmd, timeout)
-
-    fake = SudoFallbackExecutor(
-        installed_tools={'docker'},
-        no_password_sudo=False,
-        password='',
-        responses={'grep -rE': ('', '')},
-    )
-    monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
-    result = check_docker_audit(host='1.2.3.4')
-    assert 'error' not in result
-    assert result['containers_checked'] == 1
-
-
 def test_sudo_denied_reports_access_error_not_zero_containers(monkeypatch):
     """The central risk this fix must close: when unprivileged docker ps
     is denied AND the sudo -n retry is ALSO denied (real scoped-sudoers
@@ -287,7 +256,6 @@ def test_sudo_denied_reports_access_error_not_zero_containers(monkeypatch):
 
     fake = SudoDeniedExecutor(
         installed_tools={'docker'},
-        no_password_sudo=False,
         password='',
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
@@ -320,7 +288,6 @@ def test_sudo_succeeds_after_unpriv_denied_with_scoped_sudoers(monkeypatch):
 
     fake = ScopedSudoExecutor(
         installed_tools={'docker'},
-        no_password_sudo=False,
         password='',
         responses={'grep -rE': ('', '')},
     )

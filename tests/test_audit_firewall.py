@@ -36,8 +36,9 @@ from tests.conftest import ExitCodeFakeSSHExecutor
 # Evidence-building helpers
 # ===========================================================================
 
-def _cr(completed=True, exit_code=0, stdout='', command='') -> CommandResult:
-    return CommandResult(completed=completed, exit_code=exit_code, stdout=stdout, command=command)
+def _cr(completed=True, exit_code=0, stdout='', command='', sudo_error=None) -> CommandResult:
+    return CommandResult(completed=completed, exit_code=exit_code, stdout=stdout, command=command,
+                         sudo_error=sudo_error)
 
 
 def _fr(completed=True, exit_code=0, content='', path='/etc/nftables.conf') -> FileResult:
@@ -283,6 +284,22 @@ def test_iptables_verdict_unknown_permission_denied():
     ev = _evidence(iptables_live=_cr(exit_code=1, stdout=''))
     verdict, _ = _iptables_verdict(ev)
     assert verdict == 'UNKNOWN'
+
+
+SUDO_REFUSED = 'sudo: a password is required'
+
+
+def test_firewall_unknown_reasons_name_the_sudo_refusal():
+    """Task 7 (E2): when sudo itself refused, the UNKNOWN reason says so
+    instead of a bare exit code."""
+    refused = _cr(exit_code=1, stdout='', sudo_error=SUDO_REFUSED)
+    ufw = _evidence(ufw_present=_cr(exit_code=0, stdout='/usr/sbin/ufw'), ufw_status=refused)
+    assert _ufw_verdict(ufw) == ('UNKNOWN', {'reason': f'ufw is installed, but `ufw status` failed (exit 1): {SUDO_REFUSED}'})
+    verdict, ctx = _nftables_verdict(_evidence(nftables_live=refused))
+    assert verdict == 'LIVE_UNKNOWN'
+    assert ctx['reason'] == f'nft list ruleset failed (exit 1): {SUDO_REFUSED}'
+    assert _iptables_verdict(_evidence(iptables_live=refused)) == (
+        'UNKNOWN', {'reason': f'iptables -S failed (exit 1): {SUDO_REFUSED}'})
 
 
 def test_iptables_verdict_unknown_collection_failure():

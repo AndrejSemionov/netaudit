@@ -79,13 +79,15 @@ fact."
 
 Recovering an exit code through sudo
 --------------------------------------
-Uses the same `_run_sudo_with_exit_code()` approach firewall_config.py
-established: ssh_utils.run_command_with_exit_code()'s shell-group
-wrapping (`{ cmd; rc=$?; printf ...; }`) cannot be handed to sudo
-directly (sudo execve()s its argument; `{ }` is a shell reserved word,
-not something sudo can invoke on its own), so the marker script is
-routed through `sh -c <script>` instead, safely quoted via
-shlex.quote().
+Both sudo calls go through _run_sudo_with_exit_code(), a thin adapter
+over ssh_utils.run_sudo_with_exit_code() (shared with firewall_config.py,
+log_collection.py, systemd_hardening.py): sudo runs `fail2ban-client` or
+the status wrapper itself, so a sudoers rule scoped to the wrapper
+(mode='status-wrapper') matches. Until task 7 this ran
+`sudo sh -c '<cmd>; marker'`, which sudoers saw as `sh` and refused under
+any scoped rule. A refused sudo comes back as exit 1 with
+CommandResult.sudo_error set; the semantic layer reports it as
+ACCESS_DENIED.
 
 Reused vs local primitives
 -----------------------------
@@ -93,26 +95,20 @@ netaudit_pkg.ssh_utils.run_command_with_exit_code() (shared with
 cve_audit.py, firewall_config.py, sql_config.py) is reused directly for
 the unprivileged status call and the binary-presence check.
 
-CommandResult and the sudo-exit-code-recovery helper are intentionally
-NOT imported from firewall_config.py and NOT hoisted into a shared
-module, even though this is now the THIRD independent collector with
-this exact shape (firewall_config.py, sql_config.py, and this one).
-Per the quality-audit session's stated principle, the extraction itself
-is deliberately being treated as a separate, later change so as not to
-mix it with this collector's own contract/tests/implementation pass -
-see the project session notes for the follow-up ssh_utils.py
-generalization decision.
+The sudo exit-code recovery itself is shared (ssh_utils, task 7).
+CommandResult stays local to this module: each collector keeps its own
+evidence type (firewall_config.py and sql_config.py have the same shape).
 """
 
 from __future__ import annotations
 
 import re
 import shlex
-import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from .ssh import SSHExecutor
-from .ssh_utils import run_command_with_exit_code
+from .ssh_utils import run_command_with_exit_code, run_sudo_with_exit_code
 
 # ===========================================================================
 # Evidence data model
@@ -129,12 +125,14 @@ class CommandResult:
     written) - exit_code is always None in that case, and stdout must
     NOT be treated as a confirmed result of any kind. completed=True
     means the command ran to completion and reported an exit code
-    through the normal channel.
+    through the normal channel. sudo_error is sudo's own message when sudo
+    itself refused (see ssh_utils.SudoResult); None otherwise.
     """
     completed: bool
     exit_code: int | None
     stdout: str
     command: str
+    sudo_error: str | None = None
 
 
 @dataclass
@@ -288,38 +286,15 @@ class Fail2banCommands:
 
 
 # ===========================================================================
-# Exit-code recovery over ssh.sudo()
+# Exit-code recovery through sudo
 # ===========================================================================
 
-def _run_sudo_with_exit_code(ssh: SSHExecutor, cmd: str, timeout: int = 20) -> CommandResult:
-    """Runs `cmd` via SSHExecutor.sudo() and recovers its exit code.
-
-    Identical approach to firewall_config._run_sudo_with_exit_code() -
-    see that function's docstring for why ssh_utils.
-    run_command_with_exit_code()'s `{ cmd; rc=$?; ...; }` shell-group
-    wrapping can't be handed to sudo directly, and why the completion
-    marker is instead routed through `sh -c <script>`.
-
-    Kept local to this module rather than shared with firewall_config.py
-    - see this module's docstring, "Reused vs local primitives", for why
-    the extraction is deliberately deferred to a separate change.
-    """
-    marker = f'__NETAUDIT_RC_{uuid.uuid4().hex}__'
-    script = f"{cmd}; rc=$?; printf '%s:%s\\n' {shlex.quote(marker)} \"$rc\""
-    sudo_cmd = f'sh -c {shlex.quote(script)}'
-    out, _ = ssh.sudo(sudo_cmd, timeout=timeout)
-
-    if marker not in out:
-        return CommandResult(completed=False, exit_code=None, stdout=out, command=cmd)
-
-    body, _, tail = out.rpartition(marker)
-    code_str = tail.lstrip(':').strip()
-    try:
-        code = int(code_str)
-    except ValueError:
-        return CommandResult(completed=False, exit_code=None, stdout=body, command=cmd)
-
-    return CommandResult(completed=True, exit_code=code, stdout=body.rstrip('\n'), command=cmd)
+def _run_sudo_with_exit_code(ssh: SSHExecutor, argv: Sequence[str], timeout: int = 20) -> CommandResult:
+    """Runs argv under sudo (see this module's docstring, "Recovering an
+    exit code through sudo") and maps the result to CommandResult."""
+    r = run_sudo_with_exit_code(ssh, argv, timeout=timeout)
+    return CommandResult(completed=r.completed, exit_code=r.exit_code, stdout=r.stdout,
+                         command=r.command, sudo_error=r.sudo_error)
 
 
 # ===========================================================================
@@ -454,7 +429,7 @@ def collect_fail2ban_config(ssh: SSHExecutor, timeout: int = 20,
         return Fail2banEvidence(binary_check=binary_check, status_unpriv=status_unpriv,
                                  status_sudo=None, jails=[])
 
-    status_sudo = _run_sudo_with_exit_code(ssh, commands.status(), timeout=timeout)
+    status_sudo = _run_sudo_with_exit_code(ssh, shlex.split(commands.status()), timeout=timeout)
 
     jails: list[JailEvidence] = []
     if status_sudo.completed and status_sudo.exit_code == 0:
@@ -462,7 +437,7 @@ def collect_fail2ban_config(ssh: SSHExecutor, timeout: int = 20,
         if jail_names:
             for name in jail_names:
                 jail_cmd = commands.jail_status(name)
-                jail_status = _run_sudo_with_exit_code(ssh, jail_cmd, timeout=timeout)
+                jail_status = _run_sudo_with_exit_code(ssh, shlex.split(jail_cmd), timeout=timeout)
                 jails.append(JailEvidence(name=name, status=jail_status))
 
     return Fail2banEvidence(binary_check=binary_check, status_unpriv=status_unpriv,
