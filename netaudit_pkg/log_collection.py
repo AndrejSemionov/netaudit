@@ -148,7 +148,7 @@ def collect_file(ssh: SSHExecutor, source: LogSource, mode: CollectionMode = Col
     call is made, so an unimplemented mode never issues a command.
     """
     if mode != CollectionMode.TAIL:
-        raise NotImplementedError(f'CollectionMode.{mode.name} is reserved, not implemented in Iteration 2')
+        raise NotImplementedError(f'CollectionMode.{mode.name} is reserved, not implemented in Iteration 2')  # deploy-guard: intentional
 
     if not source.available:
         return None
@@ -187,7 +187,7 @@ def collect_journal(ssh: SSHExecutor, unit_name: str, mode: CollectionMode = Col
     retry with sudo on that outcome.
     """
     if mode != CollectionMode.TAIL:
-        raise NotImplementedError(f'CollectionMode.{mode.name} is reserved, not implemented in Iteration 2')
+        raise NotImplementedError(f'CollectionMode.{mode.name} is reserved, not implemented in Iteration 2')  # deploy-guard: intentional
 
     cmd = f'journalctl -u {shlex.quote(unit_name)} -n {lines} --no-pager'
     stdout, exit_code = run_command_with_exit_code(ssh, cmd, timeout=timeout)

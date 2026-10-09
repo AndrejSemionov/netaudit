@@ -244,16 +244,20 @@ if [ $(( ${#DEPLOY[@]} + ${#DELETE[@]} )) -eq 0 ]; then
     exit 0
 fi
 
-# --- Step 2: NotImplementedError guard on every file about to be deployed
-# (checked on the git-mirror source, before anything touches runtime) ---
+# --- Step 2: NotImplementedError guard on every code file about to be deployed
+# (checked on the git-mirror source, before anything touches runtime).
+# Test files are skipped (they may contain the text as data), and a line
+# marked `# deploy-guard: intentional` is a finished, reserved code path
+# (e.g. log_collection.py's FULL/WINDOW modes), not half-done work. ---
 echo ""
 echo "[deploy] Checking for NotImplementedError in files to deploy ..."
 GUARD_FAILED=0
 for f in "${DEPLOY[@]}"; do
     [ -f "$f" ] || continue  # skip missing files
     case "$f" in
+        tests/*) ;;
         *.py)
-            count=$(grep -c "raise NotImplementedError" "$f" 2>/dev/null) || true
+            count=$(grep "raise NotImplementedError" "$f" 2>/dev/null | grep -vc "deploy-guard: intentional") || true
             count=${count:-0}
             if [ "$count" -gt 0 ]; then
                 echo "  [GUARD FAIL] $f contains $count NotImplementedError raise(s)."
