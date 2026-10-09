@@ -3,9 +3,8 @@
 Status: **both halves audited** — outcome model, criteria and split by
 Claude; Claude's 23 checks by Claude, GPT/Codex's 14 by GPT/Codex (working
 notes `docs/research/a2_codex_half.md` on `codex/a2-result-reliability`,
-`1aa0f33`, merged here by Claude). Cross-check: Claude re-ran or re-read
-GPT/Codex's FAIL items (section 8); GPT/Codex's cross-check of RA-01…RA-12 is
-pending. MODE: AUTONOMOUS (stage A). Fixes are separate tasks (section 7),
+`1aa0f33`, merged here by Claude). Cross-check: done both ways
+(section 8). MODE: AUTONOMOUS (stage A). Fixes are separate tasks (section 7),
 not part of this document.
 
 Base: `main` @ `ea68f97`. Host used for the runs: Ubuntu 24.04, Python 3.12,
@@ -47,7 +46,7 @@ Rules the audit checks against:
 |----|-----------|
 | C1 | Every command / request result is judged by its exit code, completion marker or HTTP status before its output is interpreted (no `cmd \|\| echo X` text sniffing, no pipeline whose status hides the first command). |
 | C2 | Empty output is not read as "clean" unless C1 confirmed success and emptiness is meaningful. |
-| C3 | Tool or service absent (O4) is distinguished from a failed probe (O5). `command -v`: 0 = present, any other code = absent **only** if the probe completed — the code is 127 under dash but **1 under bash** (`FINDINGS.md`, GPT/Codex, confirmed by Claude). |
+| C3 | Tool or service absent (O4) is distinguished from a failed probe (O5). For `command -v` the rule is the one A1 implemented in `ssh_utils.probe_remote_tool()`: **present** = completed, exit 0, non-empty output; **absent** = completed, exit **1 or 127** (1 under bash, 127 under dash — `FINDINGS.md`, GPT/Codex, confirmed by Claude) **and empty output**; anything else (no completion marker, another code, unexpected output) = **unknown**, never absent. |
 | C4 | Permission denied / sudo refused is O5 (or O3) with the reason, not O2 and not O4. |
 | C5 | Partial data (one of several sources, some keys) is O3 and named, not O2. |
 | C6 | Timeout, dropped connection, unreachable target → O5, not a partial O2/O1. |
@@ -333,10 +332,11 @@ hence low. Claude: agrees.
 
 ## 7. Proposed fix tasks
 
-Grouped by module so each PR stays reviewable; HIGH first. Each is its own
-RED → GREEN task in stage A (fixing false results is the stage A goal);
-roles alternate by half: the agent who audited a module does not fix it alone,
-the other reviews.
+Grouped by module so each PR stays reviewable; HIGH first. A2 itself is the
+audit only; these fixes were approved by USER separately ("Да, F1–F7
+автономно", 2026-10-09, GPT/Codex session): each is its own RED → GREEN task
+with independent review and a PR, merge by USER. The agent who audited a
+module does not fix it alone: the other reviews.
 
 | Task | Issues | Modules | Proposed implementer / reviewer |
 |------|--------|---------|---------------------------------|
@@ -355,7 +355,10 @@ RA-12 is covered by A1 and F6.
 - Claude → GPT/Codex's half: RA-13 and RA-14 reproduced; RA-15, RA-16, RA-17
   confirmed by code; RA-18, RA-19 not re-checked (low). The A1 rows are
   reviewed in `.ai/REVIEW.md` (A1 pass 1).
-- GPT/Codex → Claude's half: preliminary rows 1–20 in its notes agree on
-  `breach_check`, `cve_audit` (empty inventory), `dig`, `dns_audit`,
-  `cert_transparency`; added RA-20; `speedtest` resolved above (exception →
-  `error` in `engine`). Review of RA-01…RA-12 itself: pending.
+- GPT/Codex → Claude's half (`.ai/REVIEW.md`, A2 pass 1): RA-01, RA-02,
+  RA-04, RA-05 reproduced offline with monkeypatching; RA-06…RA-12 confirmed
+  by code; RA-03 confirmed by code (its sandbox has no network for the
+  badssl run). Technical findings AGREED; two wording issues (C3, scope of
+  §7) fixed in this revision. Added RA-20; `speedtest` resolved above
+  (exception → `error` in `engine`).
+- Status of the fixes: F1 → PR #17 (Claude); F3 in progress (GPT/Codex).
