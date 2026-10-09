@@ -47,8 +47,8 @@ it).
 
 ### S2. Backup before anything changes
 
-A new private directory `~/netaudit-deploy-backups/<UTC time>-<commit>/`
-(mode `0700`, files `0600`) holds:
+A new private directory `~/netaudit-deploy-backups/<UTC time>-<previous
+commit>/` (mode `0700`) holds:
 
 - `files/` — the current runtime copy of every file the deploy will overwrite
   or delete, with its relative path;
@@ -59,6 +59,8 @@ A new private directory `~/netaudit-deploy-backups/<UTC time>-<commit>/`
   SQLite's online backup API (the service keeps running), only if the
   database exists.
 
+The database copy and the lists are `0600`. Code files keep their original
+mode (a rollback must restore it); the `0700` directory keeps them private.
 The backup is written and verified (`PRAGMA integrity_check` on the database
 copy) before step 3 copies anything. The last **5** backups are kept; older
 ones are deleted after a successful deploy. The database copy can hold old SSH
@@ -79,8 +81,10 @@ status 2.
 ### S4. Manual rollback
 
 `./deploy.sh --rollback` restores the newest backup the same way (files,
-`added.txt`, manifest, restart, active check) and then removes that backup.
-It does not touch the git mirror; the script prints the
+`added.txt`, manifest, restart, active check) and renames that backup to
+`<name>.rolled-back`, so the next `--rollback` goes one deploy further back and
+the database copy stays available for a manual restore (retention counts these
+directories too). It does not touch the git mirror; the script prints the
 `git checkout <commit>` to run there.
 
 ### S5. Smoke test behind Basic Auth (decision D3)
@@ -131,7 +135,8 @@ other `python3` call goes to the real interpreter) are first in `PATH`.
 5. Service inactive after restart: same restore, a second restart, exit 1.
 6. Smoke 500 → rollback; smoke 401 → success with a warning, no rollback.
 7. `--rollback` after a successful deploy: tree and manifest as before that
-   deploy, service restarted, backup removed.
+   deploy, service restarted, backup marked `.rolled-back` with its database
+   copy kept; file modes are restored.
 8. Retention: after 6 successful deploys, 5 backups remain.
 9. The NotImplementedError guard still stops before any copy or backup.
 

@@ -40,7 +40,9 @@ For layout A, note the git rollback point:
 git -C ~/netaudit rev-parse HEAD
 ```
 
-For layout B, note `DEPLOYED_COMMIT` and save the runtime tree for rollback:
+For layout B, note `DEPLOYED_COMMIT`. With the current `deploy.sh` (it takes a
+backup before it changes anything, see step 2) the manual snapshot is optional;
+an older `deploy.sh` in your mirror does not, so keep it if you are not sure:
 
 ```bash
 cat ~/netaudit/.deployed_manifest
@@ -76,12 +78,18 @@ git pull
 ./deploy.sh
 ```
 
-`deploy.sh` copies the changed files, runs the full test suite in
-`~/netaudit` and only then restarts and verifies the service. Its last step
-requests `http://127.0.0.1:8000/api/checks` without credentials: if the
-service listens beyond localhost, NetAudit's built-in Basic Auth answers 401
-even to local requests, and that step fails after a successful restart - check
-by hand with `curl -u user:pass`.
+`deploy.sh` deploys everything since `DEPLOYED_COMMIT` (deleted files are
+removed), first backing up every file it will change and the database to
+`~/netaudit-deploy-backups/` (private, the newest 5 are kept). It then runs
+the full test suite in `~/netaudit`, restarts and verifies the service. If any
+of that fails it restores the files and restarts the old version by itself
+(`DEPLOYMENT FAILED — ROLLED BACK`, exit 1); the database is never restored
+automatically, the output prints the command. Its last step requests
+`http://127.0.0.1:8000/api/checks` without credentials: behind NetAudit's
+Basic Auth (service listening beyond localhost) the answer is 401, which
+`deploy.sh` reports as a warning, not a failure - check by hand with
+`curl -u user:pass`. Without a manifest (first deploy) pass the file list
+explicitly: `./deploy.sh file1 file2 ...`.
 
 Hard-refresh the browser afterwards (Ctrl+Shift+R): the page is cached.
 
@@ -152,9 +160,19 @@ git checkout <commit from step 1>
 sudo systemctl restart netaudit
 ```
 
-B - do not roll back with `deploy.sh` alone: files added in 1.0 (tests included)
-would stay in `~/netaudit`, and its test run would fail against the old code.
-Swap the runtime snapshot instead:
+B - `deploy.sh --rollback` restores the newest backup: the overwritten and
+deleted files come back, files the deploy added are removed, the manifest is
+restored and the service restarted. It prints the `git checkout` to keep the
+mirror on the old commit (otherwise the next `./deploy.sh` deploys the new
+one again):
+
+```bash
+cd ~/netaudit-git
+./deploy.sh --rollback
+```
+
+If the upgrade was done with an older `deploy.sh` (no backup), swap the
+runtime snapshot from step 1 instead:
 
 ```bash
 sudo systemctl stop netaudit
