@@ -1,8 +1,10 @@
 # deploy.sh backup and rollback — fix contract proposal (task 9)
 
-Status: **DRAFT rev.1** (2026-10-08). USER chose the task («deploy.sh: бэкап и
-откат»). Implementer: Claude (proposed). Reviewer: GPT/Codex. USER approves
-this contract and decisions D1–D3 before RED/GREEN.
+Status: **APPROVED by USER rev.1** (2026-10-09, «давай» on the recommended
+options): D1 = deploy everything since the last deployed commit and remove
+deleted files; D2 = back up the database always, restore it only by hand;
+D3 = HTTP 401 in the smoke test is success with a warning. MODE: AUTONOMOUS.
+Implementer: Claude. Reviewer: GPT/Codex.
 
 Scope: layout B only (`deploy.sh`: git mirror `~/netaudit-git` copied into the
 runtime directory `~/netaudit`, see `docs/upgrade_to_1_0.md`). Layout A (a git
