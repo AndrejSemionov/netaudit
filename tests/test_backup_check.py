@@ -20,13 +20,14 @@ from tests.conftest import ExitCodeFakeSSHExecutor
 class FakeSSHExecutor(ExitCodeFakeSSHExecutor):
     """Existing backup fixtures, with real completion codes for F4 commands."""
 
-    def __init__(self, responses=None):
+    def __init__(self, responses=None, exit_codes=None):
         responses = responses or {}
         merged = {key: ''.join(value) if isinstance(value, tuple) else value
                   for key, value in responses.items()}
-        exit_codes = {key: (1 if 'FAIL' in out or 'No such file or directory' in out else 0)
-                      for key, out in merged.items()}
-        super().__init__(responses=merged, exit_codes=exit_codes)
+        derived_codes = {key: (1 if 'FAIL' in out or 'No such file or directory' in out else 0)
+                         for key, out in merged.items()}
+        derived_codes.update(exit_codes or {})
+        super().__init__(responses=merged, exit_codes=derived_codes)
 
 NOW = time.time()
 RECENT = NOW - 3600 * 5   # 5 hours ago
@@ -50,7 +51,8 @@ def test_find_files_parses_output():
 def test_find_files_missing_directory_returns_none():
     fake = FakeSSHExecutor(responses={
         'find': ('', "find: '/nonexistent': No such file or directory"),
-    })
+        'test -d': ('', ''),
+    }, exit_codes={'test -d': 1})
     assert _find_files(fake, '/nonexistent') is None
 
 
@@ -144,7 +146,8 @@ def test_healthy_backup_directory(monkeypatch):
 def test_missing_directory_flagged_high(monkeypatch):
     fake = FakeSSHExecutor(responses={
         'find': ('', "No such file or directory"),
-    })
+        'test -d': ('', ''),
+    }, exit_codes={'test -d': 1})
     monkeypatch.setattr('netaudit_pkg.checks.backup_check.SSHExecutor', lambda *a, **kw: fake)
     result = check_backup(host='1.2.3.4', directories='/missing')
     assert result['summary']['high'] == 1
@@ -223,9 +226,10 @@ def test_multiple_directories_checked_independently(monkeypatch):
     fake = FakeSSHExecutor(responses={
         'find /good': (f'{RECENT}|52428800|db.sql.gz\n{RECENT-1}|52428800|db2.sql.gz\n', ''),
         'find /missing': ('', 'No such file or directory'),
+        'test -d': ('', ''),
         'gzip -t': ('OK\n', ''),
         'df -P': ('/dev/sda1 1 1 1 50% /\n', ''),
-    })
+    }, exit_codes={'test -d': 1})
     monkeypatch.setattr('netaudit_pkg.checks.backup_check.SSHExecutor', lambda *a, **kw: fake)
     result = check_backup(host='1.2.3.4', directories='/good, /missing', min_copies=1)
     assert len(result['directories']) == 2

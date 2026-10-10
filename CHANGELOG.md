@@ -2,10 +2,6 @@
 
 ## Unreleased
 
-- Docker, backup and log discovery checks distinguish failed collection from
-  confirmed absence. Incomplete container inspection, backup listing or
-  integrity checks, and unknown log metadata now surface for manual review.
-
 - `deploy.sh` (layout B) backs up the files it changes and the database before
   copying, rolls back by itself when tests, the restart or the smoke test fail,
   and has `./deploy.sh --rollback`. It deploys everything since the last
@@ -28,6 +24,9 @@
   Audit reads of root-only files, and `aide_check`. Narrow `sudoers` rules for
   one binary (including the Fail2Ban `status-wrapper` mode) now work without a
   password. README "SSH and sudo" lists the exact commands.
+- Docker, backup and log discovery checks distinguish failed collection from
+  confirmed absence. Incomplete container inspection, backup listing or
+  integrity checks, and unknown log metadata now surface for manual review.
 - When sudo refuses a command, the report shows sudo's own message. A host
   where sudo refuses `fail2ban-client status` now reports `F2B-STAT-003`
   ("status could not be confirmed even with sudo") instead of `F2B-STAT-001`

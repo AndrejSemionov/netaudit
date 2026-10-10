@@ -59,7 +59,12 @@ def _find_files(ssh: SSHExecutor, directory: str) -> list[dict] | dict | None:
     if code is None:
         return {'error': 'could not confirm listing backup directory'}
     if code != 0 and 'No such file or directory' in out:
-        return None  # directory doesn't exist - distinguish from "exists but empty"
+        # `find` may name a child removed during rotation, while `directory`
+        # itself still exists. Confirm the root separately before calling it
+        # absent; an inconclusive probe stays a collection error.
+        _, dir_code = run_command_with_exit_code(ssh, f'test -d {shlex.quote(directory)}')
+        if dir_code == 1:
+            return None
     if code != 0:
         return {'error': f'failed to list backup directory (exit {code})', 'detail': out.strip()[:300]}
     files = []

@@ -17,8 +17,10 @@ Scope: RA-14, RA-16, RA-17 of the A2 audit. No changes to target systems.
    runs `docker` itself, not `sh -c`.
 2. `backup_check`: `find` exit 0 and parsed output means an existing directory
    with that file list, including a genuinely empty one. Exit nonzero with
-   explicit `No such file or directory` for the queried directory means
-   absent. Other nonzero or no completion means unknown; do not issue
+   explicit `No such file or directory` plus a separate `test -d` exit 1
+   for the queried directory means absent. A vanished child during `find`
+   leaves the root directory present (`test -d` exit 0), so listing is
+   unknown, not absent. Other nonzero or no completion means unknown; do not issue
    `no backup files` or `directory does not exist` for it. If any directory
    is unknown, no global clean finding. Archive checks distinguish a
    completed corrupt archive test from tool missing, permissions denied or

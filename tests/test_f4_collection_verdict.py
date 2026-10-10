@@ -68,11 +68,12 @@ def test_backup_find_failure_is_not_empty_directory(monkeypatch, exit_code, outp
     assert not any(f['severity'] == 'ok' for f in result['findings'])
 
 
-def test_backup_child_disappearing_does_not_mean_directory_absent(monkeypatch):
+@pytest.mark.parametrize('dir_code', [0, None])
+def test_backup_child_disappearing_does_not_mean_directory_absent(monkeypatch, dir_code):
     fake = ExitCodeFakeSSHExecutor(
         responses={'find ': 'find: /var/backups/old.sql.gz: No such file or directory',
                    'test -d ': ''},
-        exit_codes={'find ': 1, 'test -d ': 0},
+        exit_codes={'find ': 1, 'test -d ': dir_code},
     )
     monkeypatch.setattr('netaudit_pkg.checks.backup_check.SSHExecutor', lambda *a, **kw: fake)
     result = check_backup(host='127.0.0.1', directories='/var/backups')
