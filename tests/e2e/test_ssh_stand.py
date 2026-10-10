@@ -141,3 +141,38 @@ def test_password_reaches_neither_sqlite_nor_log_nor_ai_request(isolated_db, mon
     assert PASSWORD not in sent['body']
 
     assert PASSWORD not in caplog.text
+
+
+# 9. F8: tools that live in /usr/sbin ----------------------------------------
+
+@pytest.mark.parametrize('tool', ['lynis', 'chkrootkit'])
+def test_usr_sbin_tool_is_found_for_a_non_root_user(tool):
+    """On Debian lynis and chkrootkit are in /usr/sbin, outside a non-root
+    SSH PATH: a bare `command -v` misses them, tool_presence() does not."""
+    from netaudit_pkg.ssh import SSHExecutor
+    ssh = SSHExecutor(HOST, 'pwsudo', PORT, KEY, '').connect()
+    try:
+        bare, _ = ssh.run(f'command -v {tool} || echo NOT_IN_PATH')
+        presence = ssh.tool_presence(tool)
+        installed = ssh.is_tool_installed(tool)
+    finally:
+        ssh.close()
+    assert 'NOT_IN_PATH' in bare  # the condition F8 is about
+    assert presence.status == 'present'
+    assert installed is True
+
+
+def test_missing_tool_is_absent():
+    from netaudit_pkg.ssh import SSHExecutor
+    ssh = SSHExecutor(HOST, 'pwsudo', PORT, KEY, '').connect()
+    try:
+        assert ssh.tool_presence('netaudit-no-such-tool').status == 'absent'
+    finally:
+        ssh.close()
+
+
+def test_lynis_audit_without_sudo_rights_fails_on_sudo_not_on_presence():
+    from netaudit_pkg.checks.lynis_audit import check_lynis_audit
+    result = check_lynis_audit(**_key('nosudo', PASSWORD))
+    assert 'error' in result, result
+    assert 'not installed' not in result['error'], result
