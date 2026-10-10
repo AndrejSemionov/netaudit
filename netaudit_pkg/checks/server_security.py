@@ -21,6 +21,7 @@ from ..nginx_config import collect_nginx_config
 from ..registry import register
 from ..ssh import HostKeyMismatchError, SSHExecutor
 from ..ssh_config import collect_ssh_config
+from ..ssh_utils import command_v_verdict
 from ..utils import last_response_headers, run_cmd, tool_available
 
 try:
@@ -120,15 +121,9 @@ def _fail2ban_binary_verdict(evidence) -> tuple[str, dict]:
     """Returns (verdict, context) for fail2ban-client's presence on PATH.
 
     verdict is one of:
-      'PRESENT'     - confirmed on PATH (exit_code == 0).
-      'NOT_PRESENT' - confirmed absent (exit_code == 127 exactly - this
-                      is `command -v`'s own documented "not found"
-                      convention, NOT "any nonzero exit code"; a
-                      different nonzero code is UNKNOWN, not
-                      NOT_PRESENT - see fail2ban_config.binary_verdict()
-                      for the same rule at the evidence layer).
-      'UNKNOWN'     - collection did not complete, or a confirmed exit
-                      code that's neither 0 nor 127.
+      'PRESENT'     - exit 0 with a nonempty path.
+      'NOT_PRESENT' - Bash exit 1 or dash exit 127 with empty output.
+      'UNKNOWN'     - incomplete collection or any other code/output pair.
     """
     from ..fail2ban_config import binary_verdict as _binary_verdict
 
@@ -138,7 +133,7 @@ def _fail2ban_binary_verdict(evidence) -> tuple[str, dict]:
         if not bc.completed:
             reason = 'command -v fail2ban-client did not complete'
         else:
-            reason = f'command -v fail2ban-client returned an unexpected exit code ({bc.exit_code})'
+            reason = f'command -v fail2ban-client returned inconclusive output (exit {bc.exit_code})'
         return 'UNKNOWN', {'reason': reason}
     return v, {}
 
@@ -421,7 +416,7 @@ def _ufw_verdict(evidence) -> tuple[str, dict]:
     """Returns (verdict, context) for the UFW backend.
 
     verdict is one of:
-      'NOT_PRESENT' - confirmed absent (command -v exit 127) - not a
+      'NOT_PRESENT' - confirmed absent (command -v exit 1/127, empty output) - not a
                        finding at all, this host simply doesn't have ufw.
       'ACTIVE'      - confirmed 'Status: active'
       'INACTIVE'    - confirmed 'Status: inactive' - HIGH finding
@@ -438,7 +433,7 @@ def _ufw_verdict(evidence) -> tuple[str, dict]:
     if present is None:
         if not evidence.ufw_present.completed:
             return 'UNKNOWN', {'reason': 'could not confirm whether ufw is installed (command did not complete)'}
-        return 'UNKNOWN', {'reason': f'unexpected exit code {evidence.ufw_present.exit_code} checking for ufw'}
+        return 'UNKNOWN', {'reason': f'inconclusive command -v ufw output (exit {evidence.ufw_present.exit_code})'}
     if present is False:
         return 'NOT_PRESENT', {}
 
@@ -638,24 +633,15 @@ def audit_firewall(ssh: SSHExecutor) -> dict:
 # ===========================================================================
 
 def _sql_binary_verdict(result) -> str:
-    """Classifies ONE presence CommandResult (mysql or mariadb) per
-    `command -v`'s own exit-code convention. Returns 'FOUND', 'NOT_FOUND'
-    (confirmed absent, exit 127), or 'UNKNOWN' (collection failure, or
-    any exit code other than 0/127 - not guessed at, see
-    firewall_config.tool_is_present() for the same pattern)."""
-    if not result.completed:
-        return 'UNKNOWN'
-    if result.exit_code == 0:
-        return 'FOUND'
-    if result.exit_code == 127:
-        return 'NOT_FOUND'
-    return 'UNKNOWN'
+    """FOUND, NOT_FOUND or UNKNOWN from Bash/dash `command -v`."""
+    verdict = command_v_verdict(result.completed, result.exit_code, result.stdout)
+    return {'PRESENT': 'FOUND', 'ABSENT': 'NOT_FOUND', 'UNKNOWN': 'UNKNOWN'}[verdict]
 
 
 def _sql_presence_verdict(evidence) -> tuple[str, dict]:
     """Combines mysql_present/mariadb_present into one presence verdict.
 
-    'NOT_PRESENT' requires BOTH to be confirmed NOT_FOUND (exit 127) -
+    'NOT_PRESENT' requires BOTH to be confirmed NOT_FOUND (exit 1/127 and empty output) -
     a single UNKNOWN never downgrades to NOT_PRESENT. 'PRESENT' requires
     only one confirmed FOUND (existence, once proven, isn't undone by
     the other check being inconclusive). Otherwise 'UNKNOWN'.
@@ -836,7 +822,7 @@ def audit_sql(ssh: SSHExecutor) -> dict:
 
     presence, presence_ctx = _sql_presence_verdict(evidence)
     if presence == 'NOT_PRESENT':
-        # Confirmed absent (both mysql and mariadb exit 127) - not a
+        # Confirmed absent (both mysql and mariadb exit 1/127, empty output) - not a
         # collection failure, and not a security question either: this
         # SQL-exposure audit simply doesn't apply to a host with no
         # MySQL/MariaDB installed. Deliberately NOT an 'ok' finding -

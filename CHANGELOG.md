@@ -38,6 +38,9 @@
 - `aide_check` no longer reports "AIDE database initialized" when sudo refused
   `aide --init` or the new database was not moved into place, and a refused
   sudo is no longer reported as a missing database.
+- UFW, Fail2Ban and MySQL/MariaDB presence checks include system binary
+  directories in the SSH PATH lookup. Bash exit 1 and dash exit 127 with
+  empty output mean confirmed absence; malformed output remains unknown.
 - An encrypted SSH key that ssh-agent does not provide fails with an explicit
   error. The SSH `password` field is labelled as the sudo password too.
 - `ssl` reports a failed certificate verification (expired, self-signed,
