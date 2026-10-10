@@ -68,6 +68,30 @@ def test_backup_find_failure_is_not_empty_directory(monkeypatch, exit_code, outp
     assert not any(f['severity'] == 'ok' for f in result['findings'])
 
 
+def test_backup_child_disappearing_does_not_mean_directory_absent(monkeypatch):
+    fake = ExitCodeFakeSSHExecutor(
+        responses={'find ': 'find: /var/backups/old.sql.gz: No such file or directory',
+                   'test -d ': ''},
+        exit_codes={'find ': 1, 'test -d ': 0},
+    )
+    monkeypatch.setattr('netaudit_pkg.checks.backup_check.SSHExecutor', lambda *a, **kw: fake)
+    result = check_backup(host='127.0.0.1', directories='/var/backups')
+    assert result['directories'][0].get('error') != 'directory does not exist'
+    assert any('could not list backup directory' in f['title'] for f in result['findings'])
+    assert not any('does not exist' in f['title'] for f in result['findings'])
+
+
+def test_backup_missing_root_is_confirmed_by_test_d(monkeypatch):
+    fake = ExitCodeFakeSSHExecutor(
+        responses={'find ': 'find: /var/missing: No such file or directory',
+                   'test -d ': ''},
+        exit_codes={'find ': 1, 'test -d ': 1},
+    )
+    monkeypatch.setattr('netaudit_pkg.checks.backup_check.SSHExecutor', lambda *a, **kw: fake)
+    result = check_backup(host='127.0.0.1', directories='/var/missing')
+    assert result['directories'][0]['error'] == 'directory does not exist'
+
+
 def test_backup_missing_archive_tool_is_unknown_not_corrupted(monkeypatch):
     listing = f'{time.time() - 60}|2048|db.sql.gz\n'
     fake = ExitCodeFakeSSHExecutor(
