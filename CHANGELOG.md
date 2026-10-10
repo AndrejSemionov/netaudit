@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `docker_audit` now confirms whether its Docker TCP socket configuration
+  probe completed. Missing optional config files are allowed; read failures,
+  SSH interruptions and inconsistent probe results are reported as collection
+  gaps instead of silently appearing clean. Container findings remain visible.
+
 - `dns_audit` appears in trends (`netaudit trend dns_audit <domain>`, Web
   trends, AI trend context). A DNS query that did not resolve marks its
   section as not evaluated: findings from the previous run there are listed
