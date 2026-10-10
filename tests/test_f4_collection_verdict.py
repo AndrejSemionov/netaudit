@@ -38,6 +38,21 @@ def test_docker_inspect_failure_names_incomplete_coverage(monkeypatch):
     assert not any(f['severity'] == 'ok' for f in result.get('findings', []))
 
 
+def test_docker_partial_inspection_always_has_visible_incomplete_finding(monkeypatch):
+    fake = ExitCodeFakeSSHExecutor(
+        installed_tools={'docker'},
+        responses={'docker ps -q': 'bad\ngood\n',
+                   'docker inspect bad': 'not json',
+                   'docker inspect good': '[{"Config": {"User": "root", "Image": "app:latest"}, "HostConfig": {}}]'},
+        exit_codes={'docker ps -q': 0, 'docker inspect bad': 0, 'docker inspect good': 0},
+    )
+    monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
+    result = check_docker_audit(host='127.0.0.1')
+    assert result['containers_inspected'] == 1
+    assert any('incomplete' in f['title'].lower() for f in result['findings'])
+    assert any('root' in f['title'].lower() for f in result['findings'])
+
+
 @pytest.mark.parametrize('exit_code,output', [(1, 'find: Permission denied'),
                                               (None, '')])
 def test_backup_find_failure_is_not_empty_directory(monkeypatch, exit_code, output):

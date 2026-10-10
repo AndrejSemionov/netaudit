@@ -1,6 +1,7 @@
 # F4 — confirmed collection for Docker, backups and log discovery
 
-Status: DRAFT. USER approved F1–F7 autonomous follow-up to A2 on 2026-10-09.
+Status: implemented locally, awaiting independent review. USER approved F1–F7
+autonomous follow-up to A2 on 2026-10-09.
 Implementer: GPT/Codex; reviewer: Claude. Base: `origin/main` @ `ea68f97`.
 Scope: RA-14, RA-16, RA-17 of the A2 audit. No changes to target systems.
 
@@ -50,3 +51,10 @@ RED and GREEN are separate commits. Run focused tests for all three checks,
 broader pytest excluding the known Web TestClient hang in Codex, full Ruff,
 compileall, Bandit and diff check. Claude repeats an independent review and
 full pytest including Web in his environment.
+
+## Remaining limit
+
+The separate Docker daemon socket grep still uses `|| true`; a failed socket
+probe can miss an exposed daemon while the container configuration verdict is
+otherwise complete. The F4 correction covers `docker ps` and every `inspect`
+result, as specified by RA-14. A socket probe verdict needs a separate task.

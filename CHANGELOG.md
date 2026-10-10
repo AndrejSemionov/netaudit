@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Docker, backup and log discovery checks distinguish failed collection from
+  confirmed absence. Incomplete container inspection, backup listing or
+  integrity checks, and unknown log metadata now surface for manual review.
+
 - `deploy.sh` (layout B) backs up the files it changes and the database before
   copying, rolls back by itself when tests, the restart or the smoke test fail,
   and has `./deploy.sh --rollback`. It deploys everything since the last

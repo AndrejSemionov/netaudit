@@ -14,7 +14,19 @@ from netaudit_pkg.checks.backup_check import (
     _find_files,
     check_backup,
 )
-from tests.conftest import FakeSSHExecutor
+from tests.conftest import ExitCodeFakeSSHExecutor
+
+
+class FakeSSHExecutor(ExitCodeFakeSSHExecutor):
+    """Existing backup fixtures, with real completion codes for F4 commands."""
+
+    def __init__(self, responses=None):
+        responses = responses or {}
+        merged = {key: ''.join(value) if isinstance(value, tuple) else value
+                  for key, value in responses.items()}
+        exit_codes = {key: (1 if 'FAIL' in out or 'No such file or directory' in out else 0)
+                      for key, out in merged.items()}
+        super().__init__(responses=merged, exit_codes=exit_codes)
 
 NOW = time.time()
 RECENT = NOW - 3600 * 5   # 5 hours ago
@@ -61,7 +73,7 @@ def test_find_files_empty_directory_returns_empty_list():
 ])
 def test_archive_integrity_ok(filename, response_key):
     fake = FakeSSHExecutor(responses={response_key: ('OK\n', '')})
-    assert _check_archive_integrity(fake, '/var/backups', filename) is None
+    assert _check_archive_integrity(fake, '/var/backups', filename).status == 'ok'
 
 
 @pytest.mark.parametrize('filename,response_key', [
@@ -71,13 +83,13 @@ def test_archive_integrity_ok(filename, response_key):
 def test_archive_integrity_corrupt(filename, response_key):
     fake = FakeSSHExecutor(responses={response_key: ('FAIL\n', '')})
     error = _check_archive_integrity(fake, '/var/backups', filename)
-    assert error is not None
-    assert 'integrity check' in error
+    assert error.status == 'corrupt'
+    assert 'integrity check' in error.detail
 
 
 def test_archive_integrity_unknown_format_not_checked():
     fake = FakeSSHExecutor(responses={})
-    assert _check_archive_integrity(fake, '/var/backups', 'dump.custom_format') is None
+    assert _check_archive_integrity(fake, '/var/backups', 'dump.custom_format').status == 'skipped'
 
 
 def test_archive_integrity_sql_html_error_page_detected():
@@ -86,12 +98,13 @@ def test_archive_integrity_sql_html_error_page_detected():
     fake = FakeSSHExecutor(responses={'head -c 200': ('<html><body>Error 500</body></html>', '')})
     error = _check_archive_integrity(fake, '/var/backups', 'dump.sql')
     assert error is not None
-    assert 'HTML' in error
+    assert error.status == 'corrupt'
+    assert 'HTML' in error.detail
 
 
 def test_archive_integrity_sql_looks_fine():
     fake = FakeSSHExecutor(responses={'head -c 200': ('-- MySQL dump\nCREATE TABLE...', '')})
-    assert _check_archive_integrity(fake, '/var/backups', 'dump.sql') is None
+    assert _check_archive_integrity(fake, '/var/backups', 'dump.sql').status == 'ok'
 
 
 # ===========================================================================
@@ -207,22 +220,17 @@ def test_full_disk_flagged_medium(monkeypatch):
 
 
 def test_multiple_directories_checked_independently(monkeypatch):
-    call_dirs = []
-
-    class TrackingExecutor(FakeSSHExecutor):
-        def run(self, cmd, timeout=20):
-            if 'find' in cmd:
-                call_dirs.append(cmd)
-                if '/good' in cmd:
-                    return (f'{RECENT}|52428800|db.sql.gz\n{RECENT-1}|52428800|db2.sql.gz\n', '')
-                return ('', 'No such file or directory')
-            return super().run(cmd, timeout)
-
-    fake = TrackingExecutor(responses={'gzip -t': ('OK\n', ''), 'df -P': ('/dev/sda1 1 1 1 50% /\n', '')})
+    fake = FakeSSHExecutor(responses={
+        'find /good': (f'{RECENT}|52428800|db.sql.gz\n{RECENT-1}|52428800|db2.sql.gz\n', ''),
+        'find /missing': ('', 'No such file or directory'),
+        'gzip -t': ('OK\n', ''),
+        'df -P': ('/dev/sda1 1 1 1 50% /\n', ''),
+    })
     monkeypatch.setattr('netaudit_pkg.checks.backup_check.SSHExecutor', lambda *a, **kw: fake)
     result = check_backup(host='1.2.3.4', directories='/good, /missing', min_copies=1)
     assert len(result['directories']) == 2
     assert result['summary']['high'] == 1  # only /missing is flagged
+    assert len([c for c in fake.calls if 'find /' in c]) == 2
 
 
 def test_empty_host_rejected():

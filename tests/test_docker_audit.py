@@ -14,7 +14,7 @@ from netaudit_pkg.checks.docker_audit import (
     _audit_one_container,
     check_docker_audit,
 )
-from tests.conftest import FakeSSHExecutor
+from tests.conftest import ExitCodeFakeSSHExecutor, FakeSSHExecutor
 
 
 def _container(name='app', user='', image='myapp:latest', privileged=False,
@@ -142,13 +142,14 @@ def _container_json(**kwargs):
 
 
 def test_full_flow_no_sudo_needed(monkeypatch):
-    fake = FakeSSHExecutor(
+    fake = ExitCodeFakeSSHExecutor(
         installed_tools={'docker'},
         responses={
-            'docker ps -q': ('abc123\n', ''),
-            'docker inspect': (_container_json(user='nginx', image='nginx:1.27'), ''),
-            'grep -rE': ('', ''),
+            'docker ps -q': 'abc123\n',
+            'docker inspect': _container_json(user='nginx', image='nginx:1.27'),
+            'grep -rE': '',
         },
+        exit_codes={'docker ps -q': 0, 'docker inspect': 0},
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4', user='deploy')
@@ -157,34 +158,20 @@ def test_full_flow_no_sudo_needed(monkeypatch):
 
 
 def test_full_flow_falls_back_to_sudo_when_needed(monkeypatch):
-    """docker ps without sudo returns 'permission denied' - the check should
-    detect that and retry via ssh.sudo() rather than failing outright."""
-    call_log = []
-
-    class SudoFallbackExecutor(FakeSSHExecutor):
-        def run(self, cmd, timeout=20):
-            call_log.append(('run', cmd))
-            if 'docker ps -q' in cmd:
-                return ('', 'permission denied')
-            return super().run(cmd, timeout)
-
-        def sudo(self, cmd, timeout=20):
-            call_log.append(('sudo', cmd))
-            if 'docker ps -q' in cmd:
-                return ('abc123\n', '')
-            if 'docker inspect' in cmd:
-                return (_container_json(user='root', image='app:latest'), '')
-            return super().sudo(cmd, timeout)
-
-    fake = SudoFallbackExecutor(
+    """A confirmed access denial retries the actual Docker command under sudo."""
+    fake = ExitCodeFakeSSHExecutor(
         installed_tools={'docker'},
-        responses={'grep -rE': ('', '')},
+        responses={'sudo -n -- docker ps -q': 'abc123\n',
+                   'docker ps -q': 'permission denied',
+                   'sudo -n -- docker inspect': _container_json(user='root', image='app:latest'),
+                   'grep -rE': ''},
+        exit_codes={'sudo -n -- docker ps -q': 0, 'docker ps -q': 1,
+                    'sudo -n -- docker inspect': 0},
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4', user='deploy')
     assert result['containers_checked'] == 1
-    # confirms sudo() was actually exercised, not just available
-    assert any('docker ps -q' in cmd for kind, cmd in call_log if kind == 'sudo')
+    assert any('sudo -n -- docker ps -q' in cmd for cmd in fake.calls)
 
 
 def test_unprotected_daemon_socket_flagged_even_with_zero_containers(monkeypatch):
@@ -192,12 +179,13 @@ def test_unprotected_daemon_socket_flagged_even_with_zero_containers(monkeypatch
     return for zero running containers, so a dangerous unprotected daemon
     socket went unreported whenever nothing happened to be running at audit
     time. Found and fixed during development."""
-    fake = FakeSSHExecutor(
+    fake = ExitCodeFakeSSHExecutor(
         installed_tools={'docker'},
         responses={
-            'docker ps -q': ('', ''),  # no running containers
-            'grep -rE': ('/etc/docker/daemon.json:  "hosts": ["tcp://0.0.0.0:2375"]\n', ''),
+            'docker ps -q': '',  # no running containers
+            'grep -rE': '/etc/docker/daemon.json:  "hosts": ["tcp://0.0.0.0:2375"]\n',
         },
+        exit_codes={'docker ps -q': 0},
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4')
@@ -243,20 +231,12 @@ def test_sudo_denied_reports_access_error_not_zero_containers(monkeypatch):
     found' just because ps_out came back empty from a denied sudo
     attempt. A false 'zero containers, all clear' here would actively
     hide real containers from the audit."""
-    class SudoDeniedExecutor(FakeSSHExecutor):
-        def run(self, cmd, timeout=20):
-            if 'docker ps -q' in cmd:
-                return ('', 'permission denied')
-            return super().run(cmd, timeout)
-
-        def sudo(self, cmd, timeout=20):
-            if 'docker ps -q' in cmd:
-                return ('', 'sudo: a password is required')
-            return super().sudo(cmd, timeout)
-
-    fake = SudoDeniedExecutor(
+    fake = ExitCodeFakeSSHExecutor(
         installed_tools={'docker'},
         password='',
+        responses={'sudo -n -- docker ps -q': '', 'docker ps -q': 'permission denied'},
+        exit_codes={'sudo -n -- docker ps -q': 1, 'docker ps -q': 1},
+        stderrs={'sudo -n -- docker ps -q': 'sudo: a password is required'},
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4')
@@ -273,23 +253,15 @@ def test_sudo_succeeds_after_unpriv_denied_with_scoped_sudoers(monkeypatch):
     counterpart to test_sudo_denied_reports_access_error_not_zero_containers,
     confirming the fix doesn't overcorrect into treating every sudo
     attempt as suspect."""
-    class ScopedSudoExecutor(FakeSSHExecutor):
-        def run(self, cmd, timeout=20):
-            if 'docker ps -q' in cmd:
-                return ('', 'permission denied')
-            return super().run(cmd, timeout)
-
-        def sudo(self, cmd, timeout=20):
-            if 'docker ps -q' in cmd:
-                return ('abc123\n', '')
-            if 'docker inspect' in cmd:
-                return (_container_json(user='nginx', image='nginx:1.27'), '')
-            return super().sudo(cmd, timeout)
-
-    fake = ScopedSudoExecutor(
+    fake = ExitCodeFakeSSHExecutor(
         installed_tools={'docker'},
         password='',
-        responses={'grep -rE': ('', '')},
+        responses={'sudo -n -- docker ps -q': 'abc123\n',
+                   'docker ps -q': 'permission denied',
+                   'sudo -n -- docker inspect': _container_json(user='nginx', image='nginx:1.27'),
+                   'grep -rE': ''},
+        exit_codes={'sudo -n -- docker ps -q': 0, 'docker ps -q': 1,
+                    'sudo -n -- docker inspect': 0},
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4')
@@ -305,12 +277,13 @@ def test_genuine_zero_containers_still_reports_ok_when_sudo_not_needed(monkeypat
     genuinely returns zero containers - that must still produce the
     normal 'ok: no running containers found', not a false access
     error."""
-    fake = FakeSSHExecutor(
+    fake = ExitCodeFakeSSHExecutor(
         installed_tools={'docker'},
         responses={
-            'docker ps -q': ('', ''),  # succeeds, genuinely empty - no sudo involved
-            'grep -rE': ('', ''),
+            'docker ps -q': '',  # succeeds, genuinely empty - no sudo involved
+            'grep -rE': '',
         },
+        exit_codes={'docker ps -q': 0},
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4')
@@ -326,19 +299,14 @@ def test_docker_inspect_partial_failure_does_not_break_whole_audit(monkeypatch):
     (continue on JSONDecodeError) must still apply after the gate
     removal. Two containers: one parses fine, one doesn't - the audit
     must still complete and report findings for the one that worked."""
-    class PartialInspectExecutor(FakeSSHExecutor):
-        def run(self, cmd, timeout=20):
-            if 'docker ps -q' in cmd:
-                return ('good\nbad\n', '')
-            if "docker inspect 'good'" in cmd:
-                return (_container_json(user='root', image='app:latest'), '')
-            if "docker inspect 'bad'" in cmd:
-                return ('not valid json', '')
-            return super().run(cmd, timeout)
-
-    fake = PartialInspectExecutor(
+    fake = ExitCodeFakeSSHExecutor(
         installed_tools={'docker'},
-        responses={'grep -rE': ('', '')},
+        responses={'docker ps -q': 'good\nbad\n',
+                   'docker inspect good': _container_json(user='root', image='app:latest'),
+                   'docker inspect bad': 'not valid json',
+                   'grep -rE': ''},
+        exit_codes={'docker ps -q': 0, 'docker inspect good': 0,
+                    'docker inspect bad': 0},
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4')
@@ -346,3 +314,5 @@ def test_docker_inspect_partial_failure_does_not_break_whole_audit(monkeypatch):
     assert result['containers_checked'] == 2
     # the one container that parsed fine should still have contributed findings
     assert any('root' in f['title'] for f in result['findings'])
+    assert result['containers_inspected'] == 1
+    assert result['warnings']
