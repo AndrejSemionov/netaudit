@@ -3,14 +3,44 @@
 from __future__ import annotations
 
 import pytest
+import re
 
 from netaudit_pkg.checks.server_security import _sql_binary_verdict
 from netaudit_pkg.fail2ban_config import CommandResult as Fail2banResult
-from netaudit_pkg.fail2ban_config import binary_verdict, collect_fail2ban_config
+from netaudit_pkg.fail2ban_config import _binary_check, binary_verdict, collect_fail2ban_config
 from netaudit_pkg.firewall_config import CommandResult as FirewallResult
-from netaudit_pkg.firewall_config import collect_ufw, tool_is_present
+from netaudit_pkg.firewall_config import _tool_is_present, collect_ufw, tool_is_present
 from netaudit_pkg.sql_config import CommandResult as SQLResult
+from netaudit_pkg.sql_config import collect_mariadb_present, collect_mysql_present
 from tests.conftest import ExitCodeFakeSSHExecutor
+
+
+@pytest.mark.parametrize('collect,tool', [
+    (lambda ssh: _tool_is_present(ssh, 'ufw'), 'ufw'),
+    (_binary_check, 'fail2ban-client'),
+    (collect_mysql_present, 'mysql'),
+    (collect_mariadb_present, 'mariadb'),
+])
+def test_system_sbin_binary_is_found_outside_nonroot_path(collect, tool):
+    """Debian's non-root SSH PATH may exclude /usr/sbin and /sbin."""
+    class SbinOnlySSH:
+        def __init__(self):
+            self.calls = []
+
+        def run(self, cmd, timeout=20):
+            self.calls.append(cmd)
+            marker = re.search(r'(__NETAUDIT_RC_[0-9a-f]+__)', cmd)
+            assert marker is not None
+            found = 'PATH=/usr/sbin:/sbin:"$PATH"' in cmd
+            output = f'/usr/sbin/{tool}' if found else ''
+            code = 0 if found else 1
+            return f'{output}\n{marker.group(1)}:{code}\n', ''
+
+    ssh = SbinOnlySSH()
+    result = collect(ssh)
+    assert result.exit_code == 0
+    assert result.stdout.strip() == f'/usr/sbin/{tool}'
+    assert len(ssh.calls) == 1
 
 
 @pytest.mark.parametrize('exit_code', [1, 127])
