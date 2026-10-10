@@ -90,6 +90,11 @@
   answers with an error or non-JSON), packages are reported as "CVE matching
   could not be completed" instead of "no known CVEs found". A host where
   not even the running kernel was detected is reported as an error.
+- `requirements.txt` and package metadata require pydantic 2 explicitly
+  (`pydantic>=2.0`); the Web
+  settings endpoint for history capture no longer uses the pydantic v1 API.
+  Tests use `httpx2` via both dev requirement paths, as starlette's TestClient now expects
+  (`requirements-dev.txt`). pytest runs without deprecation warnings.
 
 ## 1.0.0 — 2026-10-08
 
