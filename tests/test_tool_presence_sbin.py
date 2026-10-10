@@ -93,3 +93,56 @@ def test_rootkit_reports_an_unknown_probe_per_tool(monkeypatch):
     assert 'could not determine whether chkrootkit is installed' in result['detail']
     assert 'is not installed' not in result['detail']
     assert not fake.installed_tools
+
+
+# ===========================================================================
+# F8 pass 2 (GPT/Codex review): a probe that answers once and then drops
+# ===========================================================================
+
+def _sequenced_executor(answers):
+    """A real SSHExecutor whose successive presence probes get `answers`:
+    an int exit code (empty output, or a path for 0) or None (no marker)."""
+    ssh = SSHExecutor('203.0.113.5', 'audit')
+    ssh.calls = []
+    queue = list(answers)
+
+    def run(cmd, timeout=20, stdin_data=None):
+        ssh.calls.append(cmd)
+        if 'command -v' in cmd:
+            code = queue.pop(0)
+            marker = _MARKER.search(cmd)
+            if code is None:
+                return '', ''
+            out = '/usr/sbin/tool' if code == 0 else ''
+            return f'{out}\n{marker.group(1)}:{code}\n', ''
+        return '', ''
+
+    ssh.run = run
+    ssh.sudo = lambda cmd, timeout=20: (ssh.calls.append(f'sudo {cmd}') or ('', ''))
+    ssh.connect = lambda: ssh
+    return ssh
+
+
+def test_rootkit_keeps_the_reason_when_the_second_probe_drops(monkeypatch):
+    """First probe: absent. The re-check inside ensure_tool_installed():
+    no marker. That must stay 'could not determine', not 'not installed'."""
+    from netaudit_pkg.checks import rootkit_check
+    from netaudit_pkg.registry import CONFIRM_MODIFY
+    ssh = _sequenced_executor([1, None])
+    monkeypatch.setattr(rootkit_check, 'SSHExecutor', lambda *a, **kw: ssh)
+    result = rootkit_check.check_rootkit(host='203.0.113.5', use_chkrootkit=False,
+                                         auto_install=True, confirm_modify=CONFIRM_MODIFY)
+    assert 'could not determine whether rkhunter is installed' in result['detail']
+    assert 'is not installed' not in result['detail']
+    assert not any('apt-get' in c for c in ssh.calls)
+
+
+def test_post_install_probe_that_drops_is_not_failed_to_install():
+    """apt-get ran, then the re-check got no marker: say that, don't claim
+    the install failed."""
+    ssh = _sequenced_executor([1, None])
+    installed, error = ssh.ensure_tool_installed('lynis')
+    assert installed is False
+    assert any('apt-get install' in c for c in ssh.calls)
+    assert 'could not determine whether lynis is installed' in error
+    assert 'failed to install' not in error
