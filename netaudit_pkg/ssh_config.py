@@ -36,7 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .ssh import SSHExecutor
-from .ssh_utils import describe_sudo_refusal, run_sudo_with_exit_code
+from .ssh_utils import describe_sudo_refusal, probe_remote_tool, run_sudo_with_exit_code
 
 
 @dataclass
@@ -74,6 +74,7 @@ class SSHConfig:
         shouldn't be making).
     """
 
+    installed: bool | None = True
     readable: bool = False
     version: str = ''
     # why `sshd -T` gave nothing, when known (sudo refusal reason or the
@@ -129,11 +130,13 @@ def collect_ssh_config(ssh: SSHExecutor) -> SSHConfig:
     reading a restricted Include file, returning zero directives - there
     is no partial-but-usable non-root result to fall back to).
     """
-    which_out, _ = ssh.run('which sshd || echo NONE')
-    if 'NONE' in which_out:
-        return SSHConfig(readable=False)
+    probe = probe_remote_tool(ssh, 'sshd')
+    if probe.status == 'absent':
+        return SSHConfig(installed=False)
+    if probe.status == 'unknown':
+        return SSHConfig(installed=None, error=probe.detail)
 
-    ver_out, ver_err = ssh.run('sshd -V 2>&1')
+    ver_out, ver_err = ssh.run('PATH=/usr/sbin:/sbin:"$PATH" sshd -V 2>&1')
     version = (ver_out or ver_err).strip().splitlines()[0] if (ver_out or ver_err) else ''
 
     result = run_sudo_with_exit_code(ssh, ['sshd', '-T'])

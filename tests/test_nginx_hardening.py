@@ -87,9 +87,9 @@ http {
 
 def _ssh_responses(conf: str, *, installed=True) -> dict:
     if not installed:
-        return {'which nginx': ('NONE', '')}
+        return {'command -v nginx': ('NONE', '')}
     return {
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': (conf, ''),
     }
@@ -168,7 +168,7 @@ def test_audit_nginx_hardening_not_installed(fake_ssh):
 
 def test_audit_nginx_hardening_unreadable_config(fake_ssh):
     fake_ssh.responses = {
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx version: nginx/1.24.0', ''),
         'nginx -T': ('', ''),
     }
@@ -249,7 +249,7 @@ def test_check_nginx_hardening_happy_path(monkeypatch):
 
 
 def test_check_nginx_hardening_closes_ssh_even_on_error(monkeypatch):
-    fake = FakeSSHExecutor(responses={'which nginx': ('NONE', '')})
+    fake = FakeSSHExecutor(responses={'command -v nginx': ('NONE', '')})
     monkeypatch.setattr('netaudit_pkg.checks.nginx_hardening.SSHExecutor', lambda *a, **kw: fake)
     check_nginx_hardening(host='10.0.0.5')
     assert fake.closed is True

@@ -1022,8 +1022,10 @@ def audit_nginx_hardening(ssh: SSHExecutor) -> dict:
     score computed from whatever happened to be available.
     """
     cfg = collect_nginx_config(ssh)
-    if not cfg.installed:
+    if cfg.installed is False:
         return {'installed': False}
+    if cfg.installed is None:
+        return {'installed': None, 'error': cfg.error or 'nginx presence check was inconclusive'}
     if not cfg.readable:
         # group-level N/A (spec section 4.1): nginx -T needed root and
         # didn't have it, so nothing was parsed - no control in this module

@@ -173,7 +173,7 @@ def test_parse_first_occurrence_wins_for_repeated_directive():
 # ===========================================================================
 
 def test_collect_sshd_not_installed(fake_ssh):
-    fake_ssh.responses = {'which sshd': ('NONE', '')}
+    fake_ssh.responses = {'command -v sshd': ('NONE', '')}
     cfg = collect_ssh_config(fake_ssh)
     assert cfg.readable is False
 
@@ -183,7 +183,7 @@ def test_collect_unreadable_without_sudo(fake_ssh):
     # denied on a restricted Include file) and returns zero directives -
     # there's no partial-but-usable non-root result.
     fake_ssh.responses = {
-        'which sshd': ('/usr/sbin/sshd', ''),
+        'command -v sshd': ('/usr/sbin/sshd', ''),
         'sshd -V': ('', 'OpenSSH_10.2p1 Ubuntu-2ubuntu3.5, OpenSSL 3.5.5'),
     }
     cfg = collect_ssh_config(fake_ssh)
@@ -198,7 +198,7 @@ def test_collect_uses_sudo_for_sshd_t(fake_ssh):
     # sudo() code path's expectations (both map to the same _match(), so we
     # instead assert via call tracking that sudo was actually exercised).
     fake_ssh.responses = {
-        'which sshd': ('/usr/sbin/sshd', ''),
+        'command -v sshd': ('/usr/sbin/sshd', ''),
         'sshd -V': ('', 'OpenSSH_10.2p1'),
         'sshd -T': (SSHD_T_SAMPLE, ''),
     }
@@ -212,7 +212,7 @@ def test_collect_uses_sudo_for_sshd_t(fake_ssh):
 
 def test_collect_full_config(fake_ssh):
     fake_ssh.responses = {
-        'which sshd': ('/usr/sbin/sshd', ''),
+        'command -v sshd': ('/usr/sbin/sshd', ''),
         'sshd -V': ('', 'OpenSSH_10.2p1 Ubuntu-2ubuntu3.5, OpenSSL 3.5.5'),
         'sshd -T': (SSHD_T_SAMPLE, ''),
     }
@@ -225,7 +225,7 @@ def test_collect_full_config(fake_ssh):
 
 
 def test_collect_only_makes_expected_calls_when_not_installed(fake_ssh):
-    fake_ssh.responses = {'which sshd': ('NONE', '')}
+    fake_ssh.responses = {'command -v sshd': ('NONE', '')}
     collect_ssh_config(fake_ssh)
     # not-installed case should short-circuit after the `which` check
     assert len(fake_ssh.calls) == 1

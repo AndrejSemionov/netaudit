@@ -54,6 +54,7 @@ import shlex
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from .ssh import SSHExecutor
 
@@ -96,6 +97,39 @@ def run_command_with_exit_code(ssh: SSHExecutor, cmd: str, timeout: int = 20) ->
     except ValueError:
         return body, None
     return body.rstrip('\n'), code
+
+
+@dataclass(frozen=True)
+class ToolProbe:
+    """A PATH lookup: absent is confirmed, unknown means no safe conclusion."""
+
+    status: Literal['present', 'absent', 'unknown']
+    detail: str = ''
+
+
+def probe_remote_tool(ssh: SSHExecutor, tool: str, *,
+                      extra_dirs: Sequence[str] = ('/usr/sbin', '/sbin'),
+                      timeout: int = 20) -> ToolProbe:
+    """Find a remote binary with a system PATH prefix and an exit marker.
+
+    Non-root SSH users may not have /usr/sbin in PATH. The prefix is used
+    only for this unprivileged presence check: callers must never pass the
+    path returned by command -v to sudo, where a user-writable PATH entry
+    could otherwise select a root-run executable. Bash uses exit 1 for an
+    absent command; dash uses 127. A missing completion marker stays unknown.
+    """
+    if not extra_dirs or any(not path.startswith('/') for path in extra_dirs):
+        raise ValueError('extra_dirs must be absolute system directories')
+    prefix = shlex.quote(':'.join(extra_dirs))
+    command = f'PATH={prefix}:"$PATH" command -v {shlex.quote(tool)}'
+    out, code = run_command_with_exit_code(ssh, command, timeout=timeout)
+    if code == 0 and out.strip():
+        return ToolProbe('present')
+    if code in (1, 127) and not out.strip():
+        return ToolProbe('absent')
+    if code is None:
+        return ToolProbe('unknown', f'{tool} presence check did not complete')
+    return ToolProbe('unknown', f'{tool} presence check was inconclusive (exit {code})')
 
 
 # ===========================================================================

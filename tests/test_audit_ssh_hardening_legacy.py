@@ -67,12 +67,12 @@ maxauthtries 10
 
 def _ssh(conf: str) -> FakeSSHExecutor:
     """Builds a FakeSSHExecutor whose responses match the commands
-    collect_ssh_config() actually issues (which sshd / sshd -V / sshd -T),
+    collect_ssh_config() actually issues (command -v sshd / sshd -V / sshd -T),
     not the pre-refactor cat-sshd_config command - audit_ssh_hardening()
     now goes through collect_ssh_config() for all of these.
     """
     return FakeSSHExecutor(responses={
-        'which sshd': ('/usr/sbin/sshd', ''),
+        'command -v sshd': ('/usr/sbin/sshd', ''),
         'sshd -V': ('', 'OpenSSH_10.2p1 Ubuntu-2ubuntu3.5'),
         'sshd -T': (conf, ''),
     })
@@ -83,7 +83,7 @@ def _ssh(conf: str) -> FakeSSHExecutor:
 # ===========================================================================
 
 def test_current_behavior_unreadable_config_returns_low_finding():
-    ssh = FakeSSHExecutor(responses={'cat /etc/ssh/sshd_config': ('', '')})
+    ssh = _ssh('')
     result = audit_ssh_hardening(ssh)
     # trend layer v1.2 (2a.4): an unreadable config "could not evaluate",
     # so the finding now also carries requires_manual_verification
@@ -95,7 +95,7 @@ def test_current_behavior_unreadable_config_returns_low_finding():
 def test_current_behavior_unreadable_config_has_no_other_keys():
     # confirms the current shape doesn't include port/root_login/etc when
     # the config couldn't be read at all
-    ssh = FakeSSHExecutor(responses={})
+    ssh = _ssh('')
     result = audit_ssh_hardening(ssh)
     assert set(result.keys()) == {'findings'}
 

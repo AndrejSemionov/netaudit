@@ -13,14 +13,14 @@ from tests.conftest import FakeSSHExecutor
 
 
 def test_audit_nginx_not_installed(fake_ssh):
-    fake_ssh.responses = {'which nginx': ('NONE', '')}
+    fake_ssh.responses = {'command -v nginx': ('NONE', '')}
     result = audit_nginx(fake_ssh)
     assert result == {'installed': False}
 
 
 def test_audit_nginx_unreadable_config(fake_ssh):
     fake_ssh.responses = {
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx version: nginx/1.24.0', ''),
         'nginx -T': ('', ''),
     }
@@ -33,7 +33,7 @@ def test_audit_nginx_unreadable_config(fake_ssh):
 
 def test_audit_nginx_server_tokens_not_disabled():
     fake = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': ('server {\n    listen 443;\n}', ''),  # no server_tokens directive
     })
@@ -44,7 +44,7 @@ def test_audit_nginx_server_tokens_not_disabled():
 
 def test_audit_nginx_server_tokens_off_no_finding():
     fake = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': (('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;\n'
                      'add_header Strict-Transport-Security "max-age=1" always;\n'
@@ -58,7 +58,7 @@ def test_audit_nginx_server_tokens_off_no_finding():
 
 def test_audit_nginx_outdated_tls_detected():
     fake = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': ('server_tokens off;\nssl_protocols TLSv1 TLSv1.1 TLSv1.2;', ''),
     })
@@ -70,7 +70,7 @@ def test_audit_nginx_outdated_tls_detected():
 
 def test_audit_nginx_modern_tls_no_finding():
     fake = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': ('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;', ''),
     })
@@ -81,7 +81,7 @@ def test_audit_nginx_modern_tls_no_finding():
 
 def test_audit_nginx_missing_headers_detected():
     fake = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': ('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;', ''),
     })
@@ -94,7 +94,7 @@ def test_audit_nginx_missing_headers_detected():
 
 def test_audit_nginx_autoindex_on_detected():
     fake = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': (('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;\n'
                      'add_header Strict-Transport-Security "max-age=1" always;\n'
@@ -109,7 +109,7 @@ def test_audit_nginx_autoindex_on_detected():
 
 def test_audit_nginx_clean_config_gives_ok():
     fake = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': (('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;\n'
                      'add_header Strict-Transport-Security "max-age=1" always;\n'

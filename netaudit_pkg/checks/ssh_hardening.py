@@ -460,11 +460,11 @@ def audit_ssh_hardening_score(ssh: SSHExecutor) -> dict:
     finding ids for SSH-AUTH-001/002/003, not a function call.
     """
     cfg = collect_ssh_config(ssh)
+    if cfg.installed is False:
+        return {'installed': False}
+    if cfg.installed is None:
+        return {'installed': None, 'error': cfg.error or 'sshd presence check was inconclusive'}
     if not cfg.readable:
-        if not cfg.version:
-            # sshd isn't installed at all - which sshd found nothing, so
-            # collect_ssh_config() never even attempted sshd -T.
-            return {'installed': False}
         # sshd is installed but sshd -T came back empty - the group-level
         # N/A case (spec section 4.1): sudo lacked access to a restricted
         # Include file, so nothing was resolved and no control has a

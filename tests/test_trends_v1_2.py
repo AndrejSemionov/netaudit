@@ -151,7 +151,7 @@ def test_instances_differing_only_in_unverified_are_ambiguous():
 
 def test_unreadable_nginx_config_finding_requires_manual_verification():
     ssh = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx version: nginx/1.24.0', ''),
         'nginx -T': ('', ''),
     })
@@ -161,7 +161,10 @@ def test_unreadable_nginx_config_finding_requires_manual_verification():
 
 
 def test_unreadable_sshd_config_finding_requires_manual_verification():
-    ssh = FakeSSHExecutor(responses={'cat /etc/ssh/sshd_config': ('', '')})
+    ssh = FakeSSHExecutor(responses={
+        'command -v sshd': ('/usr/sbin/sshd', ''),
+        'sshd -V': ('', 'OpenSSH_9.6'),
+    })
     [f] = audit_ssh_hardening(ssh)['findings']
     assert f['requires_manual_verification'] is True
     assert (f['severity'], f['title'], 'id' in f) == ('low', 'no access to sshd_config', False)

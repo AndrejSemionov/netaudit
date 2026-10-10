@@ -43,7 +43,7 @@ def _all_findings_config() -> str:
 
 def test_unreadable_config_finding_has_no_id():
     fake = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': ('', ''),
     })
@@ -53,7 +53,7 @@ def test_unreadable_config_finding_has_no_id():
 
 def test_ok_fallback_finding_has_no_id():
     fake = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': (('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;\n'
                      'add_header Strict-Transport-Security "max-age=1" always;\n'
@@ -67,7 +67,7 @@ def test_ok_fallback_finding_has_no_id():
 
 def test_server_tokens_finding_has_correct_id():
     fake = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': ('server {\n    listen 443;\n}', ''),
     })
@@ -78,7 +78,7 @@ def test_server_tokens_finding_has_correct_id():
 
 def test_outdated_tls_finding_has_correct_id():
     fake = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': ('server_tokens off;\nssl_protocols TLSv1 TLSv1.1 TLSv1.2;', ''),
     })
@@ -89,7 +89,7 @@ def test_outdated_tls_finding_has_correct_id():
 
 def test_ssl_protocols_not_set_finding_has_correct_id():
     fake = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': ('server_tokens off;\nssl_certificate /etc/nginx/cert.pem;', ''),
     })
@@ -100,7 +100,7 @@ def test_ssl_protocols_not_set_finding_has_correct_id():
 
 def test_missing_header_findings_have_correct_ids():
     fake = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': ('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;', ''),
     })
@@ -113,7 +113,7 @@ def test_missing_header_findings_have_correct_ids():
 
 def test_autoindex_finding_has_correct_id():
     fake = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': (('server_tokens off;\nssl_protocols TLSv1.2 TLSv1.3;\n'
                      'add_header Strict-Transport-Security "max-age=1" always;\n'
@@ -128,7 +128,7 @@ def test_autoindex_finding_has_correct_id():
 
 def test_all_ids_are_unique_within_one_run():
     fake = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': (_all_findings_config(), ''),
     })
@@ -139,7 +139,7 @@ def test_all_ids_are_unique_within_one_run():
 
 def test_all_ids_are_within_the_documented_spec_catalogue():
     fake = FakeSSHExecutor(responses={
-        'which nginx': ('/usr/sbin/nginx', ''),
+        'command -v nginx': ('/usr/sbin/nginx', ''),
         'nginx -v': ('nginx/1.24.0', ''),
         'nginx -T': (_all_findings_config(), ''),
     })

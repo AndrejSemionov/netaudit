@@ -13,6 +13,8 @@ test_nginx_v2_resolvers.py).
 
 from __future__ import annotations
 
+import re
+
 from netaudit_pkg.checks.nginx_hardening import (
     _aggregate_server_verdicts,
     _build_tier2_components,
@@ -1513,8 +1515,9 @@ def test_audit_nginx_hardening_end_to_end_16_components():
     ssh = MagicMock()
 
     def run_side_effect(cmd, *args, **kwargs):
-        if 'which nginx' in cmd:
-            return ('/usr/sbin/nginx', '')
+        if 'command -v nginx' in cmd:
+            marker = re.search(r'(__NETAUDIT_RC_[0-9a-f]+__)', cmd).group(1)
+            return (f'/usr/sbin/nginx\n{marker}:0\n', '')
         if 'nginx -v' in cmd:
             return ('nginx version: nginx/1.28.3', '')
         return ('', '')
@@ -1550,8 +1553,9 @@ def test_hardening_score_unavailable_when_tier2_unreadable():
     call_count = {'sudo': 0}
 
     def run_side_effect(cmd, *args, **kwargs):
-        if 'which nginx' in cmd:
-            return ('/usr/sbin/nginx', '')
+        if 'command -v nginx' in cmd:
+            marker = re.search(r'(__NETAUDIT_RC_[0-9a-f]+__)', cmd).group(1)
+            return (f'/usr/sbin/nginx\n{marker}:0\n', '')
         if 'nginx -v' in cmd:
             return ('nginx version: nginx/1.28.3', '')
         return ('', '')

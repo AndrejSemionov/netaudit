@@ -153,8 +153,10 @@ def audit_nginx_logs(ssh: SSHExecutor, lines: int = DEFAULT_TAIL_LINES) -> dict:
     or close the SSH session itself — mirrors audit_nginx_hardening()'s
     two-layer API (nginx_hardening.py)."""
     cfg = collect_nginx_config_v2(ssh)
-    if not cfg.installed:
+    if cfg.installed is False:
         return {'installed': False}
+    if cfg.installed is None:
+        return {'installed': None, 'error': cfg.error or 'nginx presence check was inconclusive'}
     if not cfg.readable:
         return {'installed': True, 'error': cfg.error or 'nginx -T returned no config'}
 
