@@ -109,7 +109,7 @@ def _database_presence_error(ssh: SSHExecutor) -> dict | None:
             return {'error': 'could not confirm whether the AIDE database exists'}
         if r.sudo_error:
             return {'error': f'sudo refused the AIDE database check: {r.sudo_error}',
-                    'hint': 'set the password field (used for sudo) or allow `test` and `aide` via sudoers'}
+                    'hint': 'fill in "Sudo password" or allow `test` and `aide` via sudoers'}
         if r.exit_code == 0:
             return None
     return {'error': 'AIDE database not found — run this same check with mode=init first',
@@ -126,7 +126,7 @@ def _init_database(ssh: SSHExecutor, host: str) -> dict:
         return {'error': 'aide --init did not complete'}
     if init.sudo_error:
         return {'error': f'sudo refused aide --init: {init.sudo_error}',
-                'hint': 'set the password field (used for sudo) or allow `aide` and `mv` via sudoers'}
+                'hint': 'fill in "Sudo password" or allow `aide` and `mv` via sudoers'}
     if init.exit_code != 0:
         name = AIDE_ERROR_CODES.get(init.exit_code)
         code = f'exit {init.exit_code}: {name}' if name else f'exit {init.exit_code}'
@@ -193,7 +193,10 @@ def check_aide(host='', user='root', port=22, key_path='', password='', sudo_pas
         return {'error': f'could not connect: {e}'}
 
     try:
-        if not ssh.is_tool_installed('aide'):
+        presence = ssh.tool_presence('aide')
+        if presence.status == 'unknown':
+            return {'error': f'could not determine whether aide is installed: {presence.detail}'}
+        if presence.status == 'absent':
             if not auto_install:
                 return {'error': 'aide is not installed on the server',
                         'hint': 'apt install aide -y (or enable auto_install)'}
@@ -203,7 +206,10 @@ def check_aide(host='', user='root', port=22, key_path='', password='', sudo_pas
                         'hint': 'set "Confirm: this may install packages / reinitialize the AIDE database" to proceed'}
             installed, install_err = ssh.ensure_tool_installed('aide', timeout=120)
             if not installed:
-                return {'error': 'failed to install aide', 'detail': install_err}
+                # ensure_tool_installed()'s reason is the headline: not on the
+                # allowlist, apt failed, or the presence check did not answer
+                # before / after apt (F8) - never a blanket 'failed to install'
+                return {'error': install_err or 'failed to install aide', 'detail': install_err}
 
         # AIDE on Debian/Ubuntu usually keeps the database at /var/lib/aide/aide.db
         # (writing a new one as aide.db.new on --init) - these paths are standard

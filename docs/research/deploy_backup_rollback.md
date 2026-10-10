@@ -144,3 +144,55 @@ Verification: the tests above, full pytest, Ruff, bandit, `bash -n deploy.sh`,
 `shellcheck` if it is installed locally (not a CI dependency). A real deploy
 on the server is a USER step; `docs/upgrade_to_1_0.md` §1, §2 and §5 for
 layout B are updated to the automatic backup and rollback.
+
+## Amendment rev.2 — the manifest is part of the deploy (A0 review, 2026-10-09)
+
+Status: fix for the post-merge review of PR #10 by GPT/Codex (pass 1 / 3,
+CHANGES REQUESTED), stage A in MODE: AUTONOMOUS. Implementer: Claude.
+Reviewer: GPT/Codex.
+
+### Evidence (`deploy.sh` on `main` @ `ea68f97`)
+
+- **E6. A failed manifest write does not roll back.** `trap - ERR` runs before
+  `cat > "$MANIFEST_PATH"` (step 10). When that write fails, `set -e` exits
+  with status 1 after the new files are in place and the service runs them,
+  while the manifest still names the previous commit. No `ROLLED BACK` line,
+  no restore. Reproduced by GPT/Codex with a read-only `.deployed_manifest`.
+- **E7. A retention failure turns a finished deploy into a failure.**
+  `prune_backups` runs after the trap is off; an `rm -rf` that fails exits
+  the script under `set -e` before `=== DEPLOYMENT SUCCESS ===`, although the
+  code, the restart and the manifest are all done.
+- **E8. A read-only manifest also breaks the rollback.** `restore_backup`
+  copies the saved manifest with a plain `cp`, which cannot open a read-only
+  destination, so the rollback reports `ROLLBACK FAILED` (exit 2) after the
+  files were already restored.
+
+### Design
+
+- **R1.** The deploy is not finished until the manifest names the new commit,
+  so the ERR trap stays active through step 10. The manifest is written to
+  `.deployed_manifest.new` next to the old one and renamed into place with
+  `mv -f`: it is never half-written, and the old file's mode does not matter.
+  A failure writing or renaming it is handled like any other failure (S3:
+  restore, restart, exit 1; exit 2 if the rollback fails).
+- **R2.** After the rename the deploy is done. Removing old backups is
+  housekeeping: when it fails, the script prints a warning naming
+  `~/netaudit-deploy-backups` and still ends with `=== DEPLOYMENT SUCCESS ===`
+  and status 0.
+- **R3.** `restore_backup` puts the saved manifest back with `cp -f`, so a
+  read-only manifest is replaced instead of failing the rollback.
+
+Unchanged: the manifest contents, S1–S5, D1–D3.
+
+### Tests (RED first, same harness)
+
+10. A read-only `.deployed_manifest`: the deploy succeeds and the manifest
+    names the new commit (E6 as reproduced in the review).
+11. The manifest cannot be written (the fake pytest makes
+    `.deployed_manifest.new` a directory): rollback, exit 1, runtime tree and
+    manifest as before, a second restart.
+12. A read-only manifest and a failing pytest: a clean rollback (exit 1,
+    `ROLLED BACK`), not `ROLLBACK FAILED`.
+13. Retention cannot remove the oldest backup: exit 0, `DEPLOYMENT SUCCESS`,
+    a warning, manifest updated (skipped when the tests run as root, where
+    permissions do not stop `rm`).

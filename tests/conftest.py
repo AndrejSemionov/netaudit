@@ -98,6 +98,11 @@ class FakeSSHExecutor:
     def is_tool_installed(self, tool: str) -> bool:
         return tool in self.installed_tools
 
+    def tool_presence(self, tool: str):
+        # F8: the real method returns ssh_utils.ToolProbe (present/absent/unknown)
+        from netaudit_pkg.ssh_utils import ToolProbe
+        return ToolProbe('present' if tool in self.installed_tools else 'absent')
+
     def ensure_tool_installed(self, tool: str, timeout: int = 120) -> tuple[bool, str | None]:
         if tool in self.installed_tools:
             return True, None

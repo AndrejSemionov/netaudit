@@ -157,6 +157,7 @@ def test_check_mode_sudo_refusal_is_not_a_missing_database(monkeypatch):
     result = check_aide(host='1.2.3.4', mode='check')
     assert result['error'] == f'sudo refused the AIDE database check: {SUDO_REFUSED}'
     assert 'mode=init' not in result['error']
+    assert '"Sudo password"' in result['hint']  # the field's name since task 10
     assert not any('--check' in c for c in fake.calls)
 
 
@@ -231,6 +232,7 @@ def test_init_mode_sudo_refusal_is_an_error_not_ok(monkeypatch):
                       stderrs={'--init': SUDO_REFUSED + '\n'})
     result = _init(monkeypatch, fake)
     assert result['error'] == f'sudo refused aide --init: {SUDO_REFUSED}'
+    assert '"Sudo password"' in result['hint']
     assert 'findings' not in result
     assert not any('mv ' in c for c in fake.calls)
 

@@ -3,13 +3,19 @@
 ## Unreleased
 
 - `deploy.sh` (layout B) backs up the files it changes and the database before
-  copying, rolls back by itself when tests, the restart or the smoke test fail,
-  and has `./deploy.sh --rollback`. It deploys everything since the last
-  deployed commit (not only the last pull), removes files deleted in git, and
-  treats HTTP 401 from the smoke test (Basic Auth on) as a warning.
+  copying, rolls back by itself when tests, the restart, the smoke test or
+  writing the deployment manifest fail, and has `./deploy.sh --rollback`. It
+  deploys everything since the last deployed commit (not only the last pull),
+  removes files deleted in git, and treats HTTP 401 from the smoke test (Basic
+  Auth on) as a warning. Failing to remove an old backup after a finished
+  deploy is a warning too.
 - In the Russian interface, the SSH fields shared by many checks (host, user,
   port, key, SSH and sudo passwords, log lines) are translated even where the
   check itself has no translation yet.
+- `lynis_audit`, `rootkit_check`, `aide_check` and `docker_audit` find tools in
+  `/usr/sbin` for a non-root SSH user (lynis and chkrootkit live there on
+  Debian); when the presence check itself fails they say so instead of
+  "not installed", and `auto_install` never installs over such a result.
 - SSH checks that use sudo have a separate **Sudo password** field
   (`sudo_password`). It goes to `sudo -S` on stdin and is never stored; when it
   is empty the SSH password is used, as before. The `password` field is now the
@@ -37,6 +43,14 @@
   empty output mean confirmed absence; malformed output remains unknown.
 - An encrypted SSH key that ssh-agent does not provide fails with an explicit
   error. The SSH `password` field is labelled as the sudo password too.
+- `ssl` reports a failed certificate verification (expired, self-signed,
+  wrong host) instead of `ok` when openssl is installed.
+  `web_security_external` detects servers that still accept TLS 1.0/1.1 on
+  hosts with OpenSSL 3 (it could not before) and says when it could not
+  test them; an unreachable site is an error, not a list of missing
+  headers; a sensitive path that could not be requested is reported as not
+  checked. Security headers are read from the final response of a redirect
+  chain.
 - Removed the unused `SSHExecutor.needs_sudo_password()`.
 - Web presets no longer store or return SSH passwords; enter the password
   again after applying a preset. Presets saved earlier are stripped when read,
