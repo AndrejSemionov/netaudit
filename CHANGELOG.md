@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Rootkit, Lynis and AIDE audits now require a confirmed sudo command result
+  before reporting a clean scan. Failed or partial runs are marked incomplete;
+  AIDE change bitmasks and rootkit warnings remain visible.
+
 - `deploy.sh` (layout B) backs up the files it changes and the database before
   copying, rolls back by itself when tests, the restart or the smoke test fail,
   and has `./deploy.sh --rollback`. It deploys everything since the last
