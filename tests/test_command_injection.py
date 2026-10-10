@@ -67,18 +67,20 @@ def test_invalid_unit_is_rejected_before_connecting(monkeypatch, unit):
 @pytest.mark.parametrize('unit', ['nginx.service', 'nginx', 'getty@tty1.service',
                                   'dev-disk-by\\x2duuid.swap', 'a:b_c.service'])
 def test_valid_unit_reaches_ssh(monkeypatch, unit):
-    fake = ExitCodeFakeSSHExecutor(responses={'systemctl status': 'Active: active'})
+    fake = ExitCodeFakeSSHExecutor(responses={'systemctl show': 'loaded\n'},
+                                   exit_codes={'systemctl show': 0})
     monkeypatch.setattr('netaudit_pkg.checks.systemd_hardening.SSHExecutor', lambda *a, **kw: fake)
     result = check_systemd_hardening(host='1.2.3.4', unit=unit)
     assert result.get('error') != 'invalid systemd unit name'
     assert fake.calls
 
 
-def test_systemctl_status_quotes_the_unit(monkeypatch):
-    fake = ExitCodeFakeSSHExecutor(responses={'systemctl status': 'Active: active'})
+def test_systemctl_show_quotes_the_unit(monkeypatch):
+    fake = ExitCodeFakeSSHExecutor(responses={'systemctl show': 'loaded\n'},
+                                   exit_codes={'systemctl show': 0})
     monkeypatch.setattr('netaudit_pkg.checks.systemd_hardening.SSHExecutor', lambda *a, **kw: fake)
     check_systemd_hardening(host='1.2.3.4', unit='dev-disk-by\\x2duuid.swap')
-    assert fake.calls[0].startswith("systemctl status 'dev-disk-by\\x2duuid.swap' --no-pager")
+    assert "systemctl show --property=LoadState --value 'dev-disk-by\\x2duuid.swap'" in fake.calls[0]
 
 
 # ===========================================================================

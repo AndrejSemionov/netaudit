@@ -1,6 +1,7 @@
 # F7 part 2 — confirmed systemd unit and directive model (RA-19)
 
-Status: contract. USER approved F1–F7 autonomous follow-up on 2026-10-09.
+Status: implemented locally, awaiting independent review. USER approved
+F1–F7 autonomous follow-up on 2026-10-09.
 Implementer: GPT/Codex. Reviewer: Claude. Base: `origin/main` @ `ea68f97`.
 Claude's F7 part 1 branch owns RA-07/08/09/20 in other modules. This branch
 owns only RA-19 (`systemd_hardening`) and its tests; the F7 PR delivery plan
