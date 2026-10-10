@@ -81,10 +81,11 @@ def check_tshark_capture(interface: str = 'any', duration: int = 15, bpf_filter:
         return {'error': err.strip()[-400:] or f'tshark exit code {code}'}
 
     by_dst = defaultdict(lambda: {'packets': 0, 'bytes': 0, 'protocols': set()})
-    total_packets = total_bytes = 0
+    total_packets = total_bytes = unparsed = 0
     for line in out.splitlines():
         parts = line.split('|')
         if len(parts) < 4:
+            unparsed += bool(line.strip())  # F7, RA-20: count, don't drop silently
             continue
         _src, dst, length, proto = parts[0], parts[1], parts[2], parts[3]
         if not dst:
@@ -111,6 +112,8 @@ def check_tshark_capture(interface: str = 'any', duration: int = 15, bpf_filter:
         'total_packets': total_packets, 'total_bytes': total_bytes,
         'destinations': dests,
     }
+    if unparsed:
+        result['unparsed_lines'] = unparsed
     if analyze_threats != 'нет':
         scored = threat.score_destinations(dests, do_whois=(analyze_threats == 'да+whois'))
         result['destinations'] = scored['scored']

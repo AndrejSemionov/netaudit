@@ -48,11 +48,16 @@ def check_ports() -> dict:
 def check_firewall() -> dict:
     result = {}
     if tool_available('ufw'):
-        code, out, _ = run_cmd(['ufw', 'status'])
-        result['ufw'] = out.strip().splitlines()[0] if out.strip() else 'no data'
+        code, out, err = run_cmd(['ufw', 'status'])
+        if code != 0:
+            # non-root: "ERROR: You need to be root" on stderr (F7, RA-09)
+            result['ufw'] = f'error: {(err.strip() or out.strip() or f"exit code {code}").splitlines()[0]}'
+        else:
+            result['ufw'] = out.strip().splitlines()[0] if out.strip() else 'no data'
     if tool_available('nft'):
-        code, out, _ = run_cmd(['nft', 'list', 'ruleset'])
-        result['nftables_rules_count'] = len(out.strip().splitlines()) if code == 0 else 'no access (root)'
+        code, out, err = run_cmd(['nft', 'list', 'ruleset'])
+        result['nftables_rules_count'] = (len(out.strip().splitlines()) if code == 0 else
+                                          f'error: {(err.strip() or f"exit code {code}").splitlines()[0]}')
     return result or {'note': 'ufw/nft not found'}
 
 
@@ -82,9 +87,14 @@ REMOTE_CHECKS = {
     'disk_usage': 'df -h --output=target,size,pcent -x tmpfs -x devtmpfs',
     'memory': 'free -h',
     'open_ports': 'ss -tulnp 2>/dev/null || ss -tuln',
-    'failed_ssh_logins': 'journalctl -u ssh -u sshd --since "-24 hours" 2>/dev/null | grep -i "failed\\|invalid" | tail -20 || echo "journalctl unavailable"',
-    'unattended_upgrades': 'systemctl is-enabled unattended-upgrades 2>/dev/null || echo "not found"',
-    'sshd_config': "grep -E '^(PermitRootLogin|PasswordAuthentication|Port)' /etc/ssh/sshd_config 2>/dev/null || echo 'no access'",
+    # F7 (RA-07): stderr is kept (journalctl's permission hint, grep's read
+    # error) and a failure is never printed as a plausible empty answer.
+    'failed_ssh_logins': ('out=$(journalctl -u ssh -u sshd --since "-24 hours" --no-pager 2>&1); rc=$?; '
+                          'printf \'%s\\n\' "$out" | grep -iE "failed|invalid|hint:|permission|no journal" | tail -20; '
+                          '[ "$rc" -eq 0 ] || echo "journalctl exit $rc"'),
+    'unattended_upgrades': 'systemctl is-enabled unattended-upgrades 2>&1',
+    'sshd_config': ("grep -E '^(PermitRootLogin|PasswordAuthentication|Port)' /etc/ssh/sshd_config 2>&1; "
+                    "[ $? -ne 1 ] || echo '(no explicit PermitRootLogin/PasswordAuthentication/Port line in sshd_config)'"),
     'load_average': 'cat /proc/loadavg',
 }
 

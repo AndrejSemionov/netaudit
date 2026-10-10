@@ -140,14 +140,17 @@ def check_ping(target: str = '8.8.8.8', count: int = 10) -> dict:
     code, out, err = run_cmd(['ping', '-c', str(count), '-i', '0.3', target], timeout=count + 10)
     if code not in (0, 1):
         return {'target': target, 'error': err.strip() or 'no response'}
-    loss = re.search(r'(\d+)% packet loss', out)
+    loss = re.search(r'([\d.]+)% packet loss', out)
     rtt = re.search(r'= ([\d.]+)/([\d.]+)/([\d.]+)', out)
-    return {
+    result = {
         'target': target,
         'loss_pct': float(loss.group(1)) if loss else None,
         'avg_ms': float(rtt.group(2)) if rtt else None,
         'worst_ms': float(rtt.group(3)) if rtt else None,
     }
+    if loss is None:
+        result['error'] = f'could not parse ping output: {out.strip()[-200:]}'  # F7, RA-20
+    return result
 
 
 @register(
@@ -162,11 +165,21 @@ def check_ping(target: str = '8.8.8.8', count: int = 10) -> dict:
 def check_dig(hostname: str = 'google.com', record_type: str = 'A') -> dict:
     if not tool_available('dig'):
         return {'error': 'dig is not installed (apt install dnsutils)'}
-    code, out, err = run_cmd(['dig', '+noall', '+answer', '+stats', record_type, hostname], timeout=10)
+    # +comments for the header's status line: dig exits 0 for NXDOMAIN and
+    # SERVFAIL alike (F7, RA-08)
+    code, out, err = run_cmd(['dig', '+noall', '+answer', '+stats', '+comments', record_type, hostname],
+                             timeout=10)
     if code != 0:
         return {'error': err.strip() or 'dig error'}
+    status_m = re.search(r'status:\s*([A-Z]+)', out)
+    status = status_m.group(1) if status_m else None
+    if status not in ('NOERROR', 'NXDOMAIN'):
+        return {'hostname': hostname, 'record_type': record_type, 'status': status,
+                'error': f'DNS query failed: status {status}' if status else 'DNS status not found in dig output'}
     answers, query_time, server = [], None, None
     for line in out.splitlines():
+        if line.startswith(';') and not line.startswith(';;'):
+            continue  # +comments lines such as "; EDNS: ..." are not records
         if line.startswith(';;'):
             if 'Query time' in line:
                 m = re.search(r'Query time:\s*(\d+)\s*msec', line)
@@ -178,7 +191,7 @@ def check_dig(hostname: str = 'google.com', record_type: str = 'A') -> dict:
             parts = line.split()
             if len(parts) >= 5:
                 answers.append({'name': parts[0], 'ttl': parts[1], 'type': parts[3], 'value': parts[4]})
-    return {'hostname': hostname, 'record_type': record_type, 'answers': answers,
+    return {'hostname': hostname, 'record_type': record_type, 'status': status, 'answers': answers,
             'query_time_ms': query_time, 'dns_server': server}
 
 
@@ -216,13 +229,16 @@ def check_arping(target: str = '192.168.88.1', count: int = 5) -> dict:
     avg_ms = round(sum(times) / len(times), 2) if times else None
     mac_m = re.search(r'\[([0-9A-Fa-f:]{17})\]', out)
 
-    return {
+    result = {
         'target': target, 'loss_pct': loss_pct, 'avg_ms': avg_ms,
         'mac': mac_m.group(1) if mac_m else None,
         'sent': int(sent_m.group(1)) if sent_m else None,
         'received': int(recv_m.group(1)) if recv_m else None,
         'raw': out.strip(),
     }
+    if loss_pct is None:
+        result['error'] = 'could not parse arping output'  # F7, RA-20
+    return result
 
 
 @register(
