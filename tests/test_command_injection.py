@@ -9,6 +9,7 @@ Shell-level tests run the exact command a check builds through a real
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -100,7 +101,8 @@ def test_find_and_df_quote_the_directory(tmp_path):
     assert _find_files(shell, directory) is None  # the quoted name does not exist
     _check_disk_space(shell, directory)
     assert not (tmp_path / 'PWNED_BKP').exists()
-    assert len(shell.calls) == 2
+    assert len(shell.calls) == 3
+    assert f'test -d {shlex.quote(directory)}' in shell.calls[1]
 
 
 def test_find_lists_a_directory_with_quotes_in_its_name(tmp_path):

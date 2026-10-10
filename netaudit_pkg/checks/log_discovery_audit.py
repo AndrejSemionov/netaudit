@@ -93,6 +93,7 @@ class LogSource:
     owner: str | None
     group: str | None
     mode: str | None
+    availability_unknown: bool = False
 
 
 @dataclass
@@ -153,18 +154,9 @@ def _file_verdict(evidence: LogFileEvidence, source_type: SourceType) -> LogSour
       - stat completed, exit_code!=0, AND 'No such file or directory' in
         stdout -> False (confirmed absent — the ONLY case treated as
         confirmed absence; see Discovery Contract v1, DC-2)
-      - stat completed, exit_code!=0, any OTHER stderr text -> available
-        stays None-ish in spirit, but this function returns available=
-        False with the caller expected to check `requires_sudo`-style
-        ambiguity via the raw evidence if ever needed. For Iteration 1
-        scope (only two real hosts, both showing textbook 'No such file'
-        for missing sources), this distinction is tracked but not yet
-        exercised by a real case — see this module's docstring.
-      - stat did not complete at all -> available=False is NOT returned;
-        this function returns a sentinel-free "unknown" via
-        available=False, readable=False, requires_sudo=False, state=None
-        so the caller can still render a "collection failed, not a
-        confirmed absence" finding rather than silently treating it as OK.
+      - any other failed/uncompleted/unparseable stat -> available=False
+        with availability_unknown=True. Downstream collectors still use
+        the existing bool, while findings distinguish unknown from absent.
     """
     stat = evidence.stat_result
     read = evidence.read_probe
@@ -174,16 +166,15 @@ def _file_verdict(evidence: LogFileEvidence, source_type: SourceType) -> LogSour
         return LogSource(
             source_type=source_type, path=evidence.path, available=False, readable=False,
             requires_sudo=False, state=None, size_bytes=None, last_modified_epoch=None,
-            owner=None, group=None, mode=None,
+            owner=None, group=None, mode=None, availability_unknown=True,
         )
 
     if stat.exit_code != 0:
-        # Confirmed-absent is the only exit!=0 case Iteration 1 distinguishes
-        # from "something else went wrong" — see this function's docstring.
+        absent = 'No such file or directory' in stat.stdout
         return LogSource(
             source_type=source_type, path=evidence.path, available=False, readable=False,
             requires_sudo=False, state=None, size_bytes=None, last_modified_epoch=None,
-            owner=None, group=None, mode=None,
+            owner=None, group=None, mode=None, availability_unknown=not absent,
         )
 
     parsed = _parse_stat_output(stat.stdout)
@@ -194,7 +185,7 @@ def _file_verdict(evidence: LogFileEvidence, source_type: SourceType) -> LogSour
         return LogSource(
             source_type=source_type, path=evidence.path, available=False, readable=False,
             requires_sudo=False, state=None, size_bytes=None, last_modified_epoch=None,
-            owner=None, group=None, mode=None,
+            owner=None, group=None, mode=None, availability_unknown=True,
         )
 
     readable = bool(read.completed and read.exit_code == 0)
@@ -356,6 +347,13 @@ def build_findings(report: LogDiscoveryReport) -> list[dict]:
 
     for source in report.fixed_sources:
         label = _source_label(source)
+        if source.availability_unknown:
+            findings.append(_finding(
+                'info', f'could not determine whether {label} exists',
+                'stat did not return confirmed file metadata or confirmed absence; verify log access manually',
+                check='log_discovery', requires_manual_verification=True,
+            ))
+            continue
         if not source.available:
             # A confirmed-absent optional source (fail2ban, mail, aide) is
             # informational, not a problem — these tools may simply not be
@@ -407,6 +405,7 @@ def build_findings(report: LogDiscoveryReport) -> list[dict]:
 
     active_nginx = [s for s in report.nginx_sources if s.state == LogFileState.ACTIVE]
     decoy_nginx = [s for s in report.nginx_sources if s.state == LogFileState.DECOY_EMPTY]
+    unknown_nginx = [s for s in report.nginx_sources if s.availability_unknown]
     if not report.nginx_sources:
         findings.append(_finding(
             'info', 'no nginx logs found', 'nginx may not be installed, or /var/log/nginx is empty',
@@ -417,6 +416,12 @@ def build_findings(report: LogDiscoveryReport) -> list[dict]:
             'ok', f'{len(active_nginx)} active nginx log file(s) found',
             f'{report.nginx_rotated_count} rotated/archived file(s) excluded from findings',
             check='log_discovery',
+        ))
+    elif unknown_nginx:
+        findings.append(_finding(
+            'info', 'could not determine whether current nginx logs are active',
+            f'{len(unknown_nginx)} discovered file(s) had inconclusive stat results',
+            check='log_discovery', requires_manual_verification=True,
         ))
     elif report.nginx_rotated_count > 0:
         # Zero current files carry data, but rotated archives exist — this
@@ -449,6 +454,13 @@ def build_findings(report: LogDiscoveryReport) -> list[dict]:
             'info', f'{_source_label(decoy)} is an unused default log (vhost-based logging in use)',
             'this is expected with per-vhost nginx logging config — the real traffic goes to a differently-named file',
             check='log_discovery',
+        ))
+
+    if active_nginx and unknown_nginx:
+        findings.append(_finding(
+            'info', 'could not determine whether all current nginx logs are active',
+            f'{len(unknown_nginx)} discovered file(s) had inconclusive stat results',
+            check='log_discovery', requires_manual_verification=True,
         ))
 
     if report.journal.available:

@@ -31,11 +31,17 @@ mistakes in real deployments.
 from __future__ import annotations
 
 import json
+import shlex
 
 from ..findings import finding as _finding
 from ..findings import subject_id
 from ..registry import register
 from ..ssh import HostKeyMismatchError, SSHExecutor
+from ..ssh_utils import (
+    describe_sudo_refusal,
+    run_command_with_exit_code,
+    run_sudo_with_exit_code,
+)
 
 try:
     import paramiko
@@ -188,25 +194,27 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='', 
 
         # docker usually requires being in the docker group or root - try without
         # sudo first, that's the most common working case (user added to docker group)
-        ps_out, ps_err = ssh.run('docker ps -q' + (' -a' if include_stopped else ''))
-        needs_sudo = 'permission denied' in (ps_out + ps_err).lower()
+        ps_args = ['docker', 'ps', '-q'] + (['-a'] if include_stopped else [])
+        ps_out, ps_code = run_command_with_exit_code(ssh, shlex.join(ps_args) + ' 2>&1')
+        if ps_code is None:
+            return {'error': 'docker ps did not complete'}
+        needs_sudo = ps_code != 0 and 'permission denied' in ps_out.lower()
 
         if needs_sudo:
-            ps_out, ps_err = ssh.sudo('docker ps -q' + (' -a' if include_stopped else ''))
-            if 'permission denied' in (ps_out + ps_err).lower() or 'password is required' in (ps_out + ps_err).lower():
-                # Sudo was genuinely denied for docker ps (scoped sudoers
-                # refusal, or no password available for sudo -S) - this
-                # must NOT fall through to the zero-containers path below:
-                # an empty ps_out from a denied sudo attempt is
-                # indistinguishable from a genuinely empty ps_out unless
-                # checked explicitly here, and reporting "no running
-                # containers found" in that case would be actively
-                # misleading (hiding real containers behind an
-                # inaccessible sudo, not confirming there are none).
+            sudo_ps = run_sudo_with_exit_code(ssh, ps_args)
+            if not sudo_ps.completed:
+                return {'error': 'sudo docker ps did not complete'}
+            if sudo_ps.sudo_error:
                 return {'error': 'docker isn\'t accessible without sudo, and sudo itself was denied',
-                        'detail': (ps_out + ps_err).strip()[:300],
+                        'detail': describe_sudo_refusal(ssh, sudo_ps)[:300],
                         'hint': 'add the user to the docker group (usermod -aG docker <user>), '
                                 'or configure passwordless sudo for docker, or supply a sudo password'}
+            if sudo_ps.exit_code != 0:
+                return {'error': f'docker ps failed under sudo (exit {sudo_ps.exit_code})',
+                        'detail': (sudo_ps.stdout + sudo_ps.stderr).strip()[:300]}
+            ps_out = sudo_ps.stdout
+        elif ps_code != 0:
+            return {'error': f'docker ps failed (exit {ps_code})', 'detail': ps_out.strip()[:300]}
 
         container_ids = [c.strip() for c in ps_out.splitlines() if c.strip()]
 
@@ -236,34 +244,57 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='', 
                 counts[f['severity']] = counts.get(f['severity'], 0) + 1
             return {'host': host, 'containers_checked': 0, 'findings': all_findings, 'summary': counts}
 
+        incomplete_ids = []
+        inspected_count = 0
         for cid in container_ids:
             if needs_sudo:
-                raw, _ = ssh.sudo(f"docker inspect '{cid}'", timeout=15)
+                inspected = run_sudo_with_exit_code(ssh, ['docker', 'inspect', cid], timeout=15)
+                if not inspected.completed or inspected.exit_code != 0:
+                    incomplete_ids.append(cid)
+                    continue
+                raw = inspected.stdout
             else:
-                raw, _ = ssh.run(f"docker inspect '{cid}' 2>&1", timeout=15)
+                raw, inspect_code = run_command_with_exit_code(
+                    ssh, f'docker inspect {shlex.quote(cid)} 2>&1', timeout=15,
+                )
+                if inspect_code != 0:
+                    incomplete_ids.append(cid)
+                    continue
 
             try:
                 data = json.loads(raw)
             except (json.JSONDecodeError, ValueError):
-                continue  # skip the container if the output didn't parse, don't fail the whole check
+                incomplete_ids.append(cid)
+                continue
             info = data[0] if isinstance(data, list) and data else (data if isinstance(data, dict) else None)
             if not info:
+                incomplete_ids.append(cid)
                 continue
             all_findings.extend(_audit_one_container(info))
+            inspected_count += 1
 
     finally:
         ssh.close()
 
-    if not all_findings:
+    if incomplete_ids:
+        all_findings.append(_finding('low', 'Docker audit incomplete',
+                                     f'could not inspect {len(incomplete_ids)} of {len(container_ids)} containers',
+                                     id='DCK-INS-001',
+                                     requires_manual_verification=True))
+    elif not all_findings:
         all_findings.append(_finding('ok', 'no notable issues found in container configuration'))
 
     counts = {'high': 0, 'medium': 0, 'low': 0, 'ok': 0}
     for f in all_findings:
         counts[f['severity']] = counts.get(f['severity'], 0) + 1
 
-    return {
+    result = {
         'host': host,
         'containers_checked': len(container_ids),
+        'containers_inspected': inspected_count,
         'findings': all_findings,
         'summary': counts,
     }
+    if incomplete_ids:
+        result['warnings'] = [f'could not inspect {len(incomplete_ids)} of {len(container_ids)} containers']
+    return result

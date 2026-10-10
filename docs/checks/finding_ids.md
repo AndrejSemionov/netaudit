@@ -85,6 +85,7 @@ Existing catalogues (`KRN-*`, `NGX-*`, `SSH-*`) live in `kernel_hardening.md`,
 | DCK-SOCK-001 | high | container | docker.sock mounted inside the container |
 | DCK-MNT-001 | medium | container, host path | a sensitive host path is mounted |
 | DCK-IMG-001 | low | container | image with no version pin |
+| DCK-INS-001 | low | — | container inspection incomplete |
 
 ## systemd_hardening
 
@@ -100,11 +101,15 @@ Existing catalogues (`KRN-*`, `NGX-*`, `SSH-*`) live in `kernel_hardening.md`,
 |---|---|---|---|
 | BKP-DIR-001 | high | directory | backup directory does not exist |
 | BKP-DIR-002 | high | directory | no backup files found |
+| BKP-COL-001 | low | directory | backup directory listing could not be confirmed |
 | BKP-AGE-001 | high | directory | the latest backup is stale |
 | BKP-SIZE-001 | high | directory | the latest backup is suspiciously small |
 | BKP-COPY-001 | medium | directory | fewer local backup copies than expected |
 | BKP-INT-001 | high | directory | the latest backup fails the integrity check |
+| BKP-INT-002 | low | directory | latest backup integrity could not be verified |
+| BKP-INT-003 | low | directory | latest backup integrity check was skipped |
 | BKP-DISK-001 | medium | directory | backup partition is ≥90% full |
+| BKP-DISK-002 | low | directory | backup partition usage could not be determined |
 
 ## dns_audit
 

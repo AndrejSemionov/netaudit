@@ -28,11 +28,14 @@ from __future__ import annotations
 
 import re
 import shlex
+from dataclasses import dataclass
+from typing import Literal
 
 from ..findings import finding as _finding
 from ..findings import subject_id
 from ..registry import register
 from ..ssh import HostKeyMismatchError, SSHExecutor
+from ..ssh_utils import run_command_with_exit_code
 
 try:
     import paramiko
@@ -45,66 +48,94 @@ MIN_SANE_BACKUP_BYTES = 1024  # 1 KB
 
 ARCHIVE_EXT_RE = re.compile(r'\.(tar\.gz|tgz|gz|zip|sql|sql\.gz|bz2|tar\.bz2|xz)$', re.IGNORECASE)
 
-def _find_files(ssh: SSHExecutor, directory: str) -> list[dict]:
+def _find_files(ssh: SSHExecutor, directory: str) -> list[dict] | dict | None:
     """Machine-readable ls -la via stat, each line:
     epoch_mtime|size_bytes|filename"""
     # find instead of ls -la - doesn't break on files with spaces/special chars
     # in the name, and gives the needed fields directly via -printf
     cmd = (f"find {shlex.quote(directory)} -maxdepth 1 -type f "
            r"-printf '%T@|%s|%f\n' 2>&1")
-    out, err = ssh.run(cmd)
-    if 'No such file or directory' in out or 'No such file or directory' in err:
-        return None  # directory doesn't exist - distinguish from "exists but empty"
+    out, code = run_command_with_exit_code(ssh, cmd)
+    if code is None:
+        return {'error': 'could not confirm listing backup directory'}
+    if code != 0 and 'No such file or directory' in out:
+        # `find` may name a child removed during rotation, while `directory`
+        # itself still exists. Confirm the root separately before calling it
+        # absent; an inconclusive probe stays a collection error.
+        _, dir_code = run_command_with_exit_code(ssh, f'test -d {shlex.quote(directory)}')
+        if dir_code == 1:
+            return None
+    if code != 0:
+        return {'error': f'failed to list backup directory (exit {code})', 'detail': out.strip()[:300]}
     files = []
+    unparsed = False
     for line in out.splitlines():
         line = line.strip()
-        if not line or '|' not in line:
+        if not line:
             continue
         parts = line.split('|', 2)
         if len(parts) != 3:
+            unparsed = True
             continue
         try:
             mtime = float(parts[0])
             size = int(parts[1])
         except ValueError:
+            unparsed = True
             continue
         files.append({'mtime': mtime, 'size': size, 'name': parts[2]})
+    if unparsed:
+        return {'error': 'could not parse backup directory listing'}
     return files
 
-def _check_archive_integrity(ssh: SSHExecutor, directory: str, filename: str) -> str | None:
-    """Returns None if integrity is fine or the format isn't recognized (not checked),
-    otherwise an error message. All checks are read-only, nothing is extracted to disk."""
+@dataclass(frozen=True)
+class ArchiveIntegrity:
+    status: Literal['ok', 'corrupt', 'unknown', 'skipped']
+    detail: str = ''
+
+
+def _check_archive_integrity(ssh: SSHExecutor, directory: str, filename: str) -> ArchiveIntegrity:
+    """Classify a read-only archive test without conflating missing tools and damage."""
     path = f'{directory.rstrip("/")}/{filename}'
     lower = filename.lower()
-    quoted = path.replace("'", "'\\''")
+    quoted = shlex.quote(path)
 
     if lower.endswith(('.tar.gz', '.tgz')):
-        out, err = ssh.run(f"tar -tzf '{quoted}' > /dev/null 2>&1 && echo OK || echo FAIL")
+        cmd = f'tar -tzf {quoted} 2>&1 1>/dev/null'
     elif lower.endswith('.gz'):
-        out, err = ssh.run(f"gzip -t '{quoted}' 2>&1 && echo OK || echo FAIL")
+        cmd = f'gzip -t {quoted} 2>&1'
     elif lower.endswith('.zip'):
-        out, err = ssh.run(f"unzip -t '{quoted}' > /dev/null 2>&1 && echo OK || echo FAIL")
+        cmd = f'unzip -t {quoted} 2>&1 1>/dev/null'
     elif lower.endswith(('.tar.bz2', '.tbz2')):
-        out, err = ssh.run(f"tar -tjf '{quoted}' > /dev/null 2>&1 && echo OK || echo FAIL")
+        cmd = f'tar -tjf {quoted} 2>&1 1>/dev/null'
     elif lower.endswith('.sql'):
         # a bare .sql file has no real "integrity" check - only verify it isn't
         # empty and doesn't look like an HTML error page (a common sign that
         # the dump was cut short by a redirect/authentication error instead of SQL)
-        out, err = ssh.run(f"head -c 200 '{quoted}' 2>&1")
+        out, code = run_command_with_exit_code(ssh, f'head -c 200 {quoted} 2>&1')
+        if code is None or code != 0:
+            return ArchiveIntegrity('unknown', 'could not read SQL backup header')
         if '<html' in out.lower() or '<!doctype' in out.lower():
-            return 'the start of the file looks like HTML, not an SQL dump — likely an error instead of data'
-        return None
+            return ArchiveIntegrity('corrupt', 'the start of the file looks like HTML, not an SQL dump')
+        return ArchiveIntegrity('ok')
     else:
-        return None  # format not recognized, integrity not checked (not an error)
+        return ArchiveIntegrity('skipped', 'format not recognized')
 
-    if 'FAIL' in out or 'FAIL' in err:
-        return 'archive fails the integrity check (corrupted or incomplete)'
-    return None
+    out, code = run_command_with_exit_code(ssh, cmd)
+    if code is None:
+        return ArchiveIntegrity('unknown', 'archive check did not complete')
+    if code == 0:
+        return ArchiveIntegrity('ok')
+    if code == 127 or any(term in out.lower() for term in ('permission denied', 'not found', 'cannot open')):
+        return ArchiveIntegrity('unknown', f'archive check could not run (exit {code})')
+    return ArchiveIntegrity('corrupt', 'archive fails the integrity check (corrupted or incomplete)')
 
 def _check_disk_space(ssh: SSHExecutor, directory: str) -> tuple[int | None, str | None]:
     """Returns (percent_used, error)."""
-    out, _err = ssh.run(f"df -P {shlex.quote(directory)} 2>&1 | tail -1")
-    parts = out.split()
+    out, code = run_command_with_exit_code(ssh, f'df -P {shlex.quote(directory)} 2>&1')
+    if code != 0:
+        return None, 'could not confirm disk usage'
+    parts = out.strip().splitlines()[-1].split() if out.strip() else []
     if len(parts) >= 5 and parts[4].endswith('%'):
         try:
             return int(parts[4].rstrip('%')), None
@@ -168,6 +199,14 @@ def check_backup(host='', user='root', port=22, key_path='', password='',  # nos
             entry = {'directory': directory}
             files = _find_files(ssh, directory)
 
+            if isinstance(files, dict):
+                entry.update(files)
+                all_findings.append(_finding('low', f'{directory}: could not list backup directory',
+                                              files['error'], id=subject_id('BKP-COL-001', directory),
+                                              requires_manual_verification=True))
+                results.append(entry)
+                continue
+
             if files is None:
                 entry['error'] = 'directory does not exist'
                 all_findings.append(_finding('high', f'{directory}: backup directory does not exist',
@@ -216,16 +255,30 @@ def check_backup(host='', user='root', port=22, key_path='', password='',  # nos
                 ))
 
             if ARCHIVE_EXT_RE.search(latest['name']):
-                integrity_error = _check_archive_integrity(ssh, directory, latest['name'])
-                entry['integrity_ok'] = integrity_error is None
-                if integrity_error:
+                integrity = _check_archive_integrity(ssh, directory, latest['name'])
+                entry['integrity_ok'] = (integrity.status == 'ok' if integrity.status in ('ok', 'corrupt') else None)
+                if integrity.status == 'corrupt':
                     all_findings.append(_finding(
                         'high', f'{directory}: the latest backup fails the integrity check',
-                        f'{latest["name"]}: {integrity_error}',
+                        f'{latest["name"]}: {integrity.detail}',
                         id=subject_id('BKP-INT-001', directory),
                     ))
+                elif integrity.status == 'unknown':
+                    all_findings.append(_finding(
+                        'low', f'{directory}: could not verify backup integrity',
+                        f'{latest["name"]}: {integrity.detail}',
+                        id=subject_id('BKP-INT-002', directory),
+                        requires_manual_verification=True,
+                    ))
+                elif integrity.status == 'skipped':
+                    all_findings.append(_finding(
+                        'low', f'{directory}: backup integrity was not checked',
+                        f'{latest["name"]}: {integrity.detail}',
+                        id=subject_id('BKP-INT-003', directory),
+                        requires_manual_verification=True,
+                    ))
 
-            disk_pct, _disk_err = _check_disk_space(ssh, directory)
+            disk_pct, disk_err = _check_disk_space(ssh, directory)
             if disk_pct is not None:
                 entry['disk_used_pct'] = disk_pct
                 if disk_pct >= 90:
@@ -234,6 +287,10 @@ def check_backup(host='', user='root', port=22, key_path='', password='',  # nos
                         'the next backup risks not fitting — free up space or move backups to another disk',
                         id=subject_id('BKP-DISK-001', directory),
                     ))
+            elif disk_err:
+                all_findings.append(_finding('low', f'{directory}: could not determine disk usage',
+                                              disk_err, id=subject_id('BKP-DISK-002', directory),
+                                              requires_manual_verification=True))
 
             results.append(entry)
 
