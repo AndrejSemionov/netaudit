@@ -1,8 +1,8 @@
 # F6 — consistent `command -v` verdicts in server audit
 
-Status: implemented locally, awaiting independent review. USER approved
+Status: review pass 1 returned; PATH fix implemented locally, awaiting pass 2. USER approved
 F1–F7 autonomous follow-up on 2026-10-09.
-Implementer: GPT/Codex. Reviewer: Claude. Base: `origin/main` @ `ea68f97`.
+Implementer: GPT/Codex. Reviewer: Claude. Base: `codex/a1-command-presence`.
 
 ## Problem
 
@@ -23,7 +23,11 @@ Use the same verdict rule as A1 `probe_remote_tool()`:
 | yes | 1 or 127 | empty | ABSENT |
 | any other combination | any | any | UNKNOWN |
 
-Apply this rule only to the three `command -v` consumers above. Keep their
+Use A1's system PATH prefix (`/usr/sbin:/sbin`) for these collectors as well:
+a non-root SSH login can otherwise classify an installed `ufw` as absent.
+Share the command builder and verdict classifier with A1's
+`probe_remote_tool()` so all four call sites follow one rule. Apply this
+rule only to the three `command -v` consumers above. Keep their
 public result names (`True/False/None`, `PRESENT/NOT_PRESENT/UNKNOWN`,
 `FOUND/NOT_FOUND/UNKNOWN`) and collector evidence shapes. `ufw` and
 `fail2ban-client` presence is an unprivileged PATH lookup; there is no new
@@ -41,6 +45,8 @@ failed command is not evidence of absence.
   marker remain unknown; each semantic consumer exposes incomplete
   verification instead of a false clean/absence result.
 - Exit 0 with a path remains present, including the original status checks.
+- A binary in `/usr/sbin` remains present when a non-root login's PATH omits
+  `/usr/sbin` and `/sbin` (UFW, Fail2Ban and both SQL probes).
 
 Commit contract, RED tests, then GREEN separately. Run profile tests, broad
 pytest excluding the known Web TestClient hang in Codex, Ruff, compileall,

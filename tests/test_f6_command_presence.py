@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-import pytest
 import re
+
+import pytest
 
 from netaudit_pkg.checks.server_security import _sql_binary_verdict
 from netaudit_pkg.fail2ban_config import CommandResult as Fail2banResult
-from netaudit_pkg.fail2ban_config import _binary_check, binary_verdict, collect_fail2ban_config
+from netaudit_pkg.fail2ban_config import (
+    _binary_check,
+    binary_verdict,
+    collect_fail2ban_config,
+)
 from netaudit_pkg.firewall_config import CommandResult as FirewallResult
 from netaudit_pkg.firewall_config import _tool_is_present, collect_ufw, tool_is_present
 from netaudit_pkg.sql_config import CommandResult as SQLResult

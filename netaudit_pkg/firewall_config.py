@@ -85,7 +85,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from .ssh import SSHExecutor
-from .ssh_utils import command_v_verdict, run_sudo_with_exit_code
+from .ssh_utils import command_v_verdict, remote_tool_command, run_sudo_with_exit_code
 
 # ===========================================================================
 # Evidence data model
@@ -196,9 +196,10 @@ def _tool_is_present(ssh: SSHExecutor, tool: str, timeout: int = 20) -> CommandR
     """
     from .ssh_utils import run_command_with_exit_code
 
-    stdout, code = run_command_with_exit_code(ssh, f'command -v {shlex.quote(tool)}', timeout=timeout)
+    cmd = remote_tool_command(tool)
+    stdout, code = run_command_with_exit_code(ssh, cmd, timeout=timeout)
     return CommandResult(completed=code is not None, exit_code=code, stdout=stdout,
-                          command=f'command -v {tool}')
+                          command=cmd)
 
 
 def tool_is_present(result: CommandResult) -> bool | None:

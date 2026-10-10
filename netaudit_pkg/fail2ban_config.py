@@ -108,7 +108,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from .ssh import SSHExecutor
-from .ssh_utils import run_command_with_exit_code, run_sudo_with_exit_code
+from .ssh_utils import (
+    remote_tool_command,
+    run_command_with_exit_code,
+    run_sudo_with_exit_code,
+)
 
 # ===========================================================================
 # Evidence data model
@@ -311,7 +315,7 @@ def _binary_check(ssh: SSHExecutor, timeout: int = 20) -> CommandResult:
     as present, Bash exit 1 or dash exit 127 with empty output as absent;
     other code/output combinations remain unknown.
     """
-    cmd = 'command -v fail2ban-client'
+    cmd = remote_tool_command('fail2ban-client')
     stdout, code = run_command_with_exit_code(ssh, cmd, timeout=timeout)
     return CommandResult(completed=code is not None, exit_code=code, stdout=stdout, command=cmd)
 

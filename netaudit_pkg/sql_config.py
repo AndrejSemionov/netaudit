@@ -89,7 +89,7 @@ import shlex
 from dataclasses import dataclass
 
 from .ssh import SSHExecutor
-from .ssh_utils import run_command_with_exit_code
+from .ssh_utils import remote_tool_command, run_command_with_exit_code
 
 # ===========================================================================
 # Evidence data model
@@ -147,9 +147,10 @@ def collect_mysql_present(ssh: SSHExecutor, timeout: int = 20) -> CommandResult:
     job (server_security.py), same split as firewall_config.py's
     tool_is_present() helper.
     """
-    stdout, code = run_command_with_exit_code(ssh, 'command -v mysql', timeout=timeout)
+    cmd = remote_tool_command('mysql')
+    stdout, code = run_command_with_exit_code(ssh, cmd, timeout=timeout)
     return CommandResult(completed=code is not None, exit_code=code, stdout=stdout,
-                          command='command -v mysql')
+                          command=cmd)
 
 
 def collect_mariadb_present(ssh: SSHExecutor, timeout: int = 20) -> CommandResult:
@@ -157,9 +158,10 @@ def collect_mariadb_present(ssh: SSHExecutor, timeout: int = 20) -> CommandResul
     independent check (not a combined `which mysql mariadb`) so the
     semantic layer can distinguish which of the two is actually present,
     rather than a blurred "some SQL binary exists"."""
-    stdout, code = run_command_with_exit_code(ssh, 'command -v mariadb', timeout=timeout)
+    cmd = remote_tool_command('mariadb')
+    stdout, code = run_command_with_exit_code(ssh, cmd, timeout=timeout)
     return CommandResult(completed=code is not None, exit_code=code, stdout=stdout,
-                          command='command -v mariadb')
+                          command=cmd)
 
 
 def collect_listener(ssh: SSHExecutor, timeout: int = 20) -> CommandResult:

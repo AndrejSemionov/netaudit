@@ -71,6 +71,15 @@ def command_v_verdict(completed: bool, exit_code: int | None, stdout: str) -> st
     return 'UNKNOWN'
 
 
+def remote_tool_command(tool: str, *,
+                        extra_dirs: Sequence[str] = ('/usr/sbin', '/sbin')) -> str:
+    """Build an unprivileged PATH lookup that includes system binary dirs."""
+    if not extra_dirs or any(not path.startswith('/') for path in extra_dirs):
+        raise ValueError('extra_dirs must be absolute system directories')
+    prefix = shlex.quote(':'.join(extra_dirs))
+    return f'PATH={prefix}:"$PATH" command -v {shlex.quote(tool)}'
+
+
 def run_command_with_exit_code(ssh: SSHExecutor, cmd: str, timeout: int = 20) -> tuple[str, int | None]:
     """Runs `cmd` and returns (stdout, exit_code).
 
@@ -130,14 +139,12 @@ def probe_remote_tool(ssh: SSHExecutor, tool: str, *,
     could otherwise select a root-run executable. Bash uses exit 1 for an
     absent command; dash uses 127. A missing completion marker stays unknown.
     """
-    if not extra_dirs or any(not path.startswith('/') for path in extra_dirs):
-        raise ValueError('extra_dirs must be absolute system directories')
-    prefix = shlex.quote(':'.join(extra_dirs))
-    command = f'PATH={prefix}:"$PATH" command -v {shlex.quote(tool)}'
+    command = remote_tool_command(tool, extra_dirs=extra_dirs)
     out, code = run_command_with_exit_code(ssh, command, timeout=timeout)
-    if code == 0 and out.strip():
+    verdict = command_v_verdict(code is not None, code, out)
+    if verdict == 'PRESENT':
         return ToolProbe('present')
-    if code in (1, 127) and not out.strip():
+    if verdict == 'ABSENT':
         return ToolProbe('absent')
     if code is None:
         return ToolProbe('unknown', f'{tool} presence check did not complete')
