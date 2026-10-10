@@ -499,7 +499,7 @@ def api_history_capture_settings_get() -> dict:
 
 @app.post('/api/history_capture/settings')
 def api_history_capture_settings_set(req: HistoryCaptureSettingsRequest) -> dict:
-    data = {k: v for k, v in req.dict().items() if v is not None}
+    data = {k: v for k, v in req.model_dump().items() if v is not None}
     try:
         history_capture.save_settings(data)
     except ValueError as e:
