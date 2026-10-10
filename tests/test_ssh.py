@@ -302,7 +302,18 @@ def test_context_manager_closes_connection(monkeypatch):
 
 def test_ensure_tool_installed_rejects_unknown_tool():
     ex = SSHExecutor('host', 'user', 22, '', 'pw')
-    ex.client = _FakeParamikoClient({'which': 'NOTFOUND'})
+
+    class AbsentClient(_FakeParamikoClient):
+        # F8: presence needs a completed probe; confirmed absence = exit 1,
+        # empty output (an unanswered probe is 'unknown' and never installs)
+        def exec_command(self, cmd, timeout=15):
+            self.calls.append(cmd)
+            import re as _re
+            m = _re.search(r"__NETAUDIT_RC_[0-9a-f]+__", cmd)
+            out = f'\n{m.group(0)}:1\n' if m and 'command -v' in cmd else ''
+            return _FakeStdin(), _FakeStream(out), _FakeStream('')
+
+    ex.client = AbsentClient()
     installed, err = ex.ensure_tool_installed('some-random-tool-xyz')
     assert installed is False
     assert 'not on the install allowlist' in err

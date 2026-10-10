@@ -159,12 +159,22 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='', sudo_
         return {'error': f'could not connect: {e}'}
 
     try:
+        presence_errors = {}  # tool -> reason; F8: unknown is not "not installed"
+
         def _ensure_installed(tool):
-            if ssh.is_tool_installed(tool):
+            presence = ssh.tool_presence(tool)
+            if presence.status == 'present':
                 return True
+            if presence.status == 'unknown':
+                presence_errors[tool] = f'could not determine whether {tool} is installed: {presence.detail}'
+                return False
             if not auto_install:
                 return False
-            installed, _ = ssh.ensure_tool_installed(tool, timeout=120)
+            installed, install_err = ssh.ensure_tool_installed(tool, timeout=120)
+            if not installed and install_err:
+                # e.g. the re-check inside ensure_tool_installed() dropped
+                # (F8 pass 2) - keep its reason instead of "not installed"
+                presence_errors[tool] = install_err
             return installed
 
         tools_status = {}
@@ -173,7 +183,8 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='', sudo_
 
         if use_rkhunter:
             if not _ensure_installed('rkhunter'):
-                errors.append('rkhunter is not installed' + (' and could not be installed' if auto_install else ''))
+                errors.append(presence_errors.get('rkhunter') or
+                              'rkhunter is not installed' + (' and could not be installed' if auto_install else ''))
                 tools_status['rkhunter'] = {'ran': False}
             else:
                 findings, err = _run_rkhunter(ssh)
@@ -188,7 +199,8 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='', sudo_
 
         if use_chkrootkit:
             if not _ensure_installed('chkrootkit'):
-                errors.append('chkrootkit is not installed' + (' and could not be installed' if auto_install else ''))
+                errors.append(presence_errors.get('chkrootkit') or
+                              'chkrootkit is not installed' + (' and could not be installed' if auto_install else ''))
                 tools_status['chkrootkit'] = {'ran': False}
             else:
                 findings, err = _run_chkrootkit(ssh)

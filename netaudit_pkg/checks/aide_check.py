@@ -193,7 +193,10 @@ def check_aide(host='', user='root', port=22, key_path='', password='', sudo_pas
         return {'error': f'could not connect: {e}'}
 
     try:
-        if not ssh.is_tool_installed('aide'):
+        presence = ssh.tool_presence('aide')
+        if presence.status == 'unknown':
+            return {'error': f'could not determine whether aide is installed: {presence.detail}'}
+        if presence.status == 'absent':
             if not auto_install:
                 return {'error': 'aide is not installed on the server',
                         'hint': 'apt install aide -y (or enable auto_install)'}
@@ -203,7 +206,10 @@ def check_aide(host='', user='root', port=22, key_path='', password='', sudo_pas
                         'hint': 'set "Confirm: this may install packages / reinitialize the AIDE database" to proceed'}
             installed, install_err = ssh.ensure_tool_installed('aide', timeout=120)
             if not installed:
-                return {'error': 'failed to install aide', 'detail': install_err}
+                # ensure_tool_installed()'s reason is the headline: not on the
+                # allowlist, apt failed, or the presence check did not answer
+                # before / after apt (F8) - never a blanket 'failed to install'
+                return {'error': install_err or 'failed to install aide', 'detail': install_err}
 
         # AIDE on Debian/Ubuntu usually keeps the database at /var/lib/aide/aide.db
         # (writing a new one as aide.db.new on --init) - these paths are standard

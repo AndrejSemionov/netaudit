@@ -209,14 +209,11 @@ class SSHExecutor:
         return self.run(f'sudo -n {cmd}', timeout=timeout)
 
     def is_tool_installed(self, tool: str) -> bool:
-        """Checks whether a binary is on PATH on the remote host, via
-        `command -v` with its own documented exit-code convention (see
-        fail2ban_config.binary_verdict()/firewall_config.tool_is_present()
-        for the same pattern already established elsewhere in this
-        project): exit 0 means present, exit 127 means confirmed absent,
-        any other exit code or a collection failure (no completion
-        marker recovered at all) means the check itself couldn't be
-        trusted either way.
+        """True only when tool_presence() confirms the binary (F8: system
+        directories in front of PATH, exit marker; Bash exit 1 / dash 127
+        with empty output is absent, anything else unknown). Callers that
+        must tell "absent" from "could not tell" use tool_presence().
+        History below: the earlier `which`/bare `command -v` versions.
 
         Returns a plain bool (not a three-state PRESENT/NOT_PRESENT/
         UNKNOWN result) to avoid an API-breaking change to every caller
@@ -242,10 +239,17 @@ class SSHExecutor:
         rootkit_check.py; a false "not installed" here could cause a
         security check to silently skip running at all.
         """
-        from .ssh_utils import run_command_with_exit_code
+        return self.tool_presence(tool).status == 'present'
 
-        _out, exit_code = run_command_with_exit_code(self, f'command -v {tool}')
-        return exit_code == 0
+    def tool_presence(self, tool: str):
+        """present / absent / unknown for `tool` (ssh_utils.ToolProbe), via
+        ssh_utils.probe_remote_tool(): /usr/sbin and /sbin in front of the
+        user's PATH and an exit marker (F8). A non-root user's PATH on
+        Debian has no /usr/sbin, where lynis and chkrootkit live, so the
+        bare `command -v` this method used to run called them missing."""
+        from .ssh_utils import probe_remote_tool
+
+        return probe_remote_tool(self, tool)
 
     def ensure_tool_installed(self, tool: str, timeout: int = 120) -> tuple[bool, str | None]:
         """
@@ -263,16 +267,24 @@ class SSHExecutor:
             TOOL_PACKAGES,  # local import - avoids a circular import at module load time
         )
 
-        if self.is_tool_installed(tool):
+        presence = self.tool_presence(tool)
+        if presence.status == 'present':
             return True, None
+        if presence.status == 'unknown':
+            # never install over a probe that did not answer (F8)
+            return False, f'could not determine whether {tool} is installed: {presence.detail}'
 
         package = TOOL_PACKAGES.get(tool)
         if package is None:
             return False, f'{tool} is not on the install allowlist (see tools.py TOOL_PACKAGES)'
 
         self.sudo(f'apt-get install -y {package} 2>&1', timeout=timeout)
-        if self.is_tool_installed(tool):
+        after = self.tool_presence(tool)
+        if after.status == 'present':
             return True, None
+        if after.status == 'unknown':
+            return False, (f'ran apt-get install {package}, but could not determine whether '
+                           f'{tool} is installed now: {after.detail}')
         return False, f'failed to install {tool} (package {package})'
 
     def close(self) -> None:

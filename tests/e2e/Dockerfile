@@ -1,7 +1,7 @@
 # E2E SSH stand for NetAudit (docs/research/e2e_ssh_stand.md). CI only.
 FROM debian:12-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends openssh-server sudo nginx procps \
+ && apt-get install -y --no-install-recommends openssh-server sudo nginx procps lynis chkrootkit \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /run/sshd \
  && useradd -m -s /bin/bash -G sudo pwsudo \
