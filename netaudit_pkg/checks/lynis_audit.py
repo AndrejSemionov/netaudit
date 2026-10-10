@@ -136,7 +136,8 @@ def check_lynis_audit(host='', user='root', port=22, key_path='', password='', s
                         'hint': 'set "Confirm: this may install packages on the target" to proceed'}
             installed, install_err = ssh.ensure_tool_installed('lynis', timeout=90)
             if not installed:
-                return {'error': 'failed to install lynis', 'detail': install_err}
+                return {'error': install_err if install_err.startswith('could not determine') else 'failed to install lynis',
+                        'detail': install_err}
 
         ssh.sudo('lynis audit system --quiet --no-colors', timeout=180)
         # the file is always root:root with 640 permissions, always read it via
