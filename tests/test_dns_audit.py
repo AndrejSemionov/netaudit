@@ -603,6 +603,34 @@ def test_collection_failures_field_counts_info_findings():
 
 
 # ===========================================================================
+# A4.1 - a collection failure carries requires_manual_verification, the
+# generic flag the trend layer reads: its section was not evaluated, so an
+# id missing there is never "resolved" (docs/research/a4_1_dns_audit_trends.md)
+# ===========================================================================
+
+def test_every_collection_failure_requires_manual_verification():
+    with patch('netaudit_pkg.checks.dns_audit.tool_available', return_value=True), \
+         patch('netaudit_pkg.checks.dns_audit.run_cmd', return_value=(0, DIG_SERVFAIL, '')):
+        result = check_dns_audit(domain='broken-resolver.test', subdomains_to_check='www')
+    with patch('netaudit_pkg.checks.dns_audit.run_cmd',
+               side_effect=[(0, DIG_DNSKEY_PRESENT, ''), (0, DIG_SERVFAIL, '')]):
+        ds_gap = _check_dnssec('example.com')
+
+    gaps = [f for sec in result['sections'].values() for f in sec] + ds_gap
+    assert len(gaps) == 7  # spf, dkim, dmarc, dnssec, dangling_cname, discovered_services, DS
+    assert all(f['severity'] == 'info' and f['requires_manual_verification'] is True for f in gaps)
+
+
+def test_answered_queries_produce_no_manual_verification_flag():
+    with patch('netaudit_pkg.checks.dns_audit.tool_available', return_value=True), \
+         patch('netaudit_pkg.checks.dns_audit.run_cmd', return_value=(0, DIG_NOERROR_EMPTY, '')):
+        result = check_dns_audit(domain='example.com', subdomains_to_check='www')
+    findings = [f for sec in result['sections'].values() for f in sec]
+    assert findings
+    assert not any(f.get('requires_manual_verification') for f in findings)
+
+
+# ===========================================================================
 # Anti-regression: the exact original bug this audit fixed
 # ===========================================================================
 
