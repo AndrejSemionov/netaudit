@@ -27,7 +27,7 @@ from ..findings import finding as _finding
 from ..findings import subject_id
 from ..registry import register
 from ..ssh import HostKeyMismatchError, SSHExecutor
-from ..ssh_utils import run_sudo_with_exit_code
+from ..ssh_utils import run_command_with_exit_code, run_sudo_with_exit_code
 
 try:
     import paramiko
@@ -115,7 +115,12 @@ def _parse_json(raw: str) -> dict:
     `exposure` is the per-directive contribution as a string, or null.
     """
     data = json.loads(raw)
-    rows = data if isinstance(data, list) else data.get('entries', [])
+    if isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict):
+        rows = data.get('entries', [])
+    else:
+        rows = []
     return {'directives': rows}
 
 
@@ -197,12 +202,22 @@ def check_systemd_hardening(host='', user='root', port=22, key_path='', password
         return {'error': f'could not connect: {e}'}
 
     try:
-        # confirm the unit exists before running the full analysis, so a
-        # typo'd unit name gives a clear error instead of a confusing
-        # "0 directives found" result.
-        status_out, _ = ssh.run(f'systemctl status {shlex.quote(unit)} --no-pager 2>&1 | head -1')
-        if 'could not be found' in status_out or ('Unit ' in status_out and 'not found' in status_out):
+        # `status | head` returned head's status, hiding a failed unit probe.
+        # `show` is machine-readable and works for inactive loaded units too.
+        load_out, load_code = run_command_with_exit_code(
+            ssh, f'systemctl show --property=LoadState --value {shlex.quote(unit)} 2>&1',
+        )
+        if load_code is None:
+            return {'error': 'systemctl show did not complete'}
+        if load_code != 0:
+            return {'error': f'systemctl show failed (exit {load_code})',
+                    'detail': load_out.strip()[:300]}
+        load_state = load_out.strip()
+        if load_state == 'not-found':
             return {'error': f'unit {unit!r} not found on {host}'}
+        if not load_state or '\n' in load_state:
+            return {'error': 'systemctl show returned no valid LoadState',
+                    'detail': load_out.strip()[:300]}
 
         json_result = _run_sudo_with_exit_code(
             ssh, ['systemd-analyze', 'security', unit, '--no-pager', '--json=short'])
@@ -245,6 +260,11 @@ def check_systemd_hardening(host='', user='root', port=22, key_path='', password
         parsed = _parse_json(raw)
     except json.JSONDecodeError as e:
         return {'error': 'failed to parse systemd-analyze output as JSON', 'detail': str(e),
+                'raw_excerpt': raw.strip()[:500]}
+
+    directives = parsed['directives']
+    if not isinstance(directives, list) or not directives or not all(isinstance(d, dict) for d in directives):
+        return {'error': 'systemd-analyze returned no valid directive model',
                 'raw_excerpt': raw.strip()[:500]}
 
     findings = _to_findings(parsed, unit)

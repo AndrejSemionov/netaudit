@@ -25,6 +25,18 @@ from netaudit_pkg.checks.systemd_hardening import (
 )
 from tests.conftest import ExitCodeFakeSSHExecutor
 
+
+class SystemdFake(ExitCodeFakeSSHExecutor):
+    """Existing cases start with a confirmed loaded unit unless overridden."""
+
+    def __init__(self, *args, responses=None, exit_codes=None, **kwargs):
+        super().__init__(
+            *args,
+            responses={'systemctl show': 'loaded\n', **(responses or {})},
+            exit_codes={'systemctl show': 0, **(exit_codes or {})},
+            **kwargs,
+        )
+
 # ===========================================================================
 # _severity_for_weight
 # ===========================================================================
@@ -158,9 +170,8 @@ def test_check_systemd_hardening_success_end_to_end(monkeypatch):
                   '"description": "Service has access to the host\'s network", "exposure": "0.5"}]')
     overall_text = ('  PrivateNetwork=  exposed  0.5\n\n'
                      '\u2192 Overall exposure level for nginx.service: 4.5 OK\n')
-    fake = ExitCodeFakeSSHExecutor(
+    fake = SystemdFake(
         responses={
-            'systemctl status': 'Active: active (running)',
             '--json=short': directives,
             'security nginx.service --no-pager;': overall_text,
         },
@@ -178,9 +189,7 @@ def test_check_systemd_hardening_success_end_to_end(monkeypatch):
 
 
 def test_check_systemd_hardening_unit_not_found(monkeypatch):
-    fake = ExitCodeFakeSSHExecutor(responses={
-        'systemctl status': ('Unit typo.service could not be found.', ''),
-    })
+    fake = SystemdFake(responses={'systemctl show': 'not-found\n'})
     monkeypatch.setattr('netaudit_pkg.checks.systemd_hardening.SSHExecutor', lambda *a, **kw: fake)
     result = check_systemd_hardening(host='1.2.3.4', unit='typo.service')
     assert 'error' in result
@@ -194,9 +203,8 @@ def test_check_systemd_hardening_sudo_denied_gives_honest_error_not_json_error(m
     code's actual behavior in this exact scenario - the denial text
     merged via 2>&1 was non-empty, so it slipped past the empty-output
     check and hit json.loads() instead)."""
-    fake = ExitCodeFakeSSHExecutor(
+    fake = SystemdFake(
         responses={
-            'systemctl status': 'Active: active (running)',
             '--json=short': 'sudo: a password is required',
         },
         exit_codes={
@@ -215,8 +223,7 @@ def test_check_systemd_hardening_sudo_collection_failure_no_json_error(monkeypat
     """Same regression, but for a genuine collection failure (no
     completion marker recovered at all - dropped SSH command) rather
     than a confirmed nonzero exit. Must also never reach json.loads()."""
-    fake = ExitCodeFakeSSHExecutor(responses={
-        'systemctl status': 'Active: active (running)',
+    fake = SystemdFake(responses={
         # deliberately no '--json=short' entry in exit_codes -> no marker
         # ever appears -> completed=False
     })
@@ -228,8 +235,8 @@ def test_check_systemd_hardening_sudo_collection_failure_no_json_error(monkeypat
 
 
 def _systemd_fake(json_stdout='[]', json_exit=0, json_stderr='', text_stdout='', text_exit=0):
-    return ExitCodeFakeSSHExecutor(
-        responses={'systemctl status': 'Active: active (running)', '--json=short': json_stdout,
+    return SystemdFake(
+        responses={'--json=short': json_stdout,
                    'security nginx.service --no-pager;': text_stdout},
         exit_codes={'--json=short': json_exit, 'security nginx.service --no-pager;': text_exit},
         stderrs={'--json=short': json_stderr},
@@ -241,8 +248,8 @@ def test_check_systemd_hardening_sudo_runs_systemd_analyze_itself(monkeypatch):
     /usr/bin/systemd-analyze matches), and the unit is one argument. Since
     task 8 a unit with shell syntax is rejected before connecting
     (test_command_injection.py); a valid escaped name still needs quoting."""
-    fake = ExitCodeFakeSSHExecutor(
-        responses={'systemctl status': 'Active: active (running)', '--json=short': '[]'},
+    fake = SystemdFake(
+        responses={'--json=short': '[{"set": true, "name": "PrivateNetwork=", "exposure": "0"}]'},
         exit_codes={'--json=short': 0},
     )
     monkeypatch.setattr('netaudit_pkg.checks.systemd_hardening.SSHExecutor', lambda *a, **kw: fake)
@@ -289,9 +296,8 @@ def test_check_systemd_hardening_old_systemd_still_gets_specific_message(monkeyp
     get the specific 'requires systemd >= 246' message, not the generic
     sudo-denial framing - this preserves a real, useful pre-existing
     distinction that the fix must not lose."""
-    fake = ExitCodeFakeSSHExecutor(
+    fake = SystemdFake(
         responses={
-            'systemctl status': 'Active: active (running)',
             '--json=short': 'Unknown option --json.',
         },
         exit_codes={
@@ -314,9 +320,8 @@ def test_check_systemd_hardening_overall_score_failure_does_not_lose_directive_f
     missing overall score rather than a silent null/null."""
     directives = ('[{"set": false, "name": "PrivateNetwork=", "json_field": "PrivateNetwork", '
                   '"description": "exposed", "exposure": "0.5"}]')
-    fake = ExitCodeFakeSSHExecutor(
+    fake = SystemdFake(
         responses={
-            'systemctl status': 'Active: active (running)',
             '--json=short': directives,
             'security nginx.service --no-pager;': 'sudo: a password is required',
         },
@@ -345,9 +350,8 @@ def test_check_systemd_hardening_overall_score_unparseable_but_completed(monkeyp
     surfaced explicitly rather than silently returning null/null."""
     directives = ('[{"set": true, "name": "PrivateNetwork=", "json_field": "PrivateNetwork", '
                   '"description": "ok", "exposure": "0.5"}]')
-    fake = ExitCodeFakeSSHExecutor(
+    fake = SystemdFake(
         responses={
-            'systemctl status': 'Active: active (running)',
             '--json=short': directives,
             'security nginx.service --no-pager;': 'unexpected output format, no summary line',
         },
