@@ -28,6 +28,7 @@ import re
 from ..findings import finding as _finding
 from ..registry import CONFIRM_MODIFY, confirm_param, register
 from ..ssh import HostKeyMismatchError, SSHExecutor
+from ..ssh_utils import describe_sudo_refusal, run_sudo_with_exit_code
 
 try:
     import paramiko
@@ -70,12 +71,23 @@ def _run_rkhunter(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
     installed"), and running it a second time here only gave that bug
     a second chance to produce a false negative on a tool the caller
     had already confirmed present."""
-    out, _ = ssh.sudo('rkhunter --check --skip-keypress --report-warnings-only --nocolors 2>&1', timeout=300)
-
-    if not out.strip():
+    result = run_sudo_with_exit_code(
+        ssh, ['rkhunter', '--check', '--skip-keypress', '--report-warnings-only', '--nocolors'],
+        timeout=300,
+    )
+    if not result.completed:
+        return [], 'rkhunter did not complete'
+    if result.sudo_error:
+        return [], describe_sudo_refusal(ssh, result)
+    raw = '\n'.join(part for part in (result.stdout, result.stderr) if part)
+    if not raw.strip():
         return [], 'rkhunter returned no output (check sudo privileges)'
-
-    return _parse_rkhunter(out), None
+    findings = _parse_rkhunter(raw)
+    if result.exit_code != 0:
+        # rkhunter uses nonzero for warnings as well as errors. Keep any
+        # warnings it actually found, but never certify this run as clean.
+        return findings, f'rkhunter exited {result.exit_code}; result may be incomplete'
+    return findings, None
 
 # ===========================================================================
 # chkrootkit
@@ -104,12 +116,18 @@ def _run_chkrootkit(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
     """Returns (findings, error). See _run_rkhunter()'s docstring for
     why there's no presence check here either - same reasoning, same
     fix."""
-    out, _ = ssh.sudo('chkrootkit 2>&1', timeout=300)
-
-    if not out.strip():
+    result = run_sudo_with_exit_code(ssh, ['chkrootkit'], timeout=300)
+    if not result.completed:
+        return [], 'chkrootkit did not complete'
+    if result.sudo_error:
+        return [], describe_sudo_refusal(ssh, result)
+    raw = '\n'.join(part for part in (result.stdout, result.stderr) if part)
+    if not raw.strip():
         return [], 'chkrootkit returned no output (check sudo privileges)'
-
-    return _parse_chkrootkit(out), None
+    findings = _parse_chkrootkit(raw)
+    if result.exit_code != 0:
+        return findings, f'chkrootkit exited {result.exit_code}; result may be incomplete'
+    return findings, None
 
 # ===========================================================================
 # Check
@@ -188,14 +206,16 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='', sudo_
                 tools_status['rkhunter'] = {'ran': False}
             else:
                 findings, err = _run_rkhunter(ssh)
+                for f in findings:
+                    f['source'] = 'rkhunter'
+                all_findings.extend(findings)
                 if err:
                     errors.append(f'rkhunter: {err}')
-                    tools_status['rkhunter'] = {'ran': False}
+                    tools_status['rkhunter'] = {'ran': bool(findings), 'complete': False,
+                                                'findings_count': len(findings)}
                 else:
-                    for f in findings:
-                        f['source'] = 'rkhunter'
-                    all_findings.extend(findings)
-                    tools_status['rkhunter'] = {'ran': True, 'findings_count': len(findings)}
+                    tools_status['rkhunter'] = {'ran': True, 'complete': True,
+                                                'findings_count': len(findings)}
 
         if use_chkrootkit:
             if not _ensure_installed('chkrootkit'):
@@ -204,14 +224,16 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='', sudo_
                 tools_status['chkrootkit'] = {'ran': False}
             else:
                 findings, err = _run_chkrootkit(ssh)
+                for f in findings:
+                    f['source'] = 'chkrootkit'
+                all_findings.extend(findings)
                 if err:
                     errors.append(f'chkrootkit: {err}')
-                    tools_status['chkrootkit'] = {'ran': False}
+                    tools_status['chkrootkit'] = {'ran': bool(findings), 'complete': False,
+                                                  'findings_count': len(findings)}
                 else:
-                    for f in findings:
-                        f['source'] = 'chkrootkit'
-                    all_findings.extend(findings)
-                    tools_status['chkrootkit'] = {'ran': True, 'findings_count': len(findings)}
+                    tools_status['chkrootkit'] = {'ran': True, 'complete': True,
+                                                  'findings_count': len(findings)}
 
     finally:
         ssh.close()
@@ -219,7 +241,10 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='', sudo_
     if not any(s.get('ran') for s in tools_status.values()):
         return {'error': 'no tool ran', 'detail': '; '.join(errors)}
 
-    if not all_findings:
+    if not all_findings and errors:
+        all_findings.append(_finding('low', 'rootkit scan incomplete', '; '.join(errors),
+                                     requires_manual_verification=True))
+    elif not all_findings:
         all_findings.append(_finding('ok', 'no signs of rootkits found'))
 
     counts = {'high': 0, 'medium': 0, 'low': 0, 'ok': 0}

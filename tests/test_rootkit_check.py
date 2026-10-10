@@ -8,7 +8,7 @@ from netaudit_pkg.checks.rootkit_check import (
     _parse_rkhunter,
     check_rootkit,
 )
-from tests.conftest import FakeSSHExecutor
+from tests.conftest import ExitCodeFakeSSHExecutor, FakeSSHExecutor
 
 # ===========================================================================
 # _parse_rkhunter
@@ -193,26 +193,20 @@ def test_empty_host_rejected():
 # ===========================================================================
 
 def test_sudo_denied_both_tools_falls_through_to_existing_per_tool_errors(monkeypatch):
-    """When sudo genuinely can't run either tool (no password, real
-    sudo -n refused) - simulated as empty output from both, exactly
-    what a real sudo -n denial produces - check_rootkit() must fall
-    through to the ALREADY-EXISTING per-tool 'returned no output (check
-    sudo privileges)' errors (_run_rkhunter/_run_chkrootkit's own
-    checks), aggregated into 'no tool ran' since neither succeeded. No
-    new error semantics needed."""
-    fake = FakeSSHExecutor(
+    """A completed sudo refusal is named and cannot certify a clean scan."""
+    fake = ExitCodeFakeSSHExecutor(
         installed_tools={'rkhunter', 'chkrootkit'},
         password='',
-        responses={
-            'rkhunter --check': ('', 'sudo: a password is required'),
-            'chkrootkit': ('', 'sudo: a password is required'),
-        },
+        responses={'rkhunter --check': '', 'chkrootkit': ''},
+        exit_codes={'rkhunter --check': 1, 'chkrootkit': 1},
+        stderrs={'rkhunter --check': 'sudo: a password is required',
+                 'chkrootkit': 'sudo: a password is required'},
     )
     monkeypatch.setattr('netaudit_pkg.checks.rootkit_check.SSHExecutor', lambda *a, **kw: fake)
     result = check_rootkit(host='1.2.3.4')
     assert 'error' in result
     assert 'no tool ran' in result['error']
-    assert 'check sudo privileges' in result['detail']
+    assert 'password' in result['detail']
 
 
 def test_sudo_denied_one_tool_other_succeeds(monkeypatch):
@@ -224,13 +218,12 @@ def test_sudo_denied_one_tool_other_succeeds(monkeypatch):
     `tools_status` tracks ran=False per tool), now reachable because the
     upfront gate no longer short-circuits before either tool is even
     attempted."""
-    fake = FakeSSHExecutor(
+    fake = ExitCodeFakeSSHExecutor(
         installed_tools={'rkhunter', 'chkrootkit'},
         password='',
-        responses={
-            'rkhunter --check': ('Warning: test warning\n', ''),
-            'chkrootkit': ('', 'sudo: a password is required'),
-        },
+        responses={'rkhunter --check': 'Warning: test warning\n', 'chkrootkit': ''},
+        exit_codes={'rkhunter --check': 0, 'chkrootkit': 1},
+        stderrs={'chkrootkit': 'sudo: a password is required'},
     )
     monkeypatch.setattr('netaudit_pkg.checks.rootkit_check.SSHExecutor', lambda *a, **kw: fake)
     result = check_rootkit(host='1.2.3.4')

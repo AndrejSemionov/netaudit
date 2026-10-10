@@ -41,7 +41,7 @@ def test_parse_summary_zero_changes():
 # ===========================================================================
 # Fakes. Database presence, --init and the activating mv go through
 # ssh_utils.run_sudo_with_exit_code() and need a registered exit code;
-# `aide --check` still goes through ssh.sudo() and needs only a response.
+# `aide --check` also needs a confirmed exit code after F3.
 # ===========================================================================
 
 SUMMARY_CLEAN = ('Summary:\n  Total number of entries:\t1\n'
@@ -58,7 +58,7 @@ def _aide_fake(responses=None, exit_codes=None, stderrs=None, installed_tools=No
     return ExitCodeFakeSSHExecutor(
         installed_tools={'aide'} if installed_tools is None else installed_tools,
         responses={DB: '', **(responses or {})},
-        exit_codes={DB: 0, **(exit_codes or {})},
+        exit_codes={DB: 0, '--check': 0, **(exit_codes or {})},
         stderrs=stderrs,
     )
 
@@ -169,7 +169,8 @@ def test_check_mode_presence_not_confirmed_is_an_error(monkeypatch):
 
 
 def test_check_mode_aide_check_sudo_refusal_is_named(monkeypatch):
-    fake = _aide_fake(responses={'--check': SUDO_REFUSED})
+    fake = _aide_fake(responses={'--check': ''}, exit_codes={'--check': 1},
+                      stderrs={'--check': SUDO_REFUSED})
     _patch(monkeypatch, fake)
     result = check_aide(host='1.2.3.4', mode='check')
     assert result['error'] == f'sudo refused aide --check: {SUDO_REFUSED}'
@@ -181,7 +182,8 @@ def test_check_mode_aide_check_sudo_refusal_is_named(monkeypatch):
 
 def test_check_mode_changed_files_flagged_high(monkeypatch):
     fake = _aide_fake(responses={'--check': ('Summary:\n  Total number of entries:\t1000\n'
-                                             '  Added entries:\t\t0\n  Removed entries:\t\t0\n  Changed entries:\t\t3\n')})
+                                             '  Added entries:\t\t0\n  Removed entries:\t\t0\n  Changed entries:\t\t3\n')},
+                      exit_codes={'--check': 4})
     _patch(monkeypatch, fake)
     result = check_aide(host='1.2.3.4', mode='check')
     assert result['changed'] == 3

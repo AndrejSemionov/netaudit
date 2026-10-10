@@ -15,6 +15,7 @@ from __future__ import annotations
 from ..findings import finding as _finding
 from ..registry import CONFIRM_MODIFY, confirm_param, register
 from ..ssh import HostKeyMismatchError, SSHExecutor
+from ..ssh_utils import describe_sudo_refusal, run_sudo_with_exit_code
 
 try:
     import paramiko
@@ -141,15 +142,33 @@ def check_lynis_audit(host='', user='root', port=22, key_path='', password='', s
                 # before / after apt (F8) - never a blanket 'failed to install'
                 return {'error': install_err or 'failed to install lynis', 'detail': install_err}
 
-        ssh.sudo('lynis audit system --quiet --no-colors', timeout=180)
+        audit = run_sudo_with_exit_code(
+            ssh, ['lynis', 'audit', 'system', '--quiet', '--no-colors'], timeout=180,
+        )
+        if not audit.completed:
+            return {'error': 'lynis audit did not complete'}
+        if audit.sudo_error:
+            return {'error': f'sudo refused lynis audit: {describe_sudo_refusal(ssh, audit)}'}
+        if audit.exit_code != 0:
+            detail = '\n'.join(part for part in (audit.stdout.strip(), audit.stderr.strip()) if part)
+            return {'error': f'lynis audit failed (exit {audit.exit_code})', 'detail': detail[-500:]}
         # the file is always root:root with 640 permissions, always read it via
         # sudo regardless of how the audit itself ran - otherwise cat silently
         # fails with Permission denied
-        report_raw, report_err = ssh.sudo('cat /var/log/lynis-report.dat')
+        report = run_sudo_with_exit_code(ssh, ['cat', '/var/log/lynis-report.dat'])
+        if not report.completed:
+            return {'error': 'could not confirm reading /var/log/lynis-report.dat'}
+        if report.sudo_error:
+            return {'error': f'sudo refused reading /var/log/lynis-report.dat: '
+                             f'{describe_sudo_refusal(ssh, report)}'}
+        if report.exit_code != 0:
+            return {'error': 'failed to read /var/log/lynis-report.dat',
+                    'detail': report.stderr.strip()[:500]}
+        report_raw = report.stdout
 
         if not report_raw.strip() or 'hardening_index' not in report_raw:
             return {'error': 'failed to read /var/log/lynis-report.dat',
-                    'detail': report_err.strip()[:500] or report_raw.strip()[:500],
+                    'detail': report.stderr.strip()[:500] or report_raw.strip()[:500],
                     'hint': 'check the sudo password or permissions: ls -la /var/log/lynis-report.dat'}
 
     finally:
