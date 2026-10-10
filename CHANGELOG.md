@@ -10,6 +10,10 @@
 - In the Russian interface, the SSH fields shared by many checks (host, user,
   port, key, SSH and sudo passwords, log lines) are translated even where the
   check itself has no translation yet.
+- `lynis_audit`, `rootkit_check`, `aide_check` and `docker_audit` find tools in
+  `/usr/sbin` for a non-root SSH user (lynis and chkrootkit live there on
+  Debian); when the presence check itself fails they say so instead of
+  "not installed", and `auto_install` never installs over such a result.
 - SSH checks that use sudo have a separate **Sudo password** field
   (`sudo_password`). It goes to `sudo -S` on stdin and is never stored; when it
   is empty the SSH password is used, as before. The `password` field is now the
