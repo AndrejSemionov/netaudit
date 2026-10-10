@@ -307,15 +307,9 @@ def _binary_check(ssh: SSHExecutor, timeout: int = 20) -> CommandResult:
     docstring for why `which` isn't used). No sudo - PATH lookup needs
     no privilege.
 
-    Returns a CommandResult whose exit_code follows `command -v`'s own
-    documented convention: exit_code=0 with the binary's path in stdout
-    means present; exit_code=127 with empty stdout means genuinely not
-    on PATH (valid evidence of absence, NOT a collection failure). See
-    binary_verdict() below for how a caller interprets this, including
-    why any OTHER confirmed exit code is UNKNOWN, not NOT_PRESENT -
-    only 127 is `command -v`'s documented "not found" convention; a
-    different nonzero code means something else went wrong and this
-    collector refuses to guess at what.
+    Returns raw evidence. The verdict layer accepts exit 0 with a path
+    as present, Bash exit 1 or dash exit 127 with empty output as absent;
+    other code/output combinations remain unknown.
     """
     cmd = 'command -v fail2ban-client'
     stdout, code = run_command_with_exit_code(ssh, cmd, timeout=timeout)
@@ -323,20 +317,11 @@ def _binary_check(ssh: SSHExecutor, timeout: int = 20) -> CommandResult:
 
 
 def binary_verdict(result: CommandResult) -> str:
-    """Interprets a _binary_check() CommandResult using `command -v`'s
-    documented exit-code convention. Returns one of 'PRESENT',
-    'NOT_PRESENT' (confirmed absent, exit_code==127 exactly - not "any
-    nonzero code"), or 'UNKNOWN' (collection failure - completed=False -
-    or a confirmed exit code that's neither 0 nor 127, which
-    `command -v` isn't documented to produce and which this function
-    still refuses to treat as either presence or absence)."""
-    if not result.completed:
-        return 'UNKNOWN'
-    if result.exit_code == 0:
-        return 'PRESENT'
-    if result.exit_code == 127:
-        return 'NOT_PRESENT'
-    return 'UNKNOWN'
+    """PRESENT, NOT_PRESENT or UNKNOWN from Bash/dash `command -v`."""
+    from .ssh_utils import command_v_verdict
+
+    verdict = command_v_verdict(result.completed, result.exit_code, result.stdout)
+    return 'NOT_PRESENT' if verdict == 'ABSENT' else verdict
 
 
 # ===========================================================================

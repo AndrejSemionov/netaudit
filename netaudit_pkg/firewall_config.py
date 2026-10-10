@@ -85,7 +85,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from .ssh import SSHExecutor
-from .ssh_utils import run_sudo_with_exit_code
+from .ssh_utils import command_v_verdict, run_sudo_with_exit_code
 
 # ===========================================================================
 # Evidence data model
@@ -190,16 +190,9 @@ def _tool_is_present(ssh: SSHExecutor, tool: str, timeout: int = 20) -> CommandR
     binary on every distro/minimal image). No sudo - PATH lookup needs no
     privilege.
 
-    Returns a CommandResult whose exit_code follows `command -v`'s own
-    documented convention (confirmed empirically - see this module's
-    session notes): exit_code=0 with the tool's path in stdout means
-    present; exit_code=127 with empty stdout means genuinely not on
-    PATH - this is NOT a collection failure, it's valid evidence a
-    backend is absent. Any OTHER confirmed exit code, or completed=False
-    (marker missing entirely - SSH channel drop, timeout), is a real
-    collection failure and must not be read as either "present" or
-    "not present" - see tool_is_present() below for how callers
-    interpret this.
+    Returns raw evidence. The verdict layer accepts exit 0 with a path
+    as present, Bash exit 1 or dash exit 127 with empty output as absent;
+    other code/output combinations remain unknown.
     """
     from .ssh_utils import run_command_with_exit_code
 
@@ -209,20 +202,9 @@ def _tool_is_present(ssh: SSHExecutor, tool: str, timeout: int = 20) -> CommandR
 
 
 def tool_is_present(result: CommandResult) -> bool | None:
-    """Interprets a _tool_is_present() CommandResult using `command -v`'s
-    documented exit-code convention. Returns True (found), False
-    (confirmed absent, exit_code==127), or None (collection failure -
-    completion unconfirmed, or an exit code that's neither 0 nor 127,
-    which `command -v` isn't documented to produce but which this
-    function still refuses to guess at rather than silently treating as
-    either presence or absence)."""
-    if not result.completed:
-        return None
-    if result.exit_code == 0:
-        return True
-    if result.exit_code == 127:
-        return False
-    return None
+    """True for confirmed presence, False for Bash/dash absence, else None."""
+    verdict = command_v_verdict(result.completed, result.exit_code, result.stdout)
+    return {'PRESENT': True, 'ABSENT': False, 'UNKNOWN': None}[verdict]
 
 
 # ===========================================================================
@@ -232,7 +214,7 @@ def tool_is_present(result: CommandResult) -> bool | None:
 def collect_ufw(ssh: SSHExecutor, timeout: int = 20) -> tuple[CommandResult, CommandResult | None]:
     """Checks whether ufw is present via `command -v`, and if so, runs
     `ufw status` via sudo. Returns (presence_result, status_result) -
-    status_result is None if ufw is confirmed NOT present (exit_code==127
+    status_result is None if ufw is confirmed NOT present (exit 1/127
     on the presence check - see tool_is_present()), since there is no
     point attempting a privileged status call for a binary that doesn't
     exist. If presence itself is UNKNOWN (collection failure on the

@@ -55,7 +55,7 @@ def _evidence(mysql_present=None, mariadb_present=None, listener=None, bind_addr
 # ===========================================================================
 
 def test_sql_binary_verdict_found():
-    assert _sql_binary_verdict(_cr(exit_code=0)) == 'FOUND'
+    assert _sql_binary_verdict(_cr(exit_code=0, stdout='/usr/bin/mysql')) == 'FOUND'
 
 
 def test_sql_binary_verdict_not_found_on_127():
@@ -81,7 +81,7 @@ def test_sql_presence_verdict_not_present_requires_both_confirmed():
 
 
 def test_sql_presence_verdict_present_if_either_found():
-    ev = _evidence(mysql_present=_cr(exit_code=0), mariadb_present=_cr(exit_code=127))
+    ev = _evidence(mysql_present=_cr(exit_code=0, stdout='/usr/bin/mysql'), mariadb_present=_cr(exit_code=127))
     verdict, _ = _sql_presence_verdict(ev)
     assert verdict == 'PRESENT'
 
@@ -89,7 +89,8 @@ def test_sql_presence_verdict_present_if_either_found():
 def test_sql_presence_verdict_present_even_if_other_unknown():
     """PRESENT, once proven by one confirmed FOUND, is not undone by the
     other check being inconclusive."""
-    ev = _evidence(mysql_present=_cr(exit_code=0), mariadb_present=_cr(completed=False, exit_code=None))
+    ev = _evidence(mysql_present=_cr(exit_code=0, stdout='/usr/bin/mysql'),
+                   mariadb_present=_cr(completed=False, exit_code=None))
     verdict, _ = _sql_presence_verdict(ev)
     assert verdict == 'PRESENT'
 

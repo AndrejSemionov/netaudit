@@ -59,6 +59,18 @@ from typing import Literal
 from .ssh import SSHExecutor
 
 
+def command_v_verdict(completed: bool, exit_code: int | None, stdout: str) -> str:
+    """Classify a `command -v` probe across Bash (absent=1) and dash
+    (absent=127). A completed 0 needs a path; failed output is ambiguous."""
+    if not completed:
+        return 'UNKNOWN'
+    if exit_code == 0 and stdout.strip():
+        return 'PRESENT'
+    if exit_code in (1, 127) and not stdout.strip():
+        return 'ABSENT'
+    return 'UNKNOWN'
+
+
 def run_command_with_exit_code(ssh: SSHExecutor, cmd: str, timeout: int = 20) -> tuple[str, int | None]:
     """Runs `cmd` and returns (stdout, exit_code).
 

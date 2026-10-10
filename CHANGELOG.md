@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- UFW, Fail2Ban and MySQL/MariaDB presence checks now recognize Bash exit 1
+  and dash exit 127 with empty output as confirmed absence; malformed probe
+  output remains unknown instead of producing a false verdict.
+
 - `deploy.sh` (layout B) backs up the files it changes and the database before
   copying, rolls back by itself when tests, the restart or the smoke test fail,
   and has `./deploy.sh --rollback`. It deploys everything since the last

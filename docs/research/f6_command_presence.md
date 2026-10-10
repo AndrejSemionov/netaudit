@@ -1,6 +1,7 @@
 # F6 — consistent `command -v` verdicts in server audit
 
-Status: contract. USER approved F1–F7 autonomous follow-up on 2026-10-09.
+Status: implemented locally, awaiting independent review. USER approved
+F1–F7 autonomous follow-up on 2026-10-09.
 Implementer: GPT/Codex. Reviewer: Claude. Base: `origin/main` @ `ea68f97`.
 
 ## Problem
