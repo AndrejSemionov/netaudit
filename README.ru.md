@@ -22,6 +22,8 @@
 ## Быстрая установка
 
 ```bash
+git clone https://github.com/AndrejSemionov/netaudit.git
+cd netaudit
 ./install.sh
 ```
 
@@ -72,14 +74,26 @@ python3 netaudit.py run server_audit lynis_audit cve_audit --host 1.2.3.4 --user
 
 Пошагово, для развёртывания на выделенной машине/VM (проверено на Ubuntu 24.04+).
 
+### 0. Пользователь службы (один раз)
+
+NetAudit работает под своим пользователем `netaudit`: служба systemd (шаг 3) и команда
+обновления (шаг 5) рассчитаны на него и на код в `/home/netaudit/netaudit`. Из учётной
+записи с sudo:
+```bash
+sudo adduser netaudit
+sudo usermod -aG sudo netaudit
+sudo -iu netaudit
+```
+`adduser` спросит пароль нового пользователя — его `sudo` запросит в следующих шагах
+(установка пакетов, перезапуск службы). Все дальнейшие шаги выполняйте под `netaudit`.
+
 ### 1. Забрать код и поставить зависимости
 
 ```bash
-git clone https://github.com/AndrejSemionov/netaudit.git
-cd netaudit
 sudo apt update
-sudo apt install -y python3 python3-pip unzip
-chmod +x install.sh
+sudo apt install -y git python3 python3-pip unzip
+git clone https://github.com/AndrejSemionov/netaudit.git ~/netaudit
+cd ~/netaudit
 ./install.sh
 ```
 

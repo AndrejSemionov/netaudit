@@ -23,6 +23,8 @@ concrete "what to do" recommendations.
 ## Quick install
 
 ```bash
+git clone https://github.com/AndrejSemionov/netaudit.git
+cd netaudit
 ./install.sh
 ```
 
@@ -89,14 +91,26 @@ actually needs fixing versus what's not critical.
 
 Step by step, for deploying on a dedicated machine/VM (tested on Ubuntu 24.04+).
 
+### 0. Service user (once)
+
+NetAudit runs as its own user `netaudit`; the systemd unit (step 3) and the update
+command (step 5) expect it and the code in `/home/netaudit/netaudit`. From an account
+with sudo:
+```bash
+sudo adduser netaudit
+sudo usermod -aG sudo netaudit
+sudo -iu netaudit
+```
+`adduser` asks for the new user's password — `sudo` asks for it in the steps below
+(installing packages, restarting the service). Run every following step as `netaudit`.
+
 ### 1. Get the code and install dependencies
 
 ```bash
-git clone https://github.com/AndrejSemionov/netaudit.git
-cd netaudit
 sudo apt update
-sudo apt install -y python3 python3-pip unzip
-chmod +x install.sh
+sudo apt install -y git python3 python3-pip unzip
+git clone https://github.com/AndrejSemionov/netaudit.git ~/netaudit
+cd ~/netaudit
 ./install.sh
 ```
 
