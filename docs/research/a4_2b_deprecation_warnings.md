@@ -23,11 +23,13 @@ warnings that do not come from the tests:
 
 ## Design
 
-1. `req.dict()` → `req.model_dump()`. `requirements.txt` gains
-   `pydantic>=2.0`. FastAPI ≥ 0.100 allowed pydantic v1, so the pin is what
-   guarantees `model_dump()`. Nothing else in the project uses the v1 API
+1. `req.dict()` → `req.model_dump()`. `requirements.txt` and package metadata
+   in `pyproject.toml` gain `pydantic>=2.0`. FastAPI ≥ 0.100 allowed pydantic
+   v1, so the bound is what guarantees `model_dump()` for both `pip install
+   -r requirements.txt` and `pip install .`. Nothing else uses the v1 API
    (grep: `.dict(`, `parse_obj`, `class Config`, validators).
-2. `requirements-dev.txt` gains `httpx2>=2.0` (tests only). The application
+2. `requirements-dev.txt` and `pyproject.toml`'s dev extra gain `httpx2>=2.0`
+   (tests only). The application
    keeps `httpx` in `requirements.txt`: `history.py` and the checks use it at
    runtime. Tests that patch `httpx` for the application are unaffected,
    because the TestClient no longer goes through that module.
@@ -45,6 +47,9 @@ warnings that do not come from the tests:
    environment without the new dev requirements, including `deploy.sh`
    (layout B), which runs pytest on the server, and `install.sh`, which
    installs only `requirements.txt`. A failed test there means a rollback.
+3. The same bounds exist in `pyproject.toml`'s runtime and dev dependencies;
+   `pip install .` and `pip install -e .[dev]` otherwise bypass the text
+   requirements. RED for these two paths was added after reviewer pass 1.
 
 Verification: full pytest with no warnings from these two sources; full
 Ruff; bandit; `pip-audit -r requirements.txt` and `-r requirements-dev.txt`.

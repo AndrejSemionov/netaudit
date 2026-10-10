@@ -33,6 +33,7 @@ dependencies = [
     "httpx>=0.24",
     "paramiko>=3.0",
     "fastapi>=0.100",
+    "pydantic>=2.0",
     "uvicorn[standard]>=0.23",
 ]
 
@@ -40,6 +41,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-mock>=3.12",
+    "httpx2>=2.0",
     "ruff==0.16.9",
 ]
 
