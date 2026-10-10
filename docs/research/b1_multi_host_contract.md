@@ -16,12 +16,14 @@ Scope B1 (USER, 2026-10-10): только research и контракт в `docs/
 | История/тренды | `storage.identity_pairs()` и `trends._result_param_pairs()` читают контекст каждого host; B1 не должен менять `IDENTITY_PARAM_KEYS` и семантику тренда | Нет сводки одного запуска или сопоставления hosts в одном отчёте; есть известный риск меняющегося охвата при неидентифицирующих параметрах |
 | Сохранённые цели | `targets(id,label,value,kind)` и пресеты; `redact_preset_checks()` удаляет `password`/`sudo_password` | Цель не хранит SSH user/port/key path; пресет с hosts содержит только параметры, после redaction секрет требуется вводить заново |
 | SSH | `SSHExecutor` имеет connect timeout (default 10 s) и timeout отдельной команды (default 20 s, некоторые 120 s) | Эти таймауты не ограничивают весь check, и принудительно остановить произвольный Python-поток нельзя |
+| SSH trust (TOFU) | Каждый `SSHExecutor.connect()` читает `~/.netaudit/known_hosts`, а `TofuPolicy.missing_host_key()` добавляет ключ и вызывает Paramiko `save_host_keys()` (`ssh.py`) | Два первых подключения параллельно могут записывать один файл: Paramiko перечитывает его перед `open(..., "w")`, но без блокировки read/modify/write; возможны потеря записи, неполное чтение и повторное принятие ключа. Это вывод из кода, не воспроизведённый сбой |
 
 Источники: `netaudit_pkg/engine.py:109–270`, `netaudit_pkg/streaming.py:170–305`,
 `netaudit.py:62–116`, `web/app.py:75–154`, `web/static/index.html:880–1035`,
 `netaudit_pkg/storage.py:255–310,547–562`, `netaudit_pkg/trends.py:103–225`,
 `netaudit_pkg/ssh.py:90–165`, существующие `test_engine`, `test_streaming`,
-`test_web_app`, `test_storage`, `test_trends`.
+`test_web_app`, `test_storage`, `test_trends`; установленный Paramiko
+`client.py:108–152` (`save_host_keys`: reload + `open(filename, "w")`).
 
 ## 2. Граница и единица B2
 
@@ -97,6 +99,14 @@ deadline всего host. Если USER требует гарантирован�
 до B2 нужен отдельный контракт на изоляцию каждого host в subprocess и
 завершение процесса; `ThreadPoolExecutor` сам по себе это не решает.
 
+До увеличения числа одновременных первых подключений B2 должен защитить
+`known_hosts`: атомарное сохранение с межпроцессной блокировкой и повторной
+проверкой уже записанного ключа под этой блокировкой. Если другой worker
+сохранил для того же host иной ключ, соединение отклоняется, а не
+перезаписывает trust. Не удерживать блокировку во время сетевого connect.
+Отдельный тест с двумя конкурирующими первыми подключениями подтверждает,
+что оба ключа сохранены; тест конфликта одного host подтверждает отказ.
+
 ### 3.3 Отчёт, сводка, сравнение
 
 Старые поля отчёта и ответы `/api/run`, SSE, `history`, `trend` не меняются.
@@ -121,6 +131,7 @@ findings разных checks и не объявляет отсутствующи
 2. Общий bounded dispatcher в `engine.run_instances()`; оба вызывающих
    пути используют его. В ответах для одного экземпляра сохраняется flat
    форма, для N>1 — прежняя `by_host`; failure одного host не теряет другие.
+   Перед его включением закрыть гонку `known_hosts` по §3.2.
 3. Инвентарь без секретов и CLI/Web выбор hosts; прямые API-входы проверяют
    лимиты; старые targets/presets и одиночный CLI остаются рабочими.
 4. Read-only summary/сравнение. Тесты на mixed success/error, неизвестную
