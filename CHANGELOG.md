@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `dns_audit` appears in trends (`netaudit trend dns_audit <domain>`, Web
+  trends, AI trend context). A DNS query that did not resolve marks its
+  section as not evaluated: findings from the previous run there are listed
+  as `not evaluated`, not `resolved`. The same now holds for other checks
+  that report a collection gap as an `info` finding requiring manual
+  verification (for example `web_security_external` when it could not test
+  old TLS versions).
+
 - Rootkit, Lynis and AIDE audits now require a confirmed sudo command result
   before reporting a clean scan. Failed or partial runs are marked incomplete;
   AIDE change bitmasks and rootkit warnings remain visible.

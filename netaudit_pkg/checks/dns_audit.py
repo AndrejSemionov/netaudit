@@ -189,7 +189,8 @@ def _check_spf(domain: str) -> list[dict]:
         findings.append(_finding('info', 'could not determine SPF status',
                                  f'DNS query for {domain} TXT records did not resolve '
                                  f'(status={result.status}) — this is a collection failure, '
-                                 'not evidence that SPF is absent; retry or check resolver availability'))
+                                 'not evidence that SPF is absent; retry or check resolver availability',
+                                 requires_manual_verification=True))
         return findings
 
     spf_records = [t for t in result.records if t.startswith('v=spf1')]
@@ -254,7 +255,8 @@ def _check_dkim(domain: str) -> list[dict]:
     if unresolved_selectors:
         findings.append(_finding('info', f'{len(unresolved_selectors)} DKIM selector check(s) did not resolve',
                                  f'DNS collection failure (not "no record") for: {", ".join(unresolved_selectors)} '
-                                 '— these were not confirmed absent, just unchecked'))
+                                 '— these were not confirmed absent, just unchecked',
+                                 requires_manual_verification=True))
 
     if not found:
         checked_selectors = [s for s in COMMON_DKIM_SELECTORS if s not in unresolved_selectors]
@@ -293,7 +295,8 @@ def _check_dmarc(domain: str) -> list[dict]:
         return [_finding('info', 'could not determine DMARC status',
                          f'DNS query for {name} TXT records did not resolve '
                          f'(status={result.status}) — this is a collection failure, '
-                         'not evidence that DMARC is absent; retry or check resolver availability')]
+                         'not evidence that DMARC is absent; retry or check resolver availability',
+                         requires_manual_verification=True)]
 
     dmarc_txt = next((t for t in result.records if t.startswith('v=DMARC1')), None)
 
@@ -334,7 +337,8 @@ def _check_dnssec(domain: str) -> list[dict]:
         return [_finding('info', 'could not determine DNSSEC status',
                          f'DNS query for {domain} DNSKEY records did not resolve '
                          f'(status={dnskey_result.status}) — this is a collection failure, '
-                         'not evidence that DNSSEC is disabled; retry or check resolver availability')]
+                         'not evidence that DNSSEC is disabled; retry or check resolver availability',
+                         requires_manual_verification=True)]
 
     if not dnskey_result.records:
         return [_finding('medium', 'DNSSEC is not enabled',
@@ -347,7 +351,8 @@ def _check_dnssec(domain: str) -> list[dict]:
         return [_finding('info', 'DNSKEY present, but could not determine DS record status',
                          f'DNS query for {domain} DS records did not resolve '
                          f'(status={ds_result.status}) — the zone appears signed, but whether '
-                         'the parent-zone chain of trust is closed could not be determined')]
+                         'the parent-zone chain of trust is closed could not be determined',
+                         requires_manual_verification=True)]
 
     if ds_result.records:
         return [_finding('ok', 'DNSSEC is enabled, a DS record is present at the parent zone')]
@@ -408,7 +413,8 @@ def _check_dangling_cnames(domain: str, subdomains: list[str]) -> list[dict]:
     if unresolved:
         findings.append(_finding('info', f'{len(unresolved)} subdomain(s) could not be checked for dangling CNAME',
                                  f'DNS collection failure (not "no record"), so these subdomains were skipped rather than '
-                                 f'reported as clean: {", ".join(unresolved)}'))
+                                 f'reported as clean: {", ".join(unresolved)}',
+                                 requires_manual_verification=True))
     has_dangling = any(f['severity'] in ('high', 'medium') for f in findings)
     if checked and not has_dangling:
         findings.append(_finding('ok', f'checked {checked} CNAME target(s), no dangling ones found'))
@@ -423,7 +429,8 @@ def _check_discovered_services(domain: str) -> list[dict]:
 
     if result.status in UNRESOLVED_STATUSES:
         return [_finding('info', 'could not check TXT records for third-party services',
-                         f'DNS query for {domain} TXT records did not resolve (status={result.status})')]
+                         f'DNS query for {domain} TXT records did not resolve (status={result.status})',
+                         requires_manual_verification=True)]
 
     found = []
     for txt in result.records:

@@ -114,19 +114,30 @@ def _result_param_pairs(check_id: str, ctx: dict, results: dict) -> list[tuple[d
     return [(ctx, result)]
 
 
+def _section_findings(section) -> list | None:
+    """A section's findings: a dict section keeps them under 'findings'
+    (server_audit), a list section is the findings (dns_audit). None for
+    any other shape."""
+    if isinstance(section, list):
+        return section
+    if isinstance(section, dict):
+        return section['findings'] if isinstance(section.get('findings'), list) else []
+    return None
+
+
 def _scoped_findings(result: dict) -> dict[str, list] | None:
     """Findings grouped by scope: '' for a flat result, the section name for a
-    sectioned one (server_audit: {'sections': {name: {'findings': [...]}}}).
-    Top-level findings win - a result is never counted twice. None when the
-    result has neither shape."""
+    sectioned one (server_audit: {'sections': {name: {'findings': [...]}}},
+    dns_audit: {'sections': {name: [...]}}). Top-level findings win - a result
+    is never counted twice. None when the result has neither shape."""
     findings = result.get('findings')
     if isinstance(findings, list):
         return {'': findings}
     sections = result.get('sections')
-    if isinstance(sections, dict) and sections and all(isinstance(s, dict) for s in sections.values()):
-        return {name: s['findings'] if isinstance(s.get('findings'), list) else []
-                for name, s in sections.items()}
-    return None
+    if not isinstance(sections, dict) or not sections:
+        return None
+    scoped = {name: _section_findings(s) for name, s in sections.items()}
+    return None if any(f is None for f in scoped.values()) else scoped
 
 
 def _snapshot(check_id: str, key: str, value, timestamp: str, result: dict,
@@ -149,13 +160,18 @@ def _snapshot(check_id: str, key: str, value, timestamp: str, result: dict,
 
     counts = dict.fromkeys(PROBLEM_SEVERITIES, 0)
     finding_ids = {}
-    # per scope: its ids and how many problems it could not verify - a
-    # "could not determine / no access" finding means that scope's missing
-    # ids were not evaluated, not fixed (Contract v1.2)
-    scopes = {name: {'ids': [], 'unverified': 0} for name in scoped}
+    # per scope: its ids, how many problems it could not verify, and its
+    # collection gaps (an 'info' "could not determine ..." with the same
+    # flag) - either means that scope's missing ids were not evaluated, not
+    # fixed (Contract v1.2, A4.1)
+    scopes = {name: {'ids': [], 'unverified': 0, 'gaps': 0} for name in scoped}
     for name, findings in scoped.items():
         for f in findings:
-            if not isinstance(f, dict) or f.get('severity') not in PROBLEM_SEVERITIES:
+            if not isinstance(f, dict):
+                continue
+            if f.get('severity') not in PROBLEM_SEVERITIES:
+                if f.get('requires_manual_verification'):
+                    scopes[name]['gaps'] += 1
                 continue
             counts[f['severity']] += 1
             if f.get('requires_manual_verification'):
@@ -225,15 +241,15 @@ def _point(snap: dict) -> dict:
 def _was_evaluated(fid: str, prev: dict, cur: dict) -> bool:
     """True if `cur` fully evaluated the scope `fid` belonged to in `prev`:
     that scope is present in `cur` and has no finding requiring manual
-    verification. Snapshots without scope data (hand-built, pre-v1.2 shape)
-    count as one fully evaluated scope."""
+    verification, of any severity. Snapshots without scope data (hand-built,
+    pre-v1.2 shape) count as one fully evaluated scope."""
     prev_scope = next((name for name, s in (prev.get('scopes') or {}).items()
                        if fid in s['ids']), '')
     cur_scopes = cur.get('scopes')
     if cur_scopes is None:
         return True
     scope = cur_scopes.get(prev_scope)
-    return scope is not None and scope['unverified'] == 0
+    return scope is not None and scope['unverified'] == 0 and scope.get('gaps', 0) == 0
 
 
 def _change(prev: dict, cur: dict) -> dict:

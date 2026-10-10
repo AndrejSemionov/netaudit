@@ -255,6 +255,16 @@ across all six sections) — this makes a collection failure visible in the
 report's shape itself, not just buried in per-section finding text a
 reader or the AI prompt might skim past.
 
+**Addendum (A4.1, 2026-10-10): `requires_manual_verification=True` on
+every collection failure.** The objection above was to the flag *together
+with* a `high`/`medium` severity. Severity stays `info`, so no colored pill
+appears, and the flag is now how other checks (`web_security_external`,
+`cve_audit`, `sqli`, `log_discovery_audit`) mark a collection gap. The trend
+layer reads it: a section with such a finding was not evaluated, so an id
+missing there is `not_evaluated`, never `resolved`
+(`docs/research/a4_1_dns_audit_trends.md`). Title, detail and
+`collection_failures` are unchanged.
+
 ## 6. Backlog: a first-class collection-failure state in the `Finding` model
 
 This audit's local fix (`severity='info'` + the `collection_failures`
