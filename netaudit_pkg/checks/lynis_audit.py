@@ -123,7 +123,10 @@ def check_lynis_audit(host='', user='root', port=22, key_path='', password='', s
         return {'error': f'could not connect: {e}'}
 
     try:
-        if not ssh.is_tool_installed('lynis'):
+        presence = ssh.tool_presence('lynis')
+        if presence.status == 'unknown':
+            return {'error': f'could not determine whether lynis is installed: {presence.detail}'}
+        if presence.status == 'absent':
             if not auto_install:
                 return {'error': 'lynis is not installed on the server',
                         'hint': 'apt install lynis -y (or enable auto_install)'}

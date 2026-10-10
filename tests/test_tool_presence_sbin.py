@@ -38,7 +38,7 @@ def test_tool_presence_looks_in_system_directories():
     ssh = _executor('/usr/sbin/lynis', 0)
     assert ssh.tool_presence('lynis').status == 'present'
     assert ssh.is_tool_installed('lynis') is True
-    assert "PATH='/usr/sbin:/sbin'" in ssh.calls[0]
+    assert 'PATH=/usr/sbin:/sbin:"$PATH" command -v lynis' in ssh.calls[0]
 
 
 def test_confirmed_absence_is_absent():
@@ -88,7 +88,7 @@ def test_rootkit_reports_an_unknown_probe_per_tool(monkeypatch):
     from netaudit_pkg.checks import rootkit_check
     fake = _unknown(FakeSSHExecutor())
     monkeypatch.setattr(rootkit_check, 'SSHExecutor', lambda *a, **kw: fake)
-    result = rootkit_check.check_rootkit(host='203.0.113.5', auto_install=True)
+    result = rootkit_check.check_rootkit(host='203.0.113.5')
     assert 'could not determine whether rkhunter is installed' in result['detail']
     assert 'could not determine whether chkrootkit is installed' in result['detail']
     assert 'is not installed' not in result['detail']

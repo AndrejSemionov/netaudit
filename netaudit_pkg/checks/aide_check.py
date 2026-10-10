@@ -193,7 +193,10 @@ def check_aide(host='', user='root', port=22, key_path='', password='', sudo_pas
         return {'error': f'could not connect: {e}'}
 
     try:
-        if not ssh.is_tool_installed('aide'):
+        presence = ssh.tool_presence('aide')
+        if presence.status == 'unknown':
+            return {'error': f'could not determine whether aide is installed: {presence.detail}'}
+        if presence.status == 'absent':
             if not auto_install:
                 return {'error': 'aide is not installed on the server',
                         'hint': 'apt install aide -y (or enable auto_install)'}
