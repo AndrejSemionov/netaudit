@@ -149,7 +149,7 @@ def test_full_flow_no_sudo_needed(monkeypatch):
             'docker inspect': _container_json(user='nginx', image='nginx:1.27'),
             'grep -rE': '',
         },
-        exit_codes={'docker ps -q': 0, 'docker inspect': 0},
+        exit_codes={'docker ps -q': 0, 'docker inspect': 0, 'grep -rE': 1},
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4', user='deploy')
@@ -166,7 +166,7 @@ def test_full_flow_falls_back_to_sudo_when_needed(monkeypatch):
                    'sudo -n -- docker inspect': _container_json(user='root', image='app:latest'),
                    'grep -rE': ''},
         exit_codes={'sudo -n -- docker ps -q': 0, 'docker ps -q': 1,
-                    'sudo -n -- docker inspect': 0},
+                    'sudo -n -- docker inspect': 0, 'grep -rE': 1},
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4', user='deploy')
@@ -185,7 +185,7 @@ def test_unprotected_daemon_socket_flagged_even_with_zero_containers(monkeypatch
             'docker ps -q': '',  # no running containers
             'grep -rE': '/etc/docker/daemon.json:  "hosts": ["tcp://0.0.0.0:2375"]\n',
         },
-        exit_codes={'docker ps -q': 0},
+        exit_codes={'docker ps -q': 0, 'grep -rE': 0},
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4')
@@ -261,7 +261,7 @@ def test_sudo_succeeds_after_unpriv_denied_with_scoped_sudoers(monkeypatch):
                    'sudo -n -- docker inspect': _container_json(user='nginx', image='nginx:1.27'),
                    'grep -rE': ''},
         exit_codes={'sudo -n -- docker ps -q': 0, 'docker ps -q': 1,
-                    'sudo -n -- docker inspect': 0},
+                    'sudo -n -- docker inspect': 0, 'grep -rE': 1},
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4')
@@ -283,7 +283,7 @@ def test_genuine_zero_containers_still_reports_ok_when_sudo_not_needed(monkeypat
             'docker ps -q': '',  # succeeds, genuinely empty - no sudo involved
             'grep -rE': '',
         },
-        exit_codes={'docker ps -q': 0},
+        exit_codes={'docker ps -q': 0, 'grep -rE': 1},
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4')
@@ -306,7 +306,7 @@ def test_docker_inspect_partial_failure_does_not_break_whole_audit(monkeypatch):
                    'docker inspect bad': 'not valid json',
                    'grep -rE': ''},
         exit_codes={'docker ps -q': 0, 'docker inspect good': 0,
-                    'docker inspect bad': 0},
+                    'docker inspect bad': 0, 'grep -rE': 1},
     )
     monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
     result = check_docker_audit(host='1.2.3.4')
