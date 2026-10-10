@@ -151,13 +151,15 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ### 5. Обновление кода
 
+Под пользователем службы (`netaudit`), из рабочей папки — одной командой:
 ```bash
-cd ~/netaudit
-git pull
-find . -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null
-sudo systemctl restart netaudit
+cd ~/netaudit && git pull origin main && sudo systemctl restart netaudit
 ```
 Затем в браузере жёсткое обновление (Ctrl+Shift+R), т.к. фронтенд кэшируется.
+
+База отчётов (`~/.netaudit/netaudit.db`) лежит вне папки с кодом, `git pull` её не трогает.
+Если обновление меняет `requirements.txt`, перед перезапуском выполните
+`pip install -r requirements.txt --break-system-packages`.
 
 Обновляете существующую установку до 1.0? Сначала сделайте резервную копию базы —
 см. [docs/upgrade_to_1_0.md](docs/upgrade_to_1_0.md) (резервная копия, проверка,

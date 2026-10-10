@@ -168,13 +168,15 @@ The generated config already includes `proxy_buffering off` — needed for the l
 
 ### 5. Updating
 
+As the service user (`netaudit`), from the working folder — one command:
 ```bash
-cd ~/netaudit
-git pull
-find . -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null
-sudo systemctl restart netaudit
+cd ~/netaudit && git pull origin main && sudo systemctl restart netaudit
 ```
 Then hard-refresh the browser (Ctrl+Shift+R), since the frontend is cached.
+
+The reports database (`~/.netaudit/netaudit.db`) is outside the git folder; `git pull`
+does not touch it. If an update changes `requirements.txt`, run
+`pip install -r requirements.txt --break-system-packages` before the restart.
 
 Upgrading an existing install to 1.0? Back up the database first - see
 [docs/upgrade_to_1_0.md](docs/upgrade_to_1_0.md) (backup, checks, optional
