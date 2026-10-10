@@ -12,6 +12,7 @@ on a failure.
 from __future__ import annotations
 
 import re
+import tomllib
 import warnings
 from pathlib import Path
 
@@ -45,3 +46,15 @@ def test_runtime_requirements_pin_pydantic_2():
 def test_dev_requirements_give_the_testclient_httpx2():
     # starlette 1.x's TestClient imports httpx2 first and warns on plain httpx
     assert any(re.match(r'httpx2\b', r) for r in _requirements('requirements-dev.txt'))
+
+
+def test_package_metadata_requires_pydantic_2():
+    # `pip install .` reads pyproject.toml, not requirements.txt.
+    project = tomllib.loads((ROOT / 'pyproject.toml').read_text(encoding='utf-8'))['project']
+    assert any(re.fullmatch(r'pydantic\s*>=\s*2(\.\d+)*', r) for r in project['dependencies'])
+
+
+def test_package_dev_extra_gives_testclient_httpx2():
+    # `pip install -e .[dev]` reads this list, not requirements-dev.txt.
+    project = tomllib.loads((ROOT / 'pyproject.toml').read_text(encoding='utf-8'))['project']
+    assert any(re.match(r'httpx2\b', r) for r in project['optional-dependencies']['dev'])
