@@ -162,3 +162,23 @@ def test_dropped_recheck_is_not_reported_as_failed_install(monkeypatch, module, 
     result = getattr(mod, func)(host='203.0.113.5', auto_install=True, confirm_modify=CONFIRM_MODIFY)
     assert result['error'].startswith(f'could not determine whether {tool} is installed')
     assert not any('apt-get' in c for c in ssh.calls)
+
+
+@pytest.mark.parametrize('module,func,tool', [
+    ('lynis_audit', 'check_lynis_audit', 'lynis'),
+    ('aide_check', 'check_aide', 'aide'),
+])
+def test_recheck_after_apt_that_drops_is_not_failed_install(monkeypatch, module, func, tool):
+    """GPT/Codex F8 pass 2: absent, absent again inside ensure_tool_installed(),
+    apt-get runs, the check after apt gets no marker. The headline must say
+    the outcome is unknown, not that the install failed."""
+    import importlib
+
+    from netaudit_pkg.registry import CONFIRM_MODIFY
+    mod = importlib.import_module(f'netaudit_pkg.checks.{module}')
+    ssh = _sequenced_executor([1, 1, None])
+    monkeypatch.setattr(mod, 'SSHExecutor', lambda *a, **kw: ssh)
+    result = getattr(mod, func)(host='203.0.113.5', auto_install=True, confirm_modify=CONFIRM_MODIFY)
+    assert any('apt-get install' in c for c in ssh.calls)
+    assert f'could not determine whether {tool} is installed now' in result['error']
+    assert not result['error'].startswith('failed to install')
