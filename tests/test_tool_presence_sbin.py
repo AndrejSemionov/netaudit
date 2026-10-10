@@ -146,3 +146,19 @@ def test_post_install_probe_that_drops_is_not_failed_to_install():
     assert any('apt-get install' in c for c in ssh.calls)
     assert 'could not determine whether lynis is installed' in error
     assert 'failed to install' not in error
+
+
+@pytest.mark.parametrize('module,func,tool', [
+    ('lynis_audit', 'check_lynis_audit', 'lynis'),
+    ('aide_check', 'check_aide', 'aide'),
+])
+def test_dropped_recheck_is_not_reported_as_failed_install(monkeypatch, module, func, tool):
+    import importlib
+
+    from netaudit_pkg.registry import CONFIRM_MODIFY
+    mod = importlib.import_module(f'netaudit_pkg.checks.{module}')
+    ssh = _sequenced_executor([1, None])
+    monkeypatch.setattr(mod, 'SSHExecutor', lambda *a, **kw: ssh)
+    result = getattr(mod, func)(host='203.0.113.5', auto_install=True, confirm_modify=CONFIRM_MODIFY)
+    assert result['error'].startswith(f'could not determine whether {tool} is installed')
+    assert not any('apt-get' in c for c in ssh.calls)
