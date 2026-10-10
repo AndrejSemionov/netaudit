@@ -9,7 +9,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 from ..registry import register
-from ..utils import run_cmd, tool_available
+from ..utils import last_response_headers, run_cmd, tool_available
 
 CURL_TIMING = (
     '{"dns_ms":%{time_namelookup},"connect_ms":%{time_connect},'
@@ -74,10 +74,16 @@ def check_ssl(url: str = 'https://example.com', method: str = 'auto') -> dict:
     stdlib = _ssl_stdlib(hostname)
     _code2, out2, _ = run_cmd(['openssl', 's_client', '-connect', f'{hostname}:443',
                               '-servername', hostname, '-showcerts'], timeout=15, input_text='Q\n')
-    return {'ok': True, 'hostname': hostname, 'protocol': protocol, 'cipher': cipher,
-            'cert_chain_length': out2.count('BEGIN CERTIFICATE'),
-            'expires': stdlib.get('expires'), 'days_left': stdlib.get('days_left'),
-            'issuer': stdlib.get('issuer'), 'tool_used': 'openssl'}
+    result = {'ok': True, 'hostname': hostname, 'protocol': protocol, 'cipher': cipher,
+              'cert_chain_length': out2.count('BEGIN CERTIFICATE'),
+              'expires': stdlib.get('expires'), 'days_left': stdlib.get('days_left'),
+              'issuer': stdlib.get('issuer'), 'tool_used': 'openssl'}
+    if not stdlib.get('ok'):
+        # s_client -brief connects whatever the certificate; the verifying
+        # stdlib connection decides (F2, RA-01: expired / self-signed /
+        # wrong-host certificates used to come back ok: True)
+        result.update(ok=False, error=stdlib.get('error') or 'certificate verification failed')
+    return result
 
 
 @register(
@@ -145,7 +151,7 @@ def check_security_headers(url: str = 'https://example.com') -> dict:
     if code != 0:
         return {'error': err.strip()}
     headers = {}
-    for line in out.splitlines():
+    for line in last_response_headers(out).splitlines():
         if ':' in line:
             k, _, v = line.partition(':')
             headers[k.strip().lower()] = v.strip()

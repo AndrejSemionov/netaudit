@@ -1,10 +1,11 @@
 """Shared utilities: subprocess execution without shell=True, binary availability check, logging,
-IP address check."""
+IP address check, the final response of a `curl -I -L` header dump."""
 
 from __future__ import annotations
 
 import ipaddress
 import logging
+import re
 import shutil
 import subprocess  # nosec B404 - this module IS the shared safe-subprocess wrapper (never shell=True), see run_cmd() below
 import sys
@@ -47,3 +48,15 @@ def is_ip_address(value: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+_HTTP_STATUS_LINE = re.compile(r'^HTTP/\S+\s+\d{3}', re.MULTILINE)
+
+
+def last_response_headers(head: str) -> str:
+    """The header block of the last response in a `curl -I -L` dump, which
+    prints every response of the redirect chain (F2, RA-11: a header sent
+    only by an intermediate redirect is not on the final page). The whole
+    text when there is no status line."""
+    starts = [m.start() for m in _HTTP_STATUS_LINE.finditer(head)]
+    return head[starts[-1]:] if starts else head
