@@ -222,10 +222,40 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='', 
         # any containers are currently running — the socket is dangerous on its
         # own, even when everything is stopped
         socket_check_cmd = (
-            "grep -rE 'tcp://.*2375' /etc/docker/daemon.json /lib/systemd/system/docker.service "
-            "/etc/systemd/system/docker.service.d/*.conf 2>/dev/null || true"
+            "netaudit_socket_probe() { "
+            "if [ -d /etc/systemd/system/docker.service.d ] && "
+            "[ ! -r /etc/systemd/system/docker.service.d ]; then return 2; fi; "
+            "if [ -d /etc/systemd/system/docker.service.d ] && "
+            "[ ! -x /etc/systemd/system/docker.service.d ]; then return 2; fi; "
+            "found=1; "
+            "for path in /etc/docker/daemon.json /lib/systemd/system/docker.service "
+            "/etc/systemd/system/docker.service.d/*.conf; do "
+            "if [ ! -e \"$path\" ]; then "
+            "[ -L \"$path\" ] && return 2; continue; fi; "
+            "[ -f \"$path\" ] || return 2; "
+            "grep -rE 'tcp://.*2375' \"$path\"; code=$?; "
+            "case \"$code\" in 0) found=0;; 1) ;; *) return 2;; esac; "
+            "done; return \"$found\"; "
+            "}; netaudit_socket_probe"
         )
-        socket_out, _ = ssh.run(socket_check_cmd)
+        try:
+            socket_out, socket_code = run_command_with_exit_code(ssh, socket_check_cmd)
+        except Exception as e:  # noqa: BLE001 - a socket probe failure must not discard valid container results
+            socket_out, socket_code = '', None
+            socket_error = f'Docker socket configuration probe failed: {type(e).__name__}'
+        else:
+            if socket_code is None:
+                socket_error = 'Docker socket configuration probe did not complete'
+            elif socket_code not in (0, 1):
+                socket_error = f'Docker socket configuration probe failed (exit {socket_code})'
+            elif (socket_code == 0) != bool(socket_out.strip()):
+                socket_error = 'Docker socket configuration probe returned inconsistent output and exit status'
+            else:
+                socket_error = None
+
+        socket_probe_status = ('unknown' if socket_error else
+                               'exposed' if socket_code == 0 else 'no_match')
+        warnings = []
 
         all_findings = []
         if socket_out.strip():
@@ -235,6 +265,13 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='', 
                 'for anyone who can reach it over the network',
                 id='DCK-API-001',
             ))
+        if socket_error:
+            all_findings.append(_finding(
+                'info', 'could not determine whether the Docker daemon TCP socket is exposed',
+                socket_error + ' — check the Docker daemon configuration manually',
+                requires_manual_verification=True,
+            ))
+            warnings.append(socket_error)
 
         if not container_ids:
             if not all_findings:
@@ -242,7 +279,11 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='', 
             counts = {'high': 0, 'medium': 0, 'low': 0, 'ok': 0}
             for f in all_findings:
                 counts[f['severity']] = counts.get(f['severity'], 0) + 1
-            return {'host': host, 'containers_checked': 0, 'findings': all_findings, 'summary': counts}
+            result = {'host': host, 'containers_checked': 0, 'findings': all_findings,
+                      'summary': counts, 'socket_probe_status': socket_probe_status}
+            if warnings:
+                result['warnings'] = warnings
+            return result
 
         incomplete_ids = []
         inspected_count = 0
@@ -294,7 +335,10 @@ def check_docker_audit(host='', user='root', port=22, key_path='', password='', 
         'containers_inspected': inspected_count,
         'findings': all_findings,
         'summary': counts,
+        'socket_probe_status': socket_probe_status,
     }
     if incomplete_ids:
-        result['warnings'] = [f'could not inspect {len(incomplete_ids)} of {len(container_ids)} containers']
+        warnings.append(f'could not inspect {len(incomplete_ids)} of {len(container_ids)} containers')
+    if warnings:
+        result['warnings'] = warnings
     return result

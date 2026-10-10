@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+
 from netaudit_pkg.checks.docker_audit import check_docker_audit
 from tests.conftest import ExitCodeFakeSSHExecutor
 
@@ -91,3 +93,37 @@ def test_ssh_exception_in_socket_probe_is_unknown(monkeypatch):
     assert result['socket_probe_status'] == 'unknown'
     assert not any(f['severity'] == 'ok' for f in result['findings'])
     assert 'socket' in result['warnings'][0].lower()
+
+
+def test_remote_shell_probe_distinguishes_missing_match_and_bad_file(monkeypatch, tmp_path):
+    """Exercise the actual fixed shell command, including its exit marker."""
+    daemon = tmp_path / 'daemon.json'
+    service = tmp_path / 'docker.service'
+    dropins = tmp_path / 'docker.service.d'
+
+    class LocalShellProbe(ExitCodeFakeSSHExecutor):
+        def run(self, cmd, timeout=20, stdin_data=None):
+            if 'grep -rE' in cmd:
+                replacements = {
+                    '/etc/docker/daemon.json': str(daemon),
+                    '/lib/systemd/system/docker.service': str(service),
+                    '/etc/systemd/system/docker.service.d': str(dropins),
+                }
+                for original, local in replacements.items():
+                    cmd = cmd.replace(original, local)
+                completed = subprocess.run(
+                    ['sh', '-c', cmd], capture_output=True, text=True, check=False,
+                )
+                return completed.stdout, completed.stderr
+            return super().run(cmd, timeout=timeout, stdin_data=stdin_data)
+
+    fake = LocalShellProbe(installed_tools={'docker'}, responses={'docker ps -q': ''},
+                           exit_codes={'docker ps -q': 0})
+    monkeypatch.setattr('netaudit_pkg.checks.docker_audit.SSHExecutor', lambda *a, **kw: fake)
+
+    assert check_docker_audit(host='example.test')['socket_probe_status'] == 'no_match'
+    daemon.write_text('{"hosts":["tcp://0.0.0.0:2375"]}', encoding='utf-8')
+    assert check_docker_audit(host='example.test')['socket_probe_status'] == 'exposed'
+    daemon.unlink()
+    daemon.mkdir()  # an existing non-file source is an error, not an absent optional file
+    assert check_docker_audit(host='example.test')['socket_probe_status'] == 'unknown'
