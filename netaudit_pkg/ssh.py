@@ -279,8 +279,12 @@ class SSHExecutor:
             return False, f'{tool} is not on the install allowlist (see tools.py TOOL_PACKAGES)'
 
         self.sudo(f'apt-get install -y {package} 2>&1', timeout=timeout)
-        if self.is_tool_installed(tool):
+        after = self.tool_presence(tool)
+        if after.status == 'present':
             return True, None
+        if after.status == 'unknown':
+            return False, (f'ran apt-get install {package}, but could not determine whether '
+                           f'{tool} is installed now: {after.detail}')
         return False, f'failed to install {tool} (package {package})'
 
     def close(self) -> None:
