@@ -7,8 +7,6 @@
   and has `./deploy.sh --rollback`. It deploys everything since the last
   deployed commit (not only the last pull), removes files deleted in git, and
   treats HTTP 401 from the smoke test (Basic Auth on) as a warning.
-- The systemd sandboxing audit now confirms a unit's `LoadState` and requires
-  a nonempty directive model before reporting it as hardened.
 - In the Russian interface, the SSH fields shared by many checks (host, user,
   port, key, SSH and sudo passwords, log lines) are translated even where the
   check itself has no translation yet.
@@ -31,6 +29,8 @@
   ("status could not be confirmed even with sudo") instead of `F2B-STAT-001`
   ("could not determine fail2ban status"); both are low. Trends show this
   once, as one finding resolved and one new.
+- The systemd sandboxing audit now confirms a unit's `LoadState` and requires
+  a nonempty directive model before reporting it as hardened.
 - `aide_check` no longer reports "AIDE database initialized" when sudo refused
   `aide --init` or the new database was not moved into place, and a refused
   sudo is no longer reported as a missing database.
