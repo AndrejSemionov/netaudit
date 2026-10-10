@@ -68,7 +68,7 @@ restore_backup() {
         rm -f -- "$RUNTIME_DIR/$rel" || return 1
     done < "$dir/added.txt"
     if [ -f "$dir/manifest" ]; then
-        cp "$dir/manifest" "$MANIFEST_PATH" || return 1
+        cp -f "$dir/manifest" "$MANIFEST_PATH" || return 1  # -f: a read-only manifest is replaced
         chmod 644 "$MANIFEST_PATH" || return 1
     else
         rm -f "$MANIFEST_PATH" || return 1
@@ -190,12 +190,14 @@ PY
 }
 
 prune_backups() {
+    # Returns non-zero when an old backup could not be removed.
     local -a all
     mapfile -t all < <(backup_dirs all)
-    local extra=$(( ${#all[@]} - KEEP_BACKUPS )) i
+    local extra=$(( ${#all[@]} - KEEP_BACKUPS )) i failed=0
     for (( i = 0; i < extra; i++ )); do
-        rm -rf -- "${all[$i]}"
+        rm -rf -- "${all[$i]}" || failed=1
     done
+    return "$failed"
 }
 
 cd "$GIT_DIR"
@@ -360,22 +362,29 @@ else
     echo "[deploy] Smoke test OK — /api/checks returned $CHECK_COUNT registered check(s)."
 fi
 
-trap - ERR
-
-# --- Step 10: write deployment manifest ---
+# --- Step 10: write deployment manifest. Still under the ERR trap: the deploy
+# is not finished until the manifest names the new commit, so a failure here
+# rolls back like any other. Written next to the old one and renamed into
+# place: never half-written, and the old file's mode does not matter. ---
 COMMIT=$(git rev-parse --short HEAD)
 DEPLOYED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-cat > "$MANIFEST_PATH" << EOF
+cat > "$MANIFEST_PATH.new" << EOF
 DEPLOYED_COMMIT=$COMMIT
 DEPLOYED_AT=$DEPLOYED_AT
 SERVICE_STARTED_AT=$ACTIVE_ENTER
 FILES_DEPLOYED=$(( ${#DEPLOY[@]} + ${#DELETE[@]} ))
 EOF
+mv -f "$MANIFEST_PATH.new" "$MANIFEST_PATH"
+
+trap - ERR
 echo ""
 echo "[deploy] Manifest written to $MANIFEST_PATH:"
 cat "$MANIFEST_PATH"
 
-prune_backups
+# The deploy is done; removing old backups is housekeeping.
+if ! prune_backups; then
+    echo "[deploy] WARNING: could not remove every old backup in $BACKUP_ROOT — remove them by hand."
+fi
 
 echo ""
 echo "=== DEPLOYMENT SUCCESS ==="

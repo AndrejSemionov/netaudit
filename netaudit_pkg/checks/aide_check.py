@@ -109,7 +109,7 @@ def _database_presence_error(ssh: SSHExecutor) -> dict | None:
             return {'error': 'could not confirm whether the AIDE database exists'}
         if r.sudo_error:
             return {'error': f'sudo refused the AIDE database check: {r.sudo_error}',
-                    'hint': 'set the password field (used for sudo) or allow `test` and `aide` via sudoers'}
+                    'hint': 'fill in "Sudo password" or allow `test` and `aide` via sudoers'}
         if r.exit_code == 0:
             return None
     return {'error': 'AIDE database not found — run this same check with mode=init first',
@@ -126,7 +126,7 @@ def _init_database(ssh: SSHExecutor, host: str) -> dict:
         return {'error': 'aide --init did not complete'}
     if init.sudo_error:
         return {'error': f'sudo refused aide --init: {init.sudo_error}',
-                'hint': 'set the password field (used for sudo) or allow `aide` and `mv` via sudoers'}
+                'hint': 'fill in "Sudo password" or allow `aide` and `mv` via sudoers'}
     if init.exit_code != 0:
         name = AIDE_ERROR_CODES.get(init.exit_code)
         code = f'exit {init.exit_code}: {name}' if name else f'exit {init.exit_code}'

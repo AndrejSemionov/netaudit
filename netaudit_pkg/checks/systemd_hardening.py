@@ -213,7 +213,7 @@ def check_systemd_hardening(host='', user='root', port=22, key_path='', password
                             'timed out)'}
         if json_result.sudo_error:
             return {'error': f'sudo refused systemd-analyze: {json_result.sudo_error}',
-                    'hint': 'set the password field (used for sudo) or allow the SSH user to run '
+                    'hint': 'fill in "Sudo password" or allow the SSH user to run '
                             'systemd-analyze via a NOPASSWD sudoers rule'}
         if json_result.exit_code != 0:
             output = '\n'.join(part for part in (json_result.stdout.strip(), json_result.stderr.strip()) if part)
