@@ -35,6 +35,11 @@
 - An encrypted SSH key that ssh-agent does not provide fails with an explicit
   error. The SSH `password` field is labelled as the sudo password too.
 - Removed the unused `SSHExecutor.needs_sudo_password()`.
+- Raw outputs no longer hide failures: `ssh_audit` keeps journalctl's
+  permission hint and exit status and no longer prints "no access" for an
+  sshd_config without the grepped lines; `dig` reports the DNS status
+  (NXDOMAIN, SERVFAIL as an error); the local `firewall` check shows why
+  `ufw`/`nft` failed; `ping`/`arping` report unparsable output as an error.
 - Web presets no longer store or return SSH passwords; enter the password
   again after applying a preset. Presets saved earlier are stripped when read,
   and `scrub_legacy_secrets` now also removes passwords from the `presets`
