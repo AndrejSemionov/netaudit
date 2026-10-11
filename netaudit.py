@@ -34,8 +34,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from netaudit_pkg import __version__, storage, trends
-from netaudit_pkg.engine import list_available, run_checks
+from netaudit_pkg import __version__, hosts, storage, trends
+from netaudit_pkg.engine import list_available, run_checks, run_checks_multi
 from netaudit_pkg.history import ai_analyze, list_reports, load_report, save_report
 from netaudit_pkg.utils import log
 
@@ -67,19 +67,30 @@ def cmd_list(args):
                 print(f"                 └─ --{p['name']} ({p['type']}, default={p['default']})")
 
 
-def cmd_run(args):
+def _parse_run_params(tokens: list[str]) -> dict:
+    """`--name value` pairs after `netaudit run`. The same name twice is
+    refused: the last value used to win silently (B2.2)."""
     extra = {}
     i = 0
-    unknown = args.rest
-    while i < len(unknown):
-        if unknown[i].startswith('--'):
-            key = unknown[i][2:]
-            val = unknown[i + 1] if i + 1 < len(unknown) else ''
-            extra[key] = val
+    while i < len(tokens):
+        if tokens[i].startswith('--'):
+            key = tokens[i][2:]
+            if key in extra:
+                hint = '; to audit several hosts use --hosts-file <json>' if key == 'host' else ''
+                log.error(f'--{key} given more than once{hint}')
+                sys.exit(1)
+            extra[key] = tokens[i + 1] if i + 1 < len(tokens) else ''
             i += 2
         else:
             i += 1
+    return extra
 
+
+def _typed(param: dict, value):
+    return int(value) if param['type'] == 'number' and str(value).isdigit() else value
+
+
+def _single_selection(args, extra: dict) -> list[dict]:
     check_ids = args.checks or []
     if args.quick:
         if not check_ids:
@@ -112,10 +123,73 @@ def cmd_run(args):
                         if p['name'] not in asked:
                             asked[p['name']] = getpass.getpass(f'{p["name"]} for {check_id}: ')
                         v = asked[p['name']]
-                    spec_params[p['name']] = int(v) if p['type'] == 'number' and str(v).isdigit() else v
+                    spec_params[p['name']] = _typed(p, v)
         selected.append({'id': check_id, 'params': spec_params})
+    return selected
 
-    report = run_checks(selected)
+
+def _group_selection(args, extra: dict, hosts_file: str) -> list[dict]:
+    """One instance per host record for every selected check (B2.2,
+    docs/research/b2_2_cli_hosts_file.md). Everything is validated before
+    the first password prompt and before anything runs."""
+    def refuse(message):
+        log.error(message)
+        sys.exit(1)
+
+    if args.quick:
+        refuse('--quick cannot be combined with --hosts-file; name the checks to run on every host')
+    if 'host' in extra:
+        refuse('--host cannot be combined with --hosts-file; the hosts come from the file')
+    check_ids = args.checks or []
+    if not check_ids:
+        refuse("No checks given. Use 'netaudit run <check_id> ... --hosts-file <json>'.")
+
+    try:
+        records = hosts.load_hosts_file(hosts_file)
+        for record in records:
+            if 'key_path' in record:
+                record['key_path'] = hosts.readable_key_path(record['key_path'])
+        if extra.get('key_path'):
+            extra['key_path'] = hosts.readable_key_path(extra['key_path'])
+    except hosts.HostRecordError as e:
+        refuse(str(e))
+
+    avail = {c['id']: c for c in list_available()}
+    no_host = [c for c in check_ids
+               if c not in avail or not any(p['name'] == 'host' for p in avail[c]['params'])]
+    if no_host:
+        refuse(f'{", ".join(no_host)}: no host parameter; run without --hosts-file')
+
+    selected = []
+    asked: dict[str, str] = {}
+    for check_id in check_ids:
+        names = {p['name'] for p in avail[check_id]['params']}
+        common = {}
+        for p in avail[check_id]['params']:
+            if p['name'] not in extra:
+                continue
+            v = extra[p['name']]
+            if p['type'] == 'password':
+                # in a group run a secret is only ever asked for: a value on
+                # the command line is visible in ps and shell history
+                if v != '-':
+                    refuse(f'--{p["name"]}: in a group run give it as "--{p["name"]} -" to be asked without echo')
+                if p['name'] not in asked:
+                    asked[p['name']] = getpass.getpass(f'{p["name"]} (all hosts): ')
+                v = asked[p['name']]
+            common[p['name']] = _typed(p, v)
+        instances = [{**common, **{k: v for k, v in record.items() if k in names}} for record in records]
+        selected.append({'id': check_id, 'instances': instances})
+    return selected
+
+
+def cmd_run(args):
+    extra = _parse_run_params(args.rest)
+    hosts_file = extra.pop('hosts-file', None)
+    if hosts_file is not None:
+        report = run_checks_multi(_group_selection(args, extra, hosts_file))
+    else:
+        report = run_checks(_single_selection(args, extra))
     saved = save_report(report)
     log.info(f'Report saved: {saved}')
     print(json.dumps(report, ensure_ascii=False, indent=2))
