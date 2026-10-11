@@ -69,28 +69,35 @@ jobs:
           docker build -q -t netaudit-e2e tests/e2e
           docker run -d --name stand -p 127.0.0.1:2222:22 -e E2E_PASSWORD="$E2E_PASSWORD" \
             -v "$RUNNER_TEMP/e2e/id_ed25519.pub:/stand/authorized_keys:ro" netaudit-e2e
+          # a second server for multi-host runs (B2.5)
+          docker run -d --name stand2 -p 127.0.0.1:2223:22 -e E2E_PASSWORD="$E2E_PASSWORD" \
+            -v "$RUNNER_TEMP/e2e/id_ed25519.pub:/stand/authorized_keys:ro" netaudit-e2e
           python - <<'WAIT'
           import socket, time
-          for _ in range(60):
-              try:
-                  with socket.create_connection(('127.0.0.1', 2222), timeout=2) as s:
-                      if s.recv(64).startswith(b'SSH-'):
-                          break
-              except OSError:
-                  pass
-              time.sleep(1)
-          else:
-              raise SystemExit('the SSH stand did not start')
+          for port in (2222, 2223):
+              for _ in range(60):
+                  try:
+                      with socket.create_connection(('127.0.0.1', port), timeout=2) as s:
+                          if s.recv(64).startswith(b'SSH-'):
+                              break
+                  except OSError:
+                      pass
+                  time.sleep(1)
+              else:
+                  raise SystemExit(f'the SSH stand on port {port} did not start')
           WAIT
       - name: E2E tests
         env:
           NETAUDIT_E2E_HOST: 127.0.0.1
           NETAUDIT_E2E_PORT: '2222'
+          NETAUDIT_E2E_PORT2: '2223'
           NETAUDIT_E2E_KEY: ${{ runner.temp }}/e2e/id_ed25519
         run: python -m pytest tests/e2e -v
       - name: Stand log
         if: always()
-        run: docker logs stand 2>&1 | tail -40
+        run: |
+          docker logs stand 2>&1 | tail -40
+          docker logs stand2 2>&1 | tail -20
 
   security:
     runs-on: ubuntu-latest

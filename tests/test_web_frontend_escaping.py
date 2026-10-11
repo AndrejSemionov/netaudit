@@ -39,6 +39,9 @@ HTML_WRITERS = {
     'loadRep': 'escapes',
     'loadTools': 'escapes',
     'loadTargets': 'escapes',
+    'loadSshHosts': 'escapes',
+    'loadHostPicker': 'escapes',
+    'applySavedHosts': 'code-defined',  # renderParamsInstance(); record values set via .value
     'loadPresetBar': 'escapes',
     'loadPresetsManage': 'escapes',
     'loadSavedTargetsDatalist': 'escapes',

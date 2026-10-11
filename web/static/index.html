@@ -202,6 +202,7 @@
 <div class="layout">
   <aside class="sidebar">
     <div id="presetBar" style="margin-bottom:16px"></div>
+    <div id="hostPicker" style="margin-bottom:16px"></div>
     <div id="checkList"></div>
     <div class="run-bar">
       <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--muted);margin-bottom:8px">
@@ -376,6 +377,23 @@
           <select id="newTargetKind"><option value="ip">IP</option><option value="url">URL</option></select></div>
         <button class="btn-sm" onclick="addTarget()">＋</button>
       </div>
+    </div>
+
+    <div class="settings-group">
+      <h2 data-i18n="sshhosts.title">SSH-хосты</h2>
+      <p class="hint" data-i18n="sshhosts.hint">Серверы для аудита нескольких хостов сразу. Пароли здесь не хранятся — их вводят при запуске.</p>
+      <div id="sshHostsList"></div>
+      <div class="field-row" style="margin-top:12px">
+        <div class="field"><label data-i18n="sshhosts.label">Метка</label><input type="text" id="newSshHostLabel" maxlength="100"></div>
+        <div class="field"><label data-i18n="sshhosts.host">Хост</label><input type="text" id="newSshHostHost" placeholder="10.0.0.5"></div>
+        <div class="field"><label data-i18n="sshhosts.user">Пользователь</label><input type="text" id="newSshHostUser" placeholder="root"></div>
+      </div>
+      <div class="field-row">
+        <div class="field" style="flex:0 0 90px"><label data-i18n="sshhosts.port">Порт</label><input type="number" id="newSshHostPort" placeholder="22" min="1" max="65535"></div>
+        <div class="field"><label data-i18n="sshhosts.key">Путь к ключу</label><input type="text" id="newSshHostKey" placeholder="~/.ssh/id_ed25519"></div>
+        <button class="btn-sm" onclick="addSshHost()">＋</button>
+      </div>
+      <div id="sshHostMsg" class="hint"></div>
     </div>
 
     <div class="settings-group">
@@ -1047,7 +1065,12 @@ async function runAudit() {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ checks, force_async: forceAsync })
   });
-  const { task_id } = await res.json();
+  const started = await res.json().catch(() => ({}));
+  if (!res.ok || !started.task_id) {
+    setStatus(t('run.error') + ': ' + (started.detail || t('run.unknown')));
+    return;
+  }
+  const { task_id } = started;
 
   // UI: кнопка запуска -> стоп
   const runBtn = document.getElementById('runBtn');
@@ -1825,6 +1848,7 @@ async function loadSettings() {
   waStatus.textContent = s.web_auth_configured ? t('settings.webauth.configured').replace('{user}', s.web_auth_user || '') : t('settings.webauth.not_configured');
   waStatus.style.color = s.web_auth_configured ? 'var(--ok)' : 'var(--warn)';
   loadTargets();
+  loadSshHosts();
   loadPresetsManage();
   loadTools();
   loadRep();
@@ -2037,6 +2061,122 @@ async function delTarget(id) {
   loadTargets(); loadSavedTargetsDatalist();
 }
 
+// ---- Сохранённые SSH-хосты (B2.3) ----
+// raw records for filling inputs (.value, never HTML); escaped copies render lists
+let SAVED_HOSTS = [];
+
+async function loadSshHosts() {
+  const res = await fetch('/api/hosts');
+  const saved = escDeep(await res.json());
+  const root = document.getElementById('sshHostsList');
+  root.innerHTML = saved.length ? saved.map(x =>
+    `<div class="list-row"><span class="grow">${x.label ? x.label + ' — ' : ''}${x.user ? x.user + '@' : ''}${x.host}${x.port ? ':' + x.port : ''}${x.key_path ? ' <span style="color:var(--muted)">[' + x.key_path + ']</span>' : ''}</span>
+     <button class="btn-danger btn-sm" onclick="delSshHost(${x.id})">${t('delete')}</button></div>`).join('')
+    : `<div style="color:var(--muted);font-size:15px">${t('sshhosts.empty')}</div>`;
+}
+async function addSshHost() {
+  const msg = document.getElementById('sshHostMsg');
+  const host = document.getElementById('newSshHostHost').value.trim();
+  if (!host) return;
+  const body = { host, label: document.getElementById('newSshHostLabel').value.trim() };
+  const user = document.getElementById('newSshHostUser').value.trim();
+  const port = document.getElementById('newSshHostPort').value.trim();
+  const keyPath = document.getElementById('newSshHostKey').value.trim();
+  if (user) body.user = user;
+  if (port) body.port = Number(port);
+  if (keyPath) body.key_path = keyPath;
+  const res = await fetch('/api/hosts', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  if (!res.ok) {
+    const r = await res.json().catch(() => ({}));
+    msg.textContent = '✗ ' + (r.detail || t('sshhosts.failed'));
+    return;
+  }
+  msg.textContent = '';
+  ['newSshHostLabel', 'newSshHostHost', 'newSshHostUser', 'newSshHostPort', 'newSshHostKey']
+    .forEach(id => { document.getElementById(id).value = ''; });
+  loadSshHosts(); loadHostPicker();
+}
+async function delSshHost(id) {
+  await fetch('/api/hosts/' + id, { method: 'DELETE' });
+  loadSshHosts(); loadHostPicker();
+}
+
+async function loadHostPicker() {
+  const res = await fetch('/api/hosts');
+  SAVED_HOSTS = await res.json();
+  const shown = escDeep(SAVED_HOSTS);
+  const root = document.getElementById('hostPicker');
+  if (!shown.length) { root.innerHTML = ''; return; }
+  root.innerHTML = `<div style="font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);font-family:var(--mono);margin-bottom:6px">${t('hostpicker.title')}</div>` +
+    shown.map((x, i) => `<label style="display:flex;align-items:center;gap:6px;font-size:14px"><input type="checkbox" data-host-index="${i}" style="width:auto">${x.label ? x.label + ' — ' : ''}${x.user ? x.user + '@' : ''}${x.host}${x.port ? ':' + x.port : ''}</label>`).join('') +
+    `<button type="button" class="btn-sm" style="margin-top:6px" onclick="applySavedHosts()">${t('hostpicker.apply')}</button>
+     <div id="hostPickerMsg" class="hint"></div>`;
+}
+
+// One host block per chosen saved host in every selected multi-host check:
+// the record fills host/user/port/key_path, every other field (passwords
+// included) is copied from the check's first block. Nothing is saved.
+async function applySavedHosts() {
+  const msg = document.getElementById('hostPickerMsg');
+  const chosen = Array.from(document.querySelectorAll('#hostPicker input[data-host-index]:checked'))
+    .map(cb => SAVED_HOSTS[Number(cb.dataset.hostIndex)]);
+  if (!chosen.length) { msg.textContent = t('hostpicker.none_chosen'); return; }
+  const seen = new Set();
+  for (const h of chosen) {
+    const key = h.host.toLowerCase();
+    if (seen.has(key)) { msg.textContent = t('hostpicker.duplicate').replace('{host}', h.host); return; }
+    seen.add(key);
+  }
+  const targets = Array.from(document.querySelectorAll('.check.sel')).filter(el => {
+    const c = CHECKS.find(cc => cc.id === el.dataset.id);
+    return c && c.params.some(p => p.name === 'host') && !NO_MULTI_HOST_IDS.has(c.id);
+  });
+  if (!targets.length) { msg.textContent = t('hostpicker.no_checks'); return; }
+  try {
+    const res = await fetch('/api/hosts/validate-selection', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ ids: chosen.map(h => h.id) })
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const duplicate = res.status === 409 && chosen.find(h => h.id === body.detail?.duplicate_id);
+      msg.textContent = duplicate
+        ? t('hostpicker.duplicate').replace('{host}', duplicate.host)
+        : t('hostpicker.validation_failed');
+      return;
+    }
+  } catch (e) { msg.textContent = t('hostpicker.validation_failed'); return; }
+  targets.forEach(el => {
+    const checkId = el.dataset.id;
+    const c = CHECKS.find(cc => cc.id === checkId);
+    const tr = tCheck(c);
+    const instancesEl = el.querySelector('.instances');
+    const common = {};
+    instancesEl.querySelectorAll('.params[data-instance="0"] [data-param]').forEach(inp => {
+      common[inp.dataset.param] = inp.type === 'checkbox' ? inp.checked : inp.value;
+    });
+    instancesEl.innerHTML = '';
+    chosen.forEach((h, i) => {
+      const block = document.createElement('div');
+      block.className = 'params';
+      block.dataset.instance = String(i);
+      block.innerHTML = renderParamsInstance(c, tr, i) + (i > 0
+        ? `<button type="button" class="remove-host-btn" onclick="event.stopPropagation(); removeHostInstance('${checkId}', ${i})">${t('run.remove_host')}</button>`
+        : '');
+      instancesEl.appendChild(block);
+      block.querySelectorAll('[data-param]').forEach(inp => {
+        const name = inp.dataset.param;
+        const fromRecord = ['host', 'user', 'port', 'key_path'].includes(name) && h[name] !== null && h[name] !== undefined;
+        const v = fromRecord ? h[name] : common[name];
+        if (v === undefined) return;
+        if (inp.type === 'checkbox') inp.checked = Boolean(v); else inp.value = String(v);
+      });
+    });
+  });
+  msg.textContent = t('hostpicker.applied').replace('{hosts}', chosen.length).replace('{checks}', targets.length);
+  updateEstimate();
+}
+
 // ---- Пресеты ----
 async function loadPresetBar() {
   const res = await fetch('/api/presets');
@@ -2133,6 +2273,7 @@ function setLang(lang) {
   document.querySelectorAll('.lang-en').forEach(el => { el.style.display = (CURRENT_LANG === 'en') ? '' : 'none'; });
   // перерисовать открытые вкладки, если функции доступны
   try { if (typeof loadPresetBar === 'function') loadPresetBar(); } catch(e){}
+  try { if (typeof loadHostPicker === 'function') loadHostPicker(); } catch(e){}
   try { if (typeof loadPresetsManage === 'function' && document.getElementById('presetsManage')) loadPresetsManage(); } catch(e){}
   const status = document.getElementById('status');
   if (status && status.getAttribute('data-i18n')) status.textContent = t('select.hint');
@@ -2142,7 +2283,7 @@ function setLang(lang) {
 CURRENT_LANG = detectLang();
 
 document.getElementById('forceAsync').addEventListener('change', updateEstimate);
-loadChecks().then(() => { loadPresetBar(); loadSavedTargetsDatalist(); setLang(CURRENT_LANG); });
+loadChecks().then(() => { loadPresetBar(); loadHostPicker(); loadSavedTargetsDatalist(); setLang(CURRENT_LANG); });
 </script>
 </body>
 </html>

@@ -67,6 +67,20 @@ def validate_host_record(raw) -> dict:
     return record
 
 
+LABEL_MAX = 100
+
+
+def validate_label(label) -> str:
+    """A saved host's display label (B2.3): plain text, at most LABEL_MAX
+    characters, no control characters."""
+    if label is None:
+        return ''
+    if (not isinstance(label, str) or len(label) > LABEL_MAX
+            or any(ord(ch) < 32 or ord(ch) == 127 for ch in label)):
+        raise HostRecordError(f'label must be text of at most {LABEL_MAX} characters without control characters')
+    return label.strip()
+
+
 def host_identity(host: str) -> str:
     """How two records are compared for "the same host": IP addresses in
     normalised form, names case-insensitively."""
