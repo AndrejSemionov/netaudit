@@ -35,7 +35,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from netaudit_pkg import __version__, hosts, storage, trends
-from netaudit_pkg.engine import list_available, run_checks, run_checks_multi
+from netaudit_pkg.engine import (
+    DEFAULT_MAX_PARALLEL,
+    list_available,
+    run_checks,
+    run_checks_multi,
+    validate_multi_request,
+)
 from netaudit_pkg.history import ai_analyze, list_reports, load_report, save_report
 from netaudit_pkg.redaction import SECRET_PARAM_NAMES
 from netaudit_pkg.utils import log
@@ -133,7 +139,17 @@ def _single_selection(args, extra: dict) -> list[dict]:
     return selected
 
 
-def _group_selection(args, extra: dict, hosts_file: str) -> list[dict]:
+def _max_parallel(raw) -> int:
+    """--max-parallel for a group run: an integer the engine accepts
+    (B2.1: 1-16, default 4)."""
+    if raw is None:
+        return DEFAULT_MAX_PARALLEL
+    if not raw.isdigit():
+        _refuse(f'--max-parallel must be a whole number, got {raw!r}')
+    return int(raw)
+
+
+def _group_selection(args, extra: dict, hosts_file: str, max_parallel: int = DEFAULT_MAX_PARALLEL) -> list[dict]:
     """One instance per host record for every selected check (B2.2,
     docs/research/b2_2_cli_hosts_file.md). Everything is validated before
     the first password prompt and before anything runs."""
@@ -161,6 +177,12 @@ def _group_selection(args, extra: dict, hosts_file: str) -> list[dict]:
                if c not in avail or not any(p['name'] == 'host' for p in avail[c]['params'])]
     if no_host:
         refuse(f'{", ".join(no_host)}: no host parameter; run without --hosts-file')
+    # B2.1 limits (max_parallel, 64 hosts per check, 256 per run), checked
+    # here so an oversized run is refused before any password prompt
+    try:
+        validate_multi_request([{'id': c, 'instances': records} for c in check_ids], max_parallel)
+    except ValueError as e:
+        refuse(f'{e} (--max-parallel / hosts file)')
 
     # every secret flag, used or not: a value typed on the command line is
     # visible in ps and shell history, and a flag no selected check takes
@@ -196,11 +218,15 @@ def _group_selection(args, extra: dict, hosts_file: str) -> list[dict]:
 def cmd_run(args):
     extra, repeated = _parse_run_params(args.rest)
     hosts_file = extra.pop('hosts-file', None)
+    max_parallel = extra.pop('max-parallel', None)
     if hosts_file is not None:
         if repeated:
             _refuse(f'{", ".join("--" + k for k in sorted(repeated))} given more than once')
-        report = run_checks_multi(_group_selection(args, extra, hosts_file))
+        parallel = _max_parallel(max_parallel)
+        report = run_checks_multi(_group_selection(args, extra, hosts_file, parallel), max_parallel=parallel)
     else:
+        if max_parallel is not None:
+            _refuse('--max-parallel only applies to a group run (--hosts-file)')
         # the single form keeps last-wins for a repeated parameter, except
         # --host: two hosts there can only be a mistake (B1 §3.1)
         if 'host' in repeated:
