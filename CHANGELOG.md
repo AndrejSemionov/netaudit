@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Multi-host runs use bounded workers (4 by default, configurable 1–16) and
+  share at most 8 active instances across one Web process. Web estimates
+  account for bounded batches, and oversized requests are rejected before
+  running checks (64 instances per check, 256 per request). Stopping a streamed
+  run leaves queued hosts unstarted and marks each one explicitly in the report.
+
 - CLI: `netaudit run <checks> --hosts-file hosts.json` audits several servers in one run. The
   file is a JSON array of `{"host", "user", "port", "key_path"}` records without passwords;
   passwords are only asked for (`--password -`). A duplicate host, a secret in the file, a

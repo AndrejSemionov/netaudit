@@ -29,7 +29,13 @@ from netaudit_pkg import (
     tools,
     trends,
 )
-from netaudit_pkg.engine import list_available, run_checks_multi
+from netaudit_pkg.engine import (
+    DEFAULT_MAX_PARALLEL,
+    PROCESS_MAX_PARALLEL,
+    list_available,
+    run_checks_multi,
+    validate_multi_request,
+)
 from netaudit_pkg.history import (
     ai_analyze,
     list_reports,
@@ -83,6 +89,7 @@ class CheckItem(BaseModel):
 class RunRequest(BaseModel):
     checks: list[CheckItem]
     force_async: bool = False
+    max_parallel: int = DEFAULT_MAX_PARALLEL
 
 
 class AnalyzeRequest(BaseModel):
@@ -134,20 +141,16 @@ def _to_selected_item(c: CheckItem) -> dict:
     return {'id': c.id, 'params': c.params}
 
 
-def _per_check_estimate(item: dict) -> float:
+def _per_check_estimate(item: dict, max_parallel: int = DEFAULT_MAX_PARALLEL) -> float:
     """Single-number estimate for one selected item, for the /api/estimate
-    per_check breakdown. For 'instances' items this is the max across
-    instances (mirrors decide_mode()'s own per-check contribution) rather
-    than a misleading estimate(id, {}) on empty params."""
-    if 'instances' in item:
-        estimates = [timing.estimate(item['id'], inst) for inst in item['instances']]
-        return round(max(estimates), 2) if estimates else 0.0
-    return round(timing.estimate(item['id'], item.get('params', {})), 2)
+    per_check breakdown. Instances use the same bounded groups as
+    decide_mode(), rather than estimate(id, {}) on empty params."""
+    return round(timing.estimate_item(item, max_parallel), 2)
 
 
-def _execute_task(task_id: str, selected: list[dict]) -> None:
+def _execute_task(task_id: str, selected: list[dict], max_parallel: int) -> None:
     try:
-        report = run_checks_multi(selected)
+        report = run_checks_multi(selected, max_parallel=max_parallel, shared_pool=True)
         rid = save_report(report)
         report['_report_id'] = rid
         with _tasks_lock:
@@ -196,8 +199,14 @@ def api_version() -> dict:
 @app.post('/api/estimate')
 def api_estimate(req: RunRequest) -> dict:
     selected = [_to_selected_item(c) for c in req.checks]
-    mode, est = timing.decide_mode(selected, force_async=req.force_async)
-    per = {item['id']: _per_check_estimate(item) for item in selected}
+    try:
+        validate_multi_request(selected, req.max_parallel)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    effective_parallel = min(req.max_parallel, PROCESS_MAX_PARALLEL)
+    mode, est = timing.decide_mode(selected, force_async=req.force_async,
+                                   max_parallel=effective_parallel)
+    per = {item['id']: _per_check_estimate(item, effective_parallel) for item in selected}
     return {'mode': mode, 'estimate': est, 'per_check': per}
 
 
@@ -206,10 +215,15 @@ def api_run(req: RunRequest) -> dict:
     if not req.checks:
         raise HTTPException(400, 'no checks selected')
     selected = [_to_selected_item(c) for c in req.checks]
-    mode, est = timing.decide_mode(selected, force_async=req.force_async)
+    try:
+        validate_multi_request(selected, req.max_parallel)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    mode, est = timing.decide_mode(selected, force_async=req.force_async,
+                                   max_parallel=min(req.max_parallel, PROCESS_MAX_PARALLEL))
 
     if mode == 'sync':
-        report = run_checks_multi(selected)
+        report = run_checks_multi(selected, max_parallel=req.max_parallel, shared_pool=True)
         rid = save_report(report)
         report['_report_id'] = rid
         return {'mode': 'sync', 'estimate': est, 'report': report}
@@ -217,7 +231,7 @@ def api_run(req: RunRequest) -> dict:
     task_id = uuid.uuid4().hex
     with _tasks_lock:
         _tasks[task_id] = {'status': 'running'}
-    threading.Thread(target=_execute_task, args=(task_id, selected), daemon=True).start()
+    threading.Thread(target=_execute_task, args=(task_id, selected, req.max_parallel), daemon=True).start()
     return {'mode': 'async', 'estimate': est, 'task_id': task_id}
 
 
@@ -435,8 +449,12 @@ def api_stream_start(req: RunRequest) -> dict:
     if not req.checks:
         raise HTTPException(400, 'no checks selected')
     selected = [_to_selected_item(c) for c in req.checks]
+    try:
+        validate_multi_request(selected, req.max_parallel)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
     task_id = _uuid.uuid4().hex
-    task = streaming.StreamTask(task_id, selected)
+    task = streaming.StreamTask(task_id, selected, max_parallel=req.max_parallel)
     with _stream_lock:
         _stream_tasks[task_id] = task
     threading.Thread(target=streaming.run_stream, args=(task,), daemon=True).start()
