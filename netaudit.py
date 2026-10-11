@@ -34,9 +34,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from netaudit_pkg import __version__, storage, trends
-from netaudit_pkg.engine import list_available, run_checks
+from netaudit_pkg import __version__, hosts, storage, trends
+from netaudit_pkg.engine import (
+    DEFAULT_MAX_PARALLEL,
+    list_available,
+    run_checks,
+    run_checks_multi,
+    validate_multi_request,
+)
 from netaudit_pkg.history import ai_analyze, list_reports, load_report, save_report
+from netaudit_pkg.redaction import SECRET_PARAM_NAMES
 from netaudit_pkg.utils import log
 
 QUICK_BUNDLE_SITE = ['ssl', 'security_headers', 'web_security_external', 'dns_audit']
@@ -67,19 +74,34 @@ def cmd_list(args):
                 print(f"                 └─ --{p['name']} ({p['type']}, default={p['default']})")
 
 
-def cmd_run(args):
-    extra = {}
+def _parse_run_params(tokens: list[str]) -> tuple[dict, set[str]]:
+    """`--name value` pairs after `netaudit run` (the last value of a repeated
+    name wins, as before) and the names given more than once - each form
+    decides what a repeat means (B2.2)."""
+    extra, repeated = {}, set()
     i = 0
-    unknown = args.rest
-    while i < len(unknown):
-        if unknown[i].startswith('--'):
-            key = unknown[i][2:]
-            val = unknown[i + 1] if i + 1 < len(unknown) else ''
-            extra[key] = val
+    while i < len(tokens):
+        if tokens[i].startswith('--'):
+            key = tokens[i][2:]
+            if key in extra:
+                repeated.add(key)
+            extra[key] = tokens[i + 1] if i + 1 < len(tokens) else ''
             i += 2
         else:
             i += 1
+    return extra, repeated
 
+
+def _refuse(message: str):
+    log.error(message)
+    sys.exit(1)
+
+
+def _typed(param: dict, value):
+    return int(value) if param['type'] == 'number' and str(value).isdigit() else value
+
+
+def _single_selection(args, extra: dict) -> list[dict]:
     check_ids = args.checks or []
     if args.quick:
         if not check_ids:
@@ -112,10 +134,104 @@ def cmd_run(args):
                         if p['name'] not in asked:
                             asked[p['name']] = getpass.getpass(f'{p["name"]} for {check_id}: ')
                         v = asked[p['name']]
-                    spec_params[p['name']] = int(v) if p['type'] == 'number' and str(v).isdigit() else v
+                    spec_params[p['name']] = _typed(p, v)
         selected.append({'id': check_id, 'params': spec_params})
+    return selected
 
-    report = run_checks(selected)
+
+def _max_parallel(raw) -> int:
+    """--max-parallel for a group run: an integer the engine accepts
+    (B2.1: 1-16, default 4)."""
+    if raw is None:
+        return DEFAULT_MAX_PARALLEL
+    if not raw.isdigit():
+        _refuse(f'--max-parallel must be a whole number, got {raw!r}')
+    return int(raw)
+
+
+def _group_selection(args, extra: dict, hosts_file: str, max_parallel: int = DEFAULT_MAX_PARALLEL) -> list[dict]:
+    """One instance per host record for every selected check (B2.2,
+    docs/research/b2_2_cli_hosts_file.md). Everything is validated before
+    the first password prompt and before anything runs."""
+    refuse = _refuse
+    if args.quick:
+        refuse('--quick cannot be combined with --hosts-file; name the checks to run on every host')
+    if 'host' in extra:
+        refuse('--host cannot be combined with --hosts-file; the hosts come from the file')
+    check_ids = args.checks or []
+    if not check_ids:
+        refuse("No checks given. Use 'netaudit run <check_id> ... --hosts-file <json>'.")
+
+    try:
+        records = hosts.load_hosts_file(hosts_file)
+        for record in records:
+            if 'key_path' in record:
+                record['key_path'] = hosts.readable_key_path(record['key_path'])
+        if extra.get('key_path'):
+            extra['key_path'] = hosts.readable_key_path(extra['key_path'])
+    except hosts.HostRecordError as e:
+        refuse(str(e))
+
+    avail = {c['id']: c for c in list_available()}
+    no_host = [c for c in check_ids
+               if c not in avail or not any(p['name'] == 'host' for p in avail[c]['params'])]
+    if no_host:
+        refuse(f'{", ".join(no_host)}: no host parameter; run without --hosts-file')
+    # B2.1 limits (max_parallel, 64 hosts per check, 256 per run), checked
+    # here so an oversized run is refused before any password prompt
+    try:
+        validate_multi_request([{'id': c, 'instances': records} for c in check_ids], max_parallel)
+    except ValueError as e:
+        refuse(f'{e} (--max-parallel / hosts file)')
+
+    # every secret flag, used or not: a value typed on the command line is
+    # visible in ps and shell history, and a flag no selected check takes
+    # would be silently ignored (review #35)
+    secret_names = SECRET_PARAM_NAMES | {p['name'] for c in avail.values()
+                                         for p in c['params'] if p['type'] == 'password'}
+    used = {p['name'] for check_id in check_ids for p in avail[check_id]['params']}
+    for name in sorted(secret_names & extra.keys()):
+        if extra[name] != '-':
+            refuse(f'--{name}: in a group run give it as "--{name} -" to be asked without echo')
+        if name not in used:
+            refuse(f'--{name} is not used by any of the selected checks; drop it')
+
+    selected = []
+    asked: dict[str, str] = {}
+    for check_id in check_ids:
+        names = {p['name'] for p in avail[check_id]['params']}
+        common = {}
+        for p in avail[check_id]['params']:
+            if p['name'] not in extra:
+                continue
+            v = extra[p['name']]
+            if p['type'] == 'password':  # always "-" here, checked above
+                if p['name'] not in asked:
+                    asked[p['name']] = getpass.getpass(f'{p["name"]} (all hosts): ')
+                v = asked[p['name']]
+            common[p['name']] = _typed(p, v)
+        instances = [{**common, **{k: v for k, v in record.items() if k in names}} for record in records]
+        selected.append({'id': check_id, 'instances': instances})
+    return selected
+
+
+def cmd_run(args):
+    extra, repeated = _parse_run_params(args.rest)
+    hosts_file = extra.pop('hosts-file', None)
+    max_parallel = extra.pop('max-parallel', None)
+    if hosts_file is not None:
+        if repeated:
+            _refuse(f'{", ".join("--" + k for k in sorted(repeated))} given more than once')
+        parallel = _max_parallel(max_parallel)
+        report = run_checks_multi(_group_selection(args, extra, hosts_file, parallel), max_parallel=parallel)
+    else:
+        if max_parallel is not None:
+            _refuse('--max-parallel only applies to a group run (--hosts-file)')
+        # the single form keeps last-wins for a repeated parameter, except
+        # --host: two hosts there can only be a mistake (B1 §3.1)
+        if 'host' in repeated:
+            _refuse('--host given more than once; to audit several hosts use --hosts-file <json>')
+        report = run_checks(_single_selection(args, extra))
     saved = save_report(report)
     log.info(f'Report saved: {saved}')
     print(json.dumps(report, ensure_ascii=False, indent=2))

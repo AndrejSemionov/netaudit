@@ -276,6 +276,22 @@ python3 netaudit.py run server_audit lynis_audit docker_audit \
     --host 1.2.3.4 --user root --key_path ~/.ssh/id_rsa
 ```
 
+**Несколько серверов сразу** — перечислите их в JSON-файле (`host`, по желанию `user`, `port`,
+`key_path`; без паролей) и передайте через `--hosts-file`. Флаги вроде `--user` действуют на все
+хосты, поля записи важнее. Пароли только запрашиваются (`--password -`):
+
+```bash
+cat > hosts.json <<'JSON'
+[{"host": "10.0.0.5"}, {"host": "web-2.example", "user": "audit", "port": 2222}]
+JSON
+python3 netaudit.py run server_audit ssh_hardening --hosts-file hosts.json \
+    --user root --key_path ~/.ssh/id_rsa
+```
+
+Хост, указанный дважды, пароль в файле или проверка без параметра `host` — отказ до запуска.
+В отчёте по результату на каждый хост (`by_host`). Одновременно проверяется не больше 4 хостов;
+`--max-parallel N` (1–16) меняет это. В одном запуске — не больше 64 хостов на проверку.
+
 По паролю вместо ключа — вводим интерактивно, чтобы пароль не осел в истории shell:
 
 ```bash
