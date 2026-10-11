@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+from argparse import Namespace
 
+import pytest
+
+import netaudit
 from netaudit_pkg.host_summary import compare_hosts, host_summary
 
 
@@ -89,3 +93,42 @@ def test_unknown_form_has_no_comparable_counts_not_zero():
     assert host['observed_counts'] is None
     assert host['unknown_checks'] == ['check']
     assert compare_hosts(report, 'other') == {'check_id': 'other', 'hosts': []}
+
+
+def test_missing_result_and_warning_without_findings_are_collection_gaps():
+    report = {'results': {'check': {'_multi_host': True, 'by_host': {
+        'a': {'warnings': ['probe failed']},
+    }}}, 'execution_context': {'check': {
+        'a': {'host': 'a'}, 'b': {'host': 'b'},
+    }}}
+    [row] = host_summary(report)['hosts'][:1]
+    assert row['host'] == 'a'
+    assert row['incomplete_checks'] == ['check']
+    assert row['observed_counts'] is None
+    assert host_summary(report)['hosts'][1]['unknown_checks'] == ['check']
+
+
+def test_cli_summary_and_same_check_comparison(monkeypatch, capsys):
+    report = {'results': {'check': {'findings': [_finding('high')]}},
+              'execution_context': {'check': {'host': 'h'}}}
+    monkeypatch.setattr(netaudit, 'load_report', lambda rid: report if rid == 7 else None)
+    netaudit.cmd_summary(Namespace(id='7', check=None, json=True))
+    assert json.loads(capsys.readouterr().out)['hosts'][0]['host'] == 'h'
+    netaudit.cmd_summary(Namespace(id='7', check='check', json=True))
+    assert json.loads(capsys.readouterr().out)['hosts'][0]['check_id'] == 'check'
+
+
+def test_web_summary_read_only_and_links_to_report(monkeypatch):
+    from fastapi import HTTPException
+    from web import app as web_app
+
+    report = {'results': {'check': {'findings': []}},
+              'execution_context': {'check': {'host': 'h'}}}
+    monkeypatch.setattr(web_app, 'load_report', lambda rid: report if rid == 7 else None)
+    body = web_app.api_host_summary(report_id=7, check_id='')
+    assert body['hosts'][0]['checks'][0]['details_url'] == '/api/report?id=7'
+    compared = web_app.api_host_summary(report_id=7, check_id='check')
+    assert compared['hosts'][0]['details_url'] == '/api/report?id=7'
+    with pytest.raises(HTTPException) as error:
+        web_app.api_host_summary(report_id=8, check_id='')
+    assert error.value.status_code == 404
