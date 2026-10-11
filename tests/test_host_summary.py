@@ -120,6 +120,30 @@ def test_multi_host_context_with_missing_check_result_is_unknown():
     assert [row['unknown_checks'] for row in host_summary(report)['hosts']] == [['check'], ['check']]
 
 
+@pytest.mark.parametrize(('check_id', 'meta', 'expected_status', 'expected_counts'), [
+    ('kern_log_audit', {'coverage': 'failed', 'detection_succeeded': False}, 'incomplete', None),
+    ('kern_log_audit', {'coverage': 'unknown', 'detection_succeeded': False}, 'incomplete', None),
+    ('kern_log_audit', {'coverage': 'partial', 'detection_succeeded': True}, 'incomplete',
+     {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}),
+    ('kern_log_audit', {'coverage': 'complete', 'detection_succeeded': True}, 'complete',
+     {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}),
+    ('nginx_logs_audit', {'access': {'coverage': 'complete'}, 'error': {'coverage': 'failed'}},
+     'incomplete', {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}),
+    ('ssh_auth_audit', {'selected_source': 'file', 'coverage_uncertain': True},
+     'incomplete', {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}),
+])
+def test_event_collection_coverage_is_not_false_complete(
+        check_id, meta, expected_status, expected_counts):
+    report = {'results': {check_id: {'findings': [], 'meta': meta}},
+              'execution_context': {check_id: {'host': 'h'}}}
+    [row] = compare_hosts(report, check_id)['hosts']
+    assert row['status'] == expected_status
+    assert row['observed_counts'] == expected_counts
+    [host] = host_summary(report)['hosts']
+    assert host['observed_counts'] == expected_counts
+    assert host['incomplete_checks'] == ([check_id] if expected_status == 'incomplete' else [])
+
+
 def test_cli_summary_and_same_check_comparison(monkeypatch, capsys):
     report = {'results': {'check': {'findings': [_finding('high')]}},
               'execution_context': {'check': {'host': 'h'}}}
