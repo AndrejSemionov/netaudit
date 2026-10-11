@@ -9,6 +9,7 @@ Tables:
   settings       - key-value settings (API key, thresholds, Telegram)
   presets        - saved check sets
   targets        - default targets
+  ssh_hosts      - saved SSH hosts for multi-host runs, never secrets (B2.3)
 
 Schema is versioned (PRAGMA user_version) - migrations are added to MIGRATIONS.
 DB: ~/.netaudit/netaudit.db
@@ -22,6 +23,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+from . import hosts
 from .redaction import redact_preset_checks, redact_report
 
 DB_PATH = Path.home() / '.netaudit' / 'netaudit.db'
@@ -139,7 +141,21 @@ def _m4(conn: sqlite3.Connection) -> None:
     """)
 
 
-MIGRATIONS = [_m1, _m2, _m3, _m4]
+def _m5(conn: sqlite3.Connection) -> None:
+    # saved SSH hosts (B2.3): deliberately no column that could hold a secret
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS ssh_hosts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        label TEXT NOT NULL DEFAULT '',
+        host TEXT NOT NULL,
+        user TEXT,
+        port INTEGER,
+        key_path TEXT
+    );
+    """)
+
+
+MIGRATIONS = [_m1, _m2, _m3, _m4, _m5]
 
 
 def _seed_presets(conn: sqlite3.Connection) -> None:
@@ -560,6 +576,34 @@ def targets_list() -> list[dict]:
 def target_delete(target_id: int) -> None:
     conn = _conn()
     conn.execute('DELETE FROM targets WHERE id=?', (target_id,))
+    conn.commit()
+
+
+# ===========================================================================
+# Saved SSH hosts (B2.3, docs/research/b2_3_hosts_inventory.md)
+# ===========================================================================
+
+def ssh_host_add(record: dict, label: str = '') -> int:
+    """Save a host record. Validated here, not only at the API, so no caller
+    can store a secret or an unknown field (raises hosts.HostRecordError)."""
+    clean = hosts.validate_host_record(record)
+    label = hosts.validate_label(label)
+    conn = _conn()
+    cur = conn.execute('INSERT INTO ssh_hosts (label, host, user, port, key_path) VALUES (?,?,?,?,?)',
+                       (label, clean['host'], clean.get('user'), clean.get('port'), clean.get('key_path')))
+    conn.commit()
+    return cur.lastrowid
+
+
+def ssh_hosts_list() -> list[dict]:
+    conn = _conn()
+    rows = conn.execute('SELECT id, label, host, user, port, key_path FROM ssh_hosts ORDER BY id').fetchall()
+    return [dict(r) for r in rows]
+
+
+def ssh_host_delete(host_id: int) -> None:
+    conn = _conn()
+    conn.execute('DELETE FROM ssh_hosts WHERE id=?', (host_id,))
     conn.commit()
 
 

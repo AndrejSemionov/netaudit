@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -23,6 +23,7 @@ from netaudit_pkg import (
     __version__,
     deployment,
     history_capture,
+    hosts,
     storage,
     streaming,
     timing,
@@ -31,6 +32,7 @@ from netaudit_pkg import (
 )
 from netaudit_pkg.engine import (
     DEFAULT_MAX_PARALLEL,
+    MAX_INSTANCES_PER_CHECK,
     PROCESS_MAX_PARALLEL,
     list_available,
     run_checks_multi,
@@ -400,6 +402,74 @@ def api_add_target(req: TargetRequest) -> dict:
 @app.delete('/api/targets/{target_id}')
 def api_delete_target(target_id: int) -> dict:
     storage.target_delete(target_id)
+    return {'ok': True}
+
+
+# --- Saved SSH hosts (B2.3) ---
+@app.get('/api/hosts')
+def api_hosts() -> list[dict]:
+    return storage.ssh_hosts_list()
+
+
+@app.post('/api/hosts/validate-selection')
+async def api_validate_host_selection(request: Request) -> dict:
+    """Refuse ambiguous saved-host picks using the same identity as the CLI.
+    Only integer IDs cross this boundary; stored host strings stay unchanged
+    for SSH host-key lookup.
+    """
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(400, 'ids must be a JSON array of saved host IDs') from None
+    ids = payload.get('ids') if isinstance(payload, dict) else None
+    if (not isinstance(ids, list) or not ids or len(ids) > MAX_INSTANCES_PER_CHECK
+            or any(type(host_id) is not int or host_id <= 0 for host_id in ids)):
+        raise HTTPException(400, f'ids must be a JSON array of 1-{MAX_INSTANCES_PER_CHECK} saved host IDs')
+    by_id = {row['id']: row for row in storage.ssh_hosts_list()}
+    seen_ids = set()
+    seen_hosts = set()
+    for host_id in ids:
+        if host_id in seen_ids or host_id not in by_id:
+            raise HTTPException(400, 'ids must name distinct saved hosts')
+        seen_ids.add(host_id)
+        identity = hosts.host_identity(by_id[host_id]['host'])
+        if identity in seen_hosts:
+            raise HTTPException(409, {'duplicate_id': host_id})
+        seen_hosts.add(identity)
+    return {'ok': True}
+
+
+@app.post('/api/hosts')
+async def api_add_host(request: Request) -> dict:
+    # a raw JSON body, not a pydantic model: FastAPI's 422 echoes the submitted
+    # input back, and a password sent here by mistake must not come back
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(400, 'the body must be a JSON object') from None
+    if not isinstance(payload, dict):
+        raise HTTPException(400, 'the body must be a JSON object')
+    record = dict(payload)
+    label = record.pop('label', '')
+    try:
+        host_id = storage.ssh_host_add(record, label=label)
+    except hosts.HostRecordError as e:
+        # The shared CLI validator may quote an invalid value. Keep the Web
+        # boundary field-only, even when a secret was pasted into user/host.
+        reason = str(e)
+        field = next((name for name in ('host', 'user', 'port', 'key_path', 'label',
+                                        'password', 'sudo_password')
+                      if reason.startswith((name + ' ', name + ':'))), None)
+        detail = (f'{field}: invalid value' if field else
+                  'unknown field; allowed: host, user, port, key_path, label'
+                  if reason.startswith('unknown field') else 'invalid host record')
+        raise HTTPException(400, detail) from None
+    return {'ok': True, 'id': host_id}
+
+
+@app.delete('/api/hosts/{host_id}')
+def api_delete_host(host_id: int) -> dict:
+    storage.ssh_host_delete(host_id)
     return {'ok': True}
 
 
