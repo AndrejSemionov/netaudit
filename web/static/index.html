@@ -1147,6 +1147,8 @@ function finishStream(ev) {
           mtrRes.hops.map(hh => `${esc(hh.hop)}. ${esc(hh.host)}: ${esc(hh.avg_ms)}${t('unit.ms_short')}`).join(' · ');
       }
     }
+    if (Number.isInteger(Number(report._report_id)) && Number(report._report_id) > 0)
+      loadHostSummary(Number(report._report_id));
     STREAM_STATE = null;
     return;  // график остаётся на экране как есть
   }
