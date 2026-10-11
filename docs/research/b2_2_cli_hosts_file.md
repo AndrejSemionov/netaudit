@@ -84,7 +84,7 @@ netaudit run <check> [<check> ...] --hosts-file hosts.json [--user U] [--port P]
 8. `--host a --host b` is refused with a hint about `--hosts-file`. A single
    `--host a` still runs `run_checks()` as before. In the single form,
    `--port 22 --port 2222` uses 2222; in the group form it is refused.
-10. A secret flag that no selected check uses is refused, whether its value
-    is a literal or `-`. No prompt is shown, and nothing runs.
 9. End to end with a stubbed check function: the saved report row contains
    neither password, and `execution_context` holds one entry per host.
+10. A secret flag that no selected check uses is refused, whether its value
+    is a literal or `-`. No prompt is shown, and nothing runs.

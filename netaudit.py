@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from netaudit_pkg import __version__, hosts, storage, trends
 from netaudit_pkg.engine import list_available, run_checks, run_checks_multi
 from netaudit_pkg.history import ai_analyze, list_reports, load_report, save_report
+from netaudit_pkg.redaction import SECRET_PARAM_NAMES
 from netaudit_pkg.utils import log
 
 QUICK_BUNDLE_SITE = ['ssl', 'security_headers', 'web_security_external', 'dns_audit']
@@ -67,23 +68,27 @@ def cmd_list(args):
                 print(f"                 └─ --{p['name']} ({p['type']}, default={p['default']})")
 
 
-def _parse_run_params(tokens: list[str]) -> dict:
-    """`--name value` pairs after `netaudit run`. The same name twice is
-    refused: the last value used to win silently (B2.2)."""
-    extra = {}
+def _parse_run_params(tokens: list[str]) -> tuple[dict, set[str]]:
+    """`--name value` pairs after `netaudit run` (the last value of a repeated
+    name wins, as before) and the names given more than once - each form
+    decides what a repeat means (B2.2)."""
+    extra, repeated = {}, set()
     i = 0
     while i < len(tokens):
         if tokens[i].startswith('--'):
             key = tokens[i][2:]
             if key in extra:
-                hint = '; to audit several hosts use --hosts-file <json>' if key == 'host' else ''
-                log.error(f'--{key} given more than once{hint}')
-                sys.exit(1)
+                repeated.add(key)
             extra[key] = tokens[i + 1] if i + 1 < len(tokens) else ''
             i += 2
         else:
             i += 1
-    return extra
+    return extra, repeated
+
+
+def _refuse(message: str):
+    log.error(message)
+    sys.exit(1)
 
 
 def _typed(param: dict, value):
@@ -132,10 +137,7 @@ def _group_selection(args, extra: dict, hosts_file: str) -> list[dict]:
     """One instance per host record for every selected check (B2.2,
     docs/research/b2_2_cli_hosts_file.md). Everything is validated before
     the first password prompt and before anything runs."""
-    def refuse(message):
-        log.error(message)
-        sys.exit(1)
-
+    refuse = _refuse
     if args.quick:
         refuse('--quick cannot be combined with --hosts-file; name the checks to run on every host')
     if 'host' in extra:
@@ -160,6 +162,18 @@ def _group_selection(args, extra: dict, hosts_file: str) -> list[dict]:
     if no_host:
         refuse(f'{", ".join(no_host)}: no host parameter; run without --hosts-file')
 
+    # every secret flag, used or not: a value typed on the command line is
+    # visible in ps and shell history, and a flag no selected check takes
+    # would be silently ignored (review #35)
+    secret_names = SECRET_PARAM_NAMES | {p['name'] for c in avail.values()
+                                         for p in c['params'] if p['type'] == 'password'}
+    used = {p['name'] for check_id in check_ids for p in avail[check_id]['params']}
+    for name in sorted(secret_names & extra.keys()):
+        if extra[name] != '-':
+            refuse(f'--{name}: in a group run give it as "--{name} -" to be asked without echo')
+        if name not in used:
+            refuse(f'--{name} is not used by any of the selected checks; drop it')
+
     selected = []
     asked: dict[str, str] = {}
     for check_id in check_ids:
@@ -169,11 +183,7 @@ def _group_selection(args, extra: dict, hosts_file: str) -> list[dict]:
             if p['name'] not in extra:
                 continue
             v = extra[p['name']]
-            if p['type'] == 'password':
-                # in a group run a secret is only ever asked for: a value on
-                # the command line is visible in ps and shell history
-                if v != '-':
-                    refuse(f'--{p["name"]}: in a group run give it as "--{p["name"]} -" to be asked without echo')
+            if p['type'] == 'password':  # always "-" here, checked above
                 if p['name'] not in asked:
                     asked[p['name']] = getpass.getpass(f'{p["name"]} (all hosts): ')
                 v = asked[p['name']]
@@ -184,11 +194,17 @@ def _group_selection(args, extra: dict, hosts_file: str) -> list[dict]:
 
 
 def cmd_run(args):
-    extra = _parse_run_params(args.rest)
+    extra, repeated = _parse_run_params(args.rest)
     hosts_file = extra.pop('hosts-file', None)
     if hosts_file is not None:
+        if repeated:
+            _refuse(f'{", ".join("--" + k for k in sorted(repeated))} given more than once')
         report = run_checks_multi(_group_selection(args, extra, hosts_file))
     else:
+        # the single form keeps last-wins for a repeated parameter, except
+        # --host: two hosts there can only be a mistake (B1 §3.1)
+        if 'host' in repeated:
+            _refuse('--host given more than once; to audit several hosts use --hosts-file <json>')
         report = run_checks(_single_selection(args, extra))
     saved = save_report(report)
     log.info(f'Report saved: {saved}')
