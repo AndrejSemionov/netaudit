@@ -218,6 +218,11 @@ returns a list of issues + prioritized recommendations.
 The interface is in **Russian and English** — RU/EN switch in the header, and the language is
 also auto-detected from the browser.
 
+**Several servers:** save them once in Settings → "SSH hosts" (host, user, port, key path — no
+passwords). On the audit tab, tick the saved hosts, select the SSH checks, type the password in
+a check's first block if you need one, and press "Apply to selected checks": every selected
+check gets one block per host.
+
 ## CLI
 
 ```bash
