@@ -273,6 +273,8 @@ def cmd_summary(args):
             counts = row['observed_counts']
             observed = ('no comparable findings' if counts is None
                         else f'{sum(counts.values())} observed findings')
+            if row['status'] == 'incomplete':
+                observed += ' (collection incomplete)'
             print(f"  {json.dumps(row['host'], ensure_ascii=False)} "
                   f"[{row['instance_key'] or 'single'}]: {row['status']}; {observed}")
     else:
@@ -281,6 +283,8 @@ def cmd_summary(args):
             counts = row['observed_counts']
             observed = ('no comparable findings' if counts is None
                         else f'{sum(counts.values())} observed findings')
+            if row['incomplete_checks']:
+                observed += ' (collection incomplete)'
             print(f"  {json.dumps(row['host'], ensure_ascii=False)}: "
                   f"{row['completed_checks']} completed, {row['errored_checks']} errors; {observed}")
             for field in ('error_checks', 'incomplete_checks', 'unknown_checks', 'duplicate_checks'):

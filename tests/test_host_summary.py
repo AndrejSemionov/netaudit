@@ -144,6 +144,15 @@ def test_event_collection_coverage_is_not_false_complete(
     assert host['incomplete_checks'] == ([check_id] if expected_status == 'incomplete' else [])
 
 
+def test_cli_marks_incomplete_event_counts(monkeypatch, capsys):
+    report = {'results': {'kern_log_audit': {'findings': [], 'meta': {
+        'coverage': 'partial', 'detection_succeeded': True}}},
+        'execution_context': {'kern_log_audit': {'host': 'h'}}}
+    monkeypatch.setattr(netaudit, 'load_report', lambda rid: report)
+    netaudit.cmd_summary(Namespace(id='7', check='kern_log_audit', json=False))
+    assert '0 observed findings (collection incomplete)' in capsys.readouterr().out
+
+
 def test_cli_summary_and_same_check_comparison(monkeypatch, capsys):
     report = {'results': {'check': {'findings': [_finding('high')]}},
               'execution_context': {'check': {'host': 'h'}}}
