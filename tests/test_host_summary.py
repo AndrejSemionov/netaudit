@@ -110,6 +110,16 @@ def test_missing_result_and_warning_without_findings_are_collection_gaps():
     assert host_summary(report)['hosts'][1]['unknown_checks'] == ['check']
 
 
+def test_multi_host_context_with_missing_check_result_is_unknown():
+    report = {'results': {}, 'execution_context': {'check': {
+        'a': {'host': 'a'}, 'b': {'host': 'b'},
+    }}}
+    rows = compare_hosts(report, 'check')['hosts']
+    assert [row['host'] for row in rows] == ['a', 'b']
+    assert [row['status'] for row in rows] == ['unknown', 'unknown']
+    assert [row['unknown_checks'] for row in host_summary(report)['hosts']] == [['check'], ['check']]
+
+
 def test_cli_summary_and_same_check_comparison(monkeypatch, capsys):
     report = {'results': {'check': {'findings': [_finding('high')]}},
               'execution_context': {'check': {'host': 'h'}}}
