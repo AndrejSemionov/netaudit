@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- SSH host keys are no longer lost when NetAudit connects to several new hosts
+  at once (Web runs the hosts of a check in parallel). Before, on a fresh
+  install only the last host's key was kept, so the others were trusted again
+  as "new" on the next run; and a different key for the same host could replace
+  the one just saved. `~/.netaudit/known_hosts` is now updated under a lock and
+  replaced atomically, and a conflicting key is refused like any host key
+  mismatch.
+
 - `docker_audit` now confirms whether its Docker TCP socket configuration
   probe completed. Missing optional config files are allowed; read failures,
   SSH interruptions and inconsistent probe results are reported as collection
