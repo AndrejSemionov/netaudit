@@ -114,7 +114,17 @@ def record(check_id: str, params: dict, elapsed: float) -> None:
         storage.timing_upsert(key, new_ema, entry['count'] + 1, elapsed)
 
 
-def decide_mode(selected: list[dict], force_async: bool = False, threshold: float | None = None):
+def estimate_item(item: dict, max_parallel: int = 4) -> float:
+    """Estimate one check as sequential bounded batches in input order."""
+    if 'instances' not in item:
+        return estimate(item['id'], item.get('params', {}))
+    estimates = [estimate(item['id'], params) for params in item['instances']]
+    return sum(max(estimates[i:i + max_parallel])
+               for i in range(0, len(estimates), max_parallel))
+
+
+def decide_mode(selected: list[dict], force_async: bool = False,
+                threshold: float | None = None, max_parallel: int = 4):
     """
     selected items may be either:
       - {'id': ..., 'params': {...}}                  legacy, single-instance
@@ -122,21 +132,15 @@ def decide_mode(selected: list[dict], force_async: bool = False, threshold: floa
 
     Per-check contribution to the total:
       - 'params' form   -> estimate(id, params)                       (unchanged)
-      - 'instances' form -> max(estimate(id, inst) for inst in instances),
-        since same-check instances run in parallel, bounded by the
-        slowest one. An empty instances list contributes 0.
+      - 'instances' form -> sum of the maxima of consecutive groups of
+        max_parallel instances. An empty instances list contributes 0.
 
     total = sum of per-check contributions, since different checks in one
     request still run sequentially relative to each other.
     """
-    total = 0.0
-    for item in selected:
-        check_id = item['id']
-        if 'instances' in item:
-            instance_estimates = [estimate(check_id, inst) for inst in item['instances']]
-            total += max(instance_estimates) if instance_estimates else 0.0
-        else:
-            total += estimate(check_id, item.get('params', {}))
+    if type(max_parallel) is not int or not 1 <= max_parallel <= 16:
+        raise ValueError('max_parallel must be an integer from 1 to 16')
+    total = sum(estimate_item(item, max_parallel) for item in selected)
 
     if force_async:
         return 'async', round(total, 2)

@@ -39,6 +39,7 @@ def engine_calls(monkeypatch, isolated_db):
 
     def fake_multi(selected, **kwargs):
         calls['multi'].append(selected)
+        calls.setdefault('multi_kwargs', []).append(kwargs)
         return report()
 
     def fake_single(selected):
@@ -246,3 +247,41 @@ def test_saved_group_report_holds_no_secret(tmp_path, isolated_db, monkeypatch):
     assert 'E2E-SECRET-PW' not in row[0]
     ctx = json.loads(row[0])['execution_context']['ssh_hardening']
     assert sorted(v['host'] for v in ctx.values()) == ['h1', 'h2']
+
+
+# --- B2.1 integration: --max-parallel and the engine's input limits ---------
+
+def test_max_parallel_defaults_to_four_and_is_passed_through(tmp_path, engine_calls):
+    hosts = _hosts_file(tmp_path, [{'host': 'h1'}, {'host': 'h2'}])
+    netaudit.cmd_run(_ns(['ssh_hardening'], ['--hosts-file', hosts]))
+    netaudit.cmd_run(_ns(['ssh_hardening'], ['--hosts-file', hosts, '--max-parallel', '2']))
+
+    assert [kw.get('max_parallel') for kw in engine_calls['multi_kwargs']] == [4, 2]
+
+
+@pytest.mark.parametrize('value', ['0', '17', 'two', '-1', ''])
+def test_bad_max_parallel_is_refused(tmp_path, engine_calls, capsys, caplog, value):
+    hosts = _hosts_file(tmp_path, [{'host': 'h1'}])
+    _refused(capsys, caplog, _ns(['ssh_hardening'], ['--hosts-file', hosts, '--max-parallel', value]),
+             'max-parallel')
+    assert engine_calls['multi'] == []
+
+
+def test_max_parallel_without_hosts_file_is_refused(engine_calls, capsys, caplog):
+    _refused(capsys, caplog, _ns(['ssh_hardening'], ['--host', 'a', '--max-parallel', '2']),
+             '--max-parallel', '--hosts-file')
+    assert engine_calls['single'] == []
+
+
+@pytest.mark.parametrize('checks, n_hosts, needle', [
+    (['ssh_hardening'], 65, 'limit 64'),
+    (['ssh_hardening', 'kernel_hardening', 'nginx_hardening', 'server_audit', 'cve_audit'], 60, 'limit 256'),
+])
+def test_engine_input_limits_are_refused_before_any_prompt(tmp_path, engine_calls, capsys, caplog, monkeypatch,
+                                                           checks, n_hosts, needle):
+    asked = []
+    monkeypatch.setattr(netaudit.getpass, 'getpass', lambda prompt: asked.append(prompt) or 'x')
+    hosts = _hosts_file(tmp_path, [{'host': f'h{i}'} for i in range(n_hosts)])
+    _refused(capsys, caplog, _ns(checks, ['--hosts-file', hosts, '--password', '-']), needle)
+    assert asked == []
+    assert engine_calls['multi'] == []
