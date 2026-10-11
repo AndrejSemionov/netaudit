@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Saved multi-host reports now have a read-only host summary and same-check
+  comparison in the CLI (`summary <report_id> [--check ID]`) and Web report
+  view. Collection errors, warnings, unknown result formats, and duplicate
+  host instances remain distinct from zero observed findings.
+
 - SSH host keys are no longer lost when NetAudit connects to several new hosts
   at once (Web runs the hosts of a check in parallel). Before, on a fresh
   install only the last host's key was kept, so the others were trusted again

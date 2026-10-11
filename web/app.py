@@ -23,6 +23,7 @@ from netaudit_pkg import (
     __version__,
     deployment,
     history_capture,
+    host_summary,
     storage,
     streaming,
     timing,
@@ -242,6 +243,25 @@ def api_report(id: int) -> dict:
     if r is None:
         raise HTTPException(404, 'report not found')
     return r
+
+
+@app.get('/api/host-summary')
+def api_host_summary(report_id: int, check_id: str = '') -> dict:
+    """Read-only B2.4 host summary or comparison within one check."""
+    report = load_report(report_id)
+    if report is None:
+        raise HTTPException(404, 'report not found')
+    data = (host_summary.compare_hosts(report, check_id) if check_id
+            else host_summary.host_summary(report))
+    details_url = f'/api/report?id={report_id}'
+    if check_id:
+        for row in data['hosts']:
+            row['details_url'] = details_url
+    else:
+        for host in data['hosts']:
+            for check in host['checks']:
+                check['details_url'] = details_url
+    return data
 
 
 @app.get('/api/timeseries/mtr')

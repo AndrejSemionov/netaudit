@@ -224,6 +224,8 @@ also auto-detected from the browser.
 python3 netaudit.py list                 # list all checks
 python3 netaudit.py run mtr --target 8.8.8.8   # run a check
 python3 netaudit.py history              # past reports
+python3 netaudit.py summary 42           # host summary for one saved report
+python3 netaudit.py summary 42 --check ssh_hardening --json   # compare hosts within one check
 python3 netaudit.py trend                # objects with finding/score history
 python3 netaudit.py trend ssh_hardening 10.0.0.1   # how one object changed over time
 python3 netaudit.py install <tool>       # install a missing tool (nmap, tshark, ...)
@@ -236,6 +238,11 @@ run could not verify is shown as **not evaluated**, rather than resolved.
 `fail2ban_logs_audit` show bounded log observations only. Their counts can
 change when the collected slice changes, so no remediation is inferred from a
 lower count. The web **Trends** tab shows the same saved history.
+
+For a saved multi-host report, `summary` groups observations by the actual
+host in the execution context. Errors and incomplete collection stay separate
+from observed finding counts. The Web report view shows this summary and a
+same-check host comparison; neither treats zero findings as a safety verdict.
 
 ### Common examples
 

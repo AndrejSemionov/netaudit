@@ -1180,6 +1180,7 @@ let CHART_INSTANCES = [];
 function destroyCharts() { CHART_INSTANCES.forEach(c => { try { c.destroy(); } catch(e){} }); CHART_INSTANCES = []; }
 
 function renderReport(report) {
+  const summaryId = Number(report._report_id);
   report = escDeep(report);  // display copy - callers keep the raw report (LAST_REPORT)
   destroyCharts();
   const root = document.getElementById('results');
@@ -1218,6 +1219,70 @@ function renderReport(report) {
   }
   // рисуем графики после того как canvas'ы в DOM
   requestAnimationFrame(() => pending.forEach(fn => { const c = fn(); if (c) CHART_INSTANCES.push(c); }));
+  if (Number.isInteger(summaryId) && summaryId > 0) loadHostSummary(summaryId);
+}
+
+async function loadHostSummary(reportId) {
+  const res = await fetch('/api/host-summary?report_id=' + reportId);
+  if (!res.ok) return;
+  const summary = await res.json();
+  if (!LAST_REPORT || Number(LAST_REPORT._report_id) !== reportId) return;
+  renderHostSummary(summary);
+}
+
+function renderHostSummary(summary) {
+  const rawSummary = summary;
+  const checks = [...new Set(rawSummary.hosts.flatMap(h => h.checks.map(c => c.check_id)))];
+  summary = escDeep(summary);
+  if (!summary.hosts || !summary.hosts.length) return;
+  const root = document.getElementById('results');
+  const card = document.createElement('div');
+  card.className = 'card';
+  const countText = counts => counts === null ? t('summary.no_comparable') :
+    `${counts.critical}/${counts.high}/${counts.medium}/${counts.low}`;
+  const rows = summary.hosts.map(h => {
+    const gaps = [...h.incomplete_checks, ...h.unknown_checks, ...h.duplicate_checks];
+    const link = h.checks[0] ? `<a href="${h.checks[0].details_url}">${t('open')}</a>` : '';
+    return `<tr><td>${h.host}</td><td>${h.completed_checks}</td><td>${h.errored_checks}</td>
+      <td>${countText(h.observed_counts)}</td><td>${gaps.length ? gaps.join(', ') : '—'}</td><td>${link}</td></tr>`;
+  }).join('');
+  card.innerHTML = `<h2>${t('summary.title')}</h2>
+    <p class="hint">${t('summary.note')}</p>
+    <table><tr><th>${t('summary.host')}</th><th>${t('summary.completed')}</th>
+    <th>${t('summary.errors')}</th><th>${t('summary.observed')}</th>
+    <th>${t('summary.gaps')}</th><th></th></tr>${rows}</table>
+    <h3>${t('summary.compare')}</h3>`;
+  const select = document.createElement('select');
+  const prompt = document.createElement('option');
+  prompt.value = '';
+  prompt.textContent = t('summary.select_check');
+  select.appendChild(prompt);
+  checks.forEach((id, i) => {
+    const option = document.createElement('option');
+    option.value = String(i);
+    option.textContent = id;
+    select.appendChild(option);
+  });
+  const comparison = document.createElement('div');
+  select.addEventListener('change', () => {
+    if (select.value === '') { comparison.textContent = ''; return; }
+    renderHostComparison(rawSummary, checks[Number(select.value)], comparison);
+  });
+  card.appendChild(select);
+  card.appendChild(comparison);
+  root.prepend(card);
+}
+
+function renderHostComparison(rawSummary, checkId, target) {
+  const rows = escDeep(rawSummary.hosts.flatMap(h => h.checks)
+    .filter(c => c.check_id === checkId));
+  const countText = counts => counts === null ? t('summary.no_comparable') :
+    `${counts.critical}/${counts.high}/${counts.medium}/${counts.low}`;
+  target.innerHTML = `<table><tr><th>${t('summary.host')}</th><th>${t('summary.instance')}</th>
+    <th>${t('summary.status')}</th><th>${t('summary.observed')}</th><th></th></tr>` +
+    rows.map(row => `<tr><td>${row.host}</td><td>${row.instance_key || '—'}</td>
+      <td>${row.status}</td><td>${countText(row.observed_counts)}</td>
+      <td><a href="${row.details_url}">${t('open')}</a></td></tr>`).join('') + '</table>';
 }
 
 function lossClass(v) { return v > 10 ? 'bad' : (v > 2 ? 'warn' : 'ok'); }

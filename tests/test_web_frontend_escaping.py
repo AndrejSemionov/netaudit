@@ -29,6 +29,8 @@ HTML_WRITERS = {
     'runAudit': 'static',
     'finishStream': 'escapes',
     'renderReport': 'escapes',
+    'renderHostSummary': 'escapes',
+    'renderHostComparison': 'escapes',
     'loadHistory': 'escapes',
     'renderAnalysis': 'escapes',
     'loadTrendTargets': 'escapes',

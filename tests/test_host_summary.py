@@ -76,10 +76,12 @@ def test_summary_never_copies_raw_secret_or_error_text():
         'results': {'check': {'_multi_host': True, 'by_host': {
             'a': {'error': secret},
             'b': {'findings': [_finding('high', title=secret)], 'warnings': [secret]},
+            'c': {'findings': []},
         }}},
         'execution_context': {'check': {
             'a': {'host': 'a', 'password': secret},
             'b': {'host': 'b', 'sudo_password': secret},
+            'c': {'host': {'password': secret}},
         }},
     }
     assert secret not in json.dumps(host_summary(report))
@@ -116,15 +118,19 @@ def test_cli_summary_and_same_check_comparison(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)['hosts'][0]['host'] == 'h'
     netaudit.cmd_summary(Namespace(id='7', check='check', json=True))
     assert json.loads(capsys.readouterr().out)['hosts'][0]['check_id'] == 'check'
+    parsed = netaudit.build_parser().parse_args(['summary', '7', '--check', 'check', '--json'])
+    assert parsed.func is netaudit.cmd_summary
 
 
 def test_web_summary_read_only_and_links_to_report(monkeypatch):
     from fastapi import HTTPException
+
     from web import app as web_app
 
     report = {'results': {'check': {'findings': []}},
               'execution_context': {'check': {'host': 'h'}}}
     monkeypatch.setattr(web_app, 'load_report', lambda rid: report if rid == 7 else None)
+    assert any(route.path == '/api/host-summary' for route in web_app.app.routes)
     body = web_app.api_host_summary(report_id=7, check_id='')
     assert body['hosts'][0]['checks'][0]['details_url'] == '/api/report?id=7'
     compared = web_app.api_host_summary(report_id=7, check_id='check')
