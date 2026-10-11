@@ -21,6 +21,11 @@ MAX_PARALLEL_LIMIT = 16
 PROCESS_MAX_PARALLEL = 8
 MAX_INSTANCES_PER_CHECK = 64
 MAX_INSTANCES_PER_REQUEST = 256
+NOT_STARTED_ERROR = 'not started: the run was stopped'
+
+
+class _CancelledBeforeStart(Exception):
+    """A waiting Web worker was stopped before its check started."""
 
 
 def validate_multi_request(selected: list[dict], max_parallel: int = DEFAULT_MAX_PARALLEL) -> None:
@@ -60,18 +65,31 @@ class _ProcessSlots:
         self.cv.notify_all()
 
     @contextmanager
-    def slot(self, run):
+    def slot(self, run, cancelled: threading.Event | None = None):
         with self.cv:
+            if cancelled is not None and cancelled.is_set():
+                raise _CancelledBeforeStart
             if run not in self.waiting:
                 self.waiting[run] = 0
                 self.queue.append(run)
             self.waiting[run] += 1
             self._dispatch()
             while not self.grants.get(run):
-                self.cv.wait()
+                if cancelled is not None and cancelled.is_set():
+                    self.waiting[run] -= 1
+                    if not self.waiting[run]:
+                        del self.waiting[run]
+                        self.queue.remove(run)
+                    self._dispatch()
+                    raise _CancelledBeforeStart
+                self.cv.wait(0.05 if cancelled is not None else None)
             self.grants[run] -= 1
             if not self.grants[run]:
                 del self.grants[run]
+            if cancelled is not None and cancelled.is_set():
+                self.active -= 1
+                self._dispatch()
+                raise _CancelledBeforeStart
         try:
             yield
         finally:
@@ -83,9 +101,9 @@ class _ProcessSlots:
 _process_slots = _ProcessSlots()
 
 
-def execution_slot(run):
+def execution_slot(run, cancelled: threading.Event | None = None):
     """Shared Web process slot around one active check instance."""
-    return _process_slots.slot(run)
+    return _process_slots.slot(run, cancelled)
 
 
 def run_checks(selected: list[dict]) -> dict:
@@ -180,7 +198,8 @@ def _dedupe_key(host_value, seen_counts: dict) -> str:
 
 def run_instances(check_id: str, spec, instances: list[dict],
                    on_instance_done=None, *, max_parallel: int = DEFAULT_MAX_PARALLEL,
-                   shared_pool: bool = False, run_token=None) -> tuple[dict, dict]:
+                   shared_pool: bool = False, run_token=None,
+                   cancelled: threading.Event | None = None) -> tuple[dict, dict]:
     """
     Runs N instances of ONE check with at most max_parallel workers, and returns
     (results_by_key, timing_by_key).
@@ -206,8 +225,9 @@ def run_instances(check_id: str, spec, instances: list[dict],
     validate_multi_request([{'id': check_id, 'instances': instances}], max_parallel)
     seen_counts: dict = {}
     keys = [_dedupe_key(p.get('host', ''), seen_counts) for p in instances]
-    results_by_index: list[dict | None] = [None] * len(instances)
-    timings_by_index: list[float | None] = [None] * len(instances)
+    pending = object()
+    results_by_index: list = [pending] * len(instances)
+    timings_by_index: list = [pending] * len(instances)
     next_index = 0
     lock = threading.Lock()
     threads = []
@@ -217,13 +237,18 @@ def run_instances(check_id: str, spec, instances: list[dict],
         nonlocal next_index
         while True:
             with lock:
-                if next_index == len(instances):
+                if next_index == len(instances) or (cancelled is not None and cancelled.is_set()):
                     return
                 index = next_index
                 next_index += 1
-            slot = execution_slot(token) if shared_pool else nullcontext()
-            with slot:
-                result, elapsed = _run_one_instance(check_id, spec, instances[index])
+            slot = execution_slot(token, cancelled) if shared_pool else nullcontext()
+            try:
+                with slot:
+                    if cancelled is not None and cancelled.is_set():
+                        return
+                    result, elapsed = _run_one_instance(check_id, spec, instances[index])
+            except _CancelledBeforeStart:
+                return
             results_by_index[index] = result
             timings_by_index[index] = elapsed
             if on_instance_done is not None:
@@ -241,6 +266,20 @@ def run_instances(check_id: str, spec, instances: list[dict],
         t.start()
     for t in threads:
         t.join()
+
+    for index, result in enumerate(results_by_index):
+        if result is pending:
+            if cancelled is None or not cancelled.is_set():
+                raise RuntimeError(f'{check_id}: worker did not return instance {index}')
+            skipped = {'error': NOT_STARTED_ERROR}
+            results_by_index[index] = skipped
+            timings_by_index[index] = 0.0
+            if on_instance_done is not None:
+                try:
+                    on_instance_done(keys[index], skipped, 0.0)
+                except Exception:  # noqa: BLE001 - callback failure must not hide skipped hosts
+                    log.error('%s: on_instance_done callback failed for %r',
+                              check_id, keys[index], exc_info=True)
 
     return (dict(zip(keys, results_by_index, strict=True)),
             dict(zip(keys, timings_by_index, strict=True)))
@@ -330,6 +369,9 @@ def run_checks_multi(selected: list[dict], *, max_parallel: int = DEFAULT_MAX_PA
             continue
 
         if max_parallel == DEFAULT_MAX_PARALLEL and not shared_pool:
+            # Keep the original positional call for existing callers that
+            # wrap run_instances(); CLI's default behavior is otherwise the
+            # same as passing both defaults explicitly.
             by_host, by_host_timing = run_instances(check_id, spec, instances)
         else:
             by_host, by_host_timing = run_instances(

@@ -190,3 +190,91 @@ def test_stream_stop_marks_queued_hosts_without_starting_them(slow_check, isolat
     assert list(by_host) == [f'h{i}' for i in range(6)]
     assert all('not started' in by_host[f'h{i}']['error'] for i in range(1, 6))
     assert len([event for event in events if event['type'] == 'check_done']) == 6
+
+
+def test_cancelled_run_withdraws_from_busy_shared_queue(slow_check, isolated_db, monkeypatch):
+    monkeypatch.setattr(engine, 'PROCESS_MAX_PARALLEL', 1)
+    slots = engine._ProcessSlots()
+    monkeypatch.setattr(engine, '_process_slots', slots)
+    cid, spec, state = slow_check
+    holder_entered = threading.Event()
+    release_holder = threading.Event()
+    stopped = threading.Event()
+    token = object()
+    outcome = []
+
+    def holder():
+        with slots.slot(object()):
+            holder_entered.set()
+            assert release_holder.wait(2)
+
+    def waiting_run():
+        outcome.append(engine.run_instances(cid, spec, [{'host': 'waiting'}],
+                                            shared_pool=True, run_token=token, cancelled=stopped))
+
+    first = threading.Thread(target=holder, daemon=True)
+    second = threading.Thread(target=waiting_run, daemon=True)
+    first.start()
+    try:
+        assert holder_entered.wait(2)
+        second.start()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            with slots.cv:
+                if token in slots.waiting:
+                    break
+            time.sleep(0.001)
+        else:
+            pytest.fail('run never entered the shared queue')
+        stopped.set()
+        second.join(timeout=1)
+        assert not second.is_alive(), 'stopped run must not wait for another run to release its slot'
+        assert outcome[0][0]['waiting'] == {'error': 'not started: the run was stopped'}
+        assert state['called'] == []
+    finally:
+        release_holder.set()
+        first.join(timeout=2)
+    assert not first.is_alive()
+
+
+def test_stream_stop_skips_single_check_waiting_for_shared_slot(slow_check, isolated_db, monkeypatch):
+    from netaudit_pkg.streaming import StreamTask, run_stream
+
+    monkeypatch.setattr(engine, 'PROCESS_MAX_PARALLEL', 1)
+    slots = engine._ProcessSlots()
+    monkeypatch.setattr(engine, '_process_slots', slots)
+    cid, _spec, state = slow_check
+    holder_entered = threading.Event()
+    release_holder = threading.Event()
+
+    def holder():
+        with slots.slot(object()):
+            holder_entered.set()
+            assert release_holder.wait(2)
+
+    first = threading.Thread(target=holder, daemon=True)
+    task = StreamTask('b2-single-stopped', [{'id': cid, 'params': {'host': 'waiting'}}])
+    second = threading.Thread(target=run_stream, args=(task,), daemon=True)
+    first.start()
+    try:
+        assert holder_entered.wait(2)
+        second.start()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            with slots.cv:
+                if slots.waiting:
+                    break
+            time.sleep(0.001)
+        else:
+            pytest.fail('single check never entered the shared queue')
+        task.stop()
+        second.join(timeout=1)
+        assert not second.is_alive()
+        report = next(event['report'] for event in list(task.q.queue)
+                      if event['type'] == 'stopped')
+        assert report['results'][cid] == {'error': 'not started: the run was stopped'}
+        assert state['called'] == []
+    finally:
+        release_holder.set()
+        first.join(timeout=2)
+    assert not first.is_alive()
