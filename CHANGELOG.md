@@ -12,6 +12,14 @@
   running checks (64 instances per check, 256 per request). Stopping a streamed
   run leaves queued hosts unstarted and marks each one explicitly in the report.
 
+- CLI: `netaudit run <checks> --hosts-file hosts.json` audits several servers in one run. The
+  file is a JSON array of `{"host", "user", "port", "key_path"}` records without passwords;
+  passwords are only asked for (`--password -`). A duplicate host, a secret in the file, a
+  check without a `host` parameter or an unreadable key file is refused before anything runs.
+  `--max-parallel N` (1–16, default 4) sets how many hosts run at once. A repeated `--host` is
+  now an error (use `--hosts-file`); other repeated parameters keep the last value as before,
+  except in a group run, where any repeat is an error.
+
 - SSH host keys are no longer lost when NetAudit connects to several new hosts
   at once (Web runs the hosts of a check in parallel). Before, on a fresh
   install only the last host's key was kept, so the others were trusted again

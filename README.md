@@ -269,6 +269,22 @@ python3 netaudit.py run server_audit lynis_audit docker_audit \
     --host 1.2.3.4 --user root --key_path ~/.ssh/id_rsa
 ```
 
+**Several servers at once** — list them in a JSON file (`host`, optional `user`, `port`,
+`key_path`; never passwords) and pass it with `--hosts-file`. Flags such as `--user` apply to
+every host, a record's own fields win. Passwords are only asked for (`--password -`):
+
+```bash
+cat > hosts.json <<'JSON'
+[{"host": "10.0.0.5"}, {"host": "web-2.example", "user": "audit", "port": 2222}]
+JSON
+python3 netaudit.py run server_audit ssh_hardening --hosts-file hosts.json \
+    --user root --key_path ~/.ssh/id_rsa
+```
+
+A host listed twice, a secret in the file, or a check without a `host` parameter is refused
+before anything runs. The report has one result per host (`by_host`). At most 4 hosts run at
+once; `--max-parallel N` (1–16) changes that. A run is limited to 64 hosts per check.
+
 Password-based instead of a key — read it interactively so it never lands in shell history:
 
 ```bash
