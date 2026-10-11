@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -23,6 +23,7 @@ from netaudit_pkg import (
     __version__,
     deployment,
     history_capture,
+    hosts,
     storage,
     streaming,
     timing,
@@ -386,6 +387,37 @@ def api_add_target(req: TargetRequest) -> dict:
 @app.delete('/api/targets/{target_id}')
 def api_delete_target(target_id: int) -> dict:
     storage.target_delete(target_id)
+    return {'ok': True}
+
+
+# --- Saved SSH hosts (B2.3) ---
+@app.get('/api/hosts')
+def api_hosts() -> list[dict]:
+    return storage.ssh_hosts_list()
+
+
+@app.post('/api/hosts')
+async def api_add_host(request: Request) -> dict:
+    # a raw JSON body, not a pydantic model: FastAPI's 422 echoes the submitted
+    # input back, and a password sent here by mistake must not come back
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(400, 'the body must be a JSON object') from None
+    if not isinstance(payload, dict):
+        raise HTTPException(400, 'the body must be a JSON object')
+    record = dict(payload)
+    label = record.pop('label', '')
+    try:
+        host_id = storage.ssh_host_add(record, label=label)
+    except hosts.HostRecordError as e:
+        raise HTTPException(400, str(e)) from None
+    return {'ok': True, 'id': host_id}
+
+
+@app.delete('/api/hosts/{host_id}')
+def api_delete_host(host_id: int) -> dict:
+    storage.ssh_host_delete(host_id)
     return {'ok': True}
 
 

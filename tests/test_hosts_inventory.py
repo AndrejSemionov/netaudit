@@ -149,7 +149,7 @@ def test_targets_api_is_unchanged(client, isolated_db):
 def test_hosts_settings_form_has_no_password_field():
     html = INDEX.read_text(encoding='utf-8')
     group = re.search(r'<div class="settings-group">(?:(?!<div class="settings-group">).)*?id="sshHostsList"'
-                      r'(?:(?!<div class="settings-group">).)*', html, re.S)
+                      r'(?:(?!<div class="settings-group">).)*', html, re.DOTALL)
     assert group, 'settings group for saved SSH hosts not found'
     assert 'type="password"' not in group.group(0)
     for field in ('newSshHostLabel', 'newSshHostHost', 'newSshHostUser', 'newSshHostPort', 'newSshHostKey'):
