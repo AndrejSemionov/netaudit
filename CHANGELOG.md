@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- CLI: `netaudit run <checks> --hosts-file hosts.json` audits several servers in one run. The
+  file is a JSON array of `{"host", "user", "port", "key_path"}` records without passwords;
+  passwords are only asked for (`--password -`). A duplicate host, a secret in the file, a
+  check without a `host` parameter or an unreadable key file is refused before anything runs.
+  The same `--param` given twice is now an error instead of silently keeping the last value.
+
 - SSH host keys are no longer lost when NetAudit connects to several new hosts
   at once (Web runs the hosts of a check in parallel). Before, on a fresh
   install only the last host's key was kept, so the others were trusted again
