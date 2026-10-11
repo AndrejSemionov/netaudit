@@ -156,3 +156,37 @@ def test_streaming_uses_same_bounded_dispatcher(slow_check, isolated_db):
     assert len(dones) == 9
     report = next(event['report'] for event in events if event['type'] == 'all_done')
     assert list(report['results'][cid]['by_host']) == [str(i) for i in range(9)]
+
+
+def test_stream_stop_marks_queued_hosts_without_starting_them(slow_check, isolated_db, monkeypatch):
+    from netaudit_pkg.streaming import StreamTask, run_stream
+
+    cid, spec, _state = slow_check
+    entered = threading.Event()
+    release = threading.Event()
+    called = []
+
+    def gated(host=''):
+        called.append(host)
+        entered.set()
+        assert release.wait(2)
+        return {'host': host}
+
+    monkeypatch.setattr(spec, 'func', gated)
+    task = StreamTask('b2-stopped', [
+        {'id': cid, 'instances': [{'host': f'h{i}'} for i in range(6)]},
+    ], max_parallel=1)
+    thread = threading.Thread(target=run_stream, args=(task,))
+    thread.start()
+    assert entered.wait(2)
+    task.stop()
+    release.set()
+    thread.join(timeout=3)
+    assert not thread.is_alive()
+    assert called == ['h0']
+    events = list(task.q.queue)
+    report = next(event['report'] for event in events if event['type'] == 'stopped')
+    by_host = report['results'][cid]['by_host']
+    assert list(by_host) == [f'h{i}' for i in range(6)]
+    assert all('not started' in by_host[f'h{i}']['error'] for i in range(1, 6))
+    assert len([event for event in events if event['type'] == 'check_done']) == 6
