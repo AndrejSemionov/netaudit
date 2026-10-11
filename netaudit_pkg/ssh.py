@@ -29,10 +29,22 @@ This module uses Trust-On-First-Use (TOFU) instead:
 known_hosts lives at ~/.netaudit/known_hosts, separate from the user's own
 ~/.ssh/known_hosts, so NetAudit's TOFU history doesn't get mixed with (or
 silently rely on) whatever the person's regular SSH client has already trusted.
+
+Several connections can see a host for the first time at once (Web runs the
+hosts of a check in parallel; CLI and Web are separate processes). Pinning is
+therefore decided against the file as it is *now*, under a lock, and written
+atomically: no pin is lost, and a different key for a host another connection
+has just pinned is refused, never written over the pin
+(docs/research/tofu_known_hosts_lock.md).
 """
 
 from __future__ import annotations
 
+import contextlib
+import os
+import stat
+import tempfile
+import threading
 from pathlib import Path
 from typing import Self
 
@@ -43,7 +55,67 @@ try:
 except ImportError:
     paramiko = None
 
+try:
+    import fcntl
+except ImportError:  # not POSIX: threads of this process are still serialised
+    fcntl = None
+
 KNOWN_HOSTS_PATH = Path.home() / '.netaudit' / 'known_hosts'
+
+_PIN_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _known_hosts_lock():
+    """Exclusive lock for reading and rewriting known_hosts: an in-process
+    lock plus flock on a sibling file, which also serialises processes.
+    Held only for local file work, never across a network call."""
+    KNOWN_HOSTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = KNOWN_HOSTS_PATH.with_name(KNOWN_HOSTS_PATH.name + '.lock')
+    with _PIN_LOCK, open(lock_path, 'a') as lock_file:
+        if fcntl is not None:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)  # released when the file closes
+        yield
+
+
+def _write_known_hosts(host_keys) -> None:
+    """Replace known_hosts in one step: write a temporary file next to it,
+    fsync, os.replace. A reader never sees a half-written file, and on any
+    failure the old file stays as it was."""
+    fd, tmp = tempfile.mkstemp(dir=KNOWN_HOSTS_PATH.parent, prefix=f'.{KNOWN_HOSTS_PATH.name}.', suffix='.tmp')
+    os.close(fd)
+    try:
+        host_keys.save(tmp)
+        if KNOWN_HOSTS_PATH.exists():
+            os.chmod(tmp, stat.S_IMODE(KNOWN_HOSTS_PATH.stat().st_mode))
+        with open(tmp, 'rb') as f:
+            os.fsync(f.fileno())
+        os.replace(tmp, KNOWN_HOSTS_PATH)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
+
+
+def _pin_host_key(hostname: str, key) -> bool:
+    """Pin a first-seen key for `hostname` without losing any other entry.
+
+    True: this call pinned it. False: another connection pinned the same key
+    meanwhile. Raises paramiko.BadHostKeyException when another connection
+    pinned a different key for the host - the same rule paramiko applies to
+    an entry it loaded: any key on file that is not this one is a mismatch."""
+    with _known_hosts_lock():
+        on_file = paramiko.HostKeys()
+        if KNOWN_HOSTS_PATH.exists():
+            on_file.load(str(KNOWN_HOSTS_PATH))
+        pinned = on_file.lookup(hostname)
+        if pinned:
+            if on_file.check(hostname, key):
+                return False
+            raise paramiko.BadHostKeyException(hostname, key, next(iter(pinned.values())))
+        on_file.add(hostname, key.get_name(), key)
+        _write_known_hosts(on_file)
+        return True
 
 
 class HostKeyMismatchError(Exception):
@@ -61,16 +133,18 @@ class TofuPolicy(paramiko.MissingHostKeyPolicy if paramiko else object):
     an exact match on every later connection to the same host."""
 
     def missing_host_key(self, client, hostname, key):
-        # this only fires for hosts with NO matching entry in the loaded
-        # known_hosts at all — paramiko itself already raises before this
-        # if a DIFFERENT key exists for a known hostname, so reaching here
-        # always means "first time seeing this host"
-        fingerprint = key.get_fingerprint().hex(':')
-        log.warning(f'SSH: first connection to {hostname} — key fingerprint {key.get_name()} {fingerprint}')
-        log.warning(f'SSH: saving to {KNOWN_HOSTS_PATH} — future connections will verify against this key')
+        # this only fires for hosts with NO entry in the client's own table —
+        # paramiko itself already raises before this if a DIFFERENT key was
+        # loaded for the hostname. That table may predate a pin another
+        # connection made meanwhile, so the decision is taken against the
+        # file, under a lock (_pin_host_key)
+        if _pin_host_key(hostname, key):
+            fingerprint = key.get_fingerprint().hex(':')
+            log.warning(f'SSH: first connection to {hostname} — key fingerprint {key.get_name()} {fingerprint}')
+            log.warning(f'SSH: saved to {KNOWN_HOSTS_PATH} — future connections will verify against this key')
+        else:
+            log.info(f'SSH: {hostname} was pinned by another connection just now with this same key')
         client.get_host_keys().add(hostname, key.get_name(), key)
-        KNOWN_HOSTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        client.save_host_keys(str(KNOWN_HOSTS_PATH))
 
 
 class SSHExecutor:
