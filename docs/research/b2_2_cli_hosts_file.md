@@ -45,19 +45,25 @@ netaudit run <check> [<check> ...] --hosts-file hosts.json [--user U] [--port P]
   without one (e.g. `ssl`, `ping`) is an error that names it; run it
   separately. `--quick` is not allowed with `--hosts-file`: pick the checks.
 - **`--host`:** not allowed together with `--hosts-file`.
-- **Secrets:** in the group form a password-type parameter is accepted only as
-  `-`, which asks once per parameter name, without echo, and keeps the value in
-  memory only. A literal value is an error, because `ps` and shell history
-  would see it.
+- **Secrets:** in the group form every secret flag (any password-type
+  parameter name) is checked before the first prompt. It must be `-`: a
+  literal value is an error, because `ps` and shell history would see it. It
+  must also be used by at least one selected check; for example
+  `--sudo_password` with only `backup_check` is an error rather than silently
+  ignored (review #35). `-` asks once per name, without echo, and keeps the
+  value in memory only.
 - **Engine call:** the run calls `run_checks_multi()` with one `instances`
   entry per host. One host gives the flat result shape, several give
   `by_host`, exactly as the Web path today.
 
-## Repeated flags (both forms)
+## Repeated flags
 
-The same `--param` twice is an error; today the last value silently wins. For
-`--host` the message points to `--hosts-file`. The single-host form
-`netaudit run <check> --host H ...` otherwise behaves exactly as before.
+- **Group form:** the same `--param` twice is an error.
+- **Single-host form:** only a repeated `--host` is an error, and its message
+  points to `--hosts-file` (B1 §3.1). Any other repeated parameter keeps the
+  old behaviour, where the last value wins, so scripts that append an
+  overriding flag keep working (review #35). Otherwise
+  `netaudit run <check> --host H ...` behaves exactly as before.
 
 ## Tests (RED first)
 
@@ -76,6 +82,9 @@ The same `--param` twice is an error; today the last value silently wins. For
    `70000`, `"22"`, `true`), or a bad file (not JSON, not an array, `[]`) is
    refused.
 8. `--host a --host b` is refused with a hint about `--hosts-file`. A single
-   `--host a` still runs `run_checks()` as before.
+   `--host a` still runs `run_checks()` as before. In the single form,
+   `--port 22 --port 2222` uses 2222; in the group form it is refused.
 9. End to end with a stubbed check function: the saved report row contains
    neither password, and `execution_context` holds one entry per host.
+10. A secret flag that no selected check uses is refused, whether its value
+    is a literal or `-`. No prompt is shown, and nothing runs.
