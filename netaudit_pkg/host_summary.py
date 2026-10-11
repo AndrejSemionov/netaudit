@@ -15,7 +15,7 @@ def _instances(report: dict, check_id: str):
         return
     multi_context = 'host' not in ctx and bool(ctx) and all(isinstance(p, dict) for p in ctx.values())
     if multi_context:
-        by_host = result.get('by_host')
+        by_host = result.get('by_host') if isinstance(result, dict) else None
         if not isinstance(by_host, dict):
             by_host = {}
         for instance_key, params in ctx.items():
