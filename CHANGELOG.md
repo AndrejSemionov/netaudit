@@ -12,8 +12,9 @@
   file is a JSON array of `{"host", "user", "port", "key_path"}` records without passwords;
   passwords are only asked for (`--password -`). A duplicate host, a secret in the file, a
   check without a `host` parameter or an unreadable key file is refused before anything runs.
-  A repeated `--host` is now an error (use `--hosts-file`); other repeated parameters keep the
-  last value as before, except in a group run, where any repeat is an error.
+  `--max-parallel N` (1–16, default 4) sets how many hosts run at once. A repeated `--host` is
+  now an error (use `--hosts-file`); other repeated parameters keep the last value as before,
+  except in a group run, where any repeat is an error.
 
 - SSH host keys are no longer lost when NetAudit connects to several new hosts
   at once (Web runs the hosts of a check in parallel). Before, on a fresh

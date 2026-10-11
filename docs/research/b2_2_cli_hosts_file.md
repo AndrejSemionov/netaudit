@@ -3,8 +3,9 @@
 Status: B2 approved by USER (2026-10-11: «Да, автономно») on the contract
 `b1_multi_host_contract.md` (§3.1). Implementer: Claude. Reviewer: GPT/Codex.
 This note fixes the CLI details §3.1 leaves open. The concurrency limits and the
-64/256 input limits belong to B2.1 (engine); B2.2 passes them through once
-B2.1 is merged.
+64/256 input limits belong to B2.1 (engine, #37). The CLI passes
+`--max-parallel` through and checks those limits before the first password
+prompt.
 
 ## Command
 
@@ -52,6 +53,10 @@ netaudit run <check> [<check> ...] --hosts-file hosts.json [--user U] [--port P]
   `--sudo_password` with only `backup_check` is an error rather than silently
   ignored (review #35). `-` asks once per name, without echo, and keeps the
   value in memory only.
+- **`--max-parallel N`:** how many hosts run at once; the default is 4, and
+  the engine allows 1–16 (B2.1). The flag is only valid with `--hosts-file`.
+  The run is refused before any prompt if `N` is out of range, or if it would
+  break B2.1's limits of 64 hosts per check and 256 instances per run.
 - **Engine call:** the run calls `run_checks_multi()` with one `instances`
   entry per host. One host gives the flat result shape, several give
   `by_host`, exactly as the Web path today.
