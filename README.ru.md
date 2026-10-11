@@ -240,6 +240,8 @@ python3 netaudit.py run ssl http --url https://example.com
 python3 netaudit.py run ports firewall performance      # локальная безопасность + ресурсы
 python3 netaudit.py run mtr ping --ai                    # + AI-анализ после прогона
 python3 netaudit.py history                               # список сохранённых отчётов
+python3 netaudit.py summary 42                            # сводка по хостам одного отчёта
+python3 netaudit.py summary 42 --check ssh_hardening --json # сравнение хостов одной проверки
 python3 netaudit.py trend                                 # объекты с историей findings/score
 python3 netaudit.py trend ssh_hardening 10.0.0.1          # как менялось состояние объекта
 python3 netaudit.py analyze 42                            # AI-анализ отчёта #42 из history
@@ -252,6 +254,11 @@ python3 netaudit.py analyze 42                            # AI-анализ от
 `fail2ban_logs_audit` показывают только наблюдения из ограниченного среза
 логов: уменьшение числа событий не доказывает устранение проблемы. Та же
 история доступна на вкладке «Динамика» в вебе.
+
+`summary` показывает наблюдения по каждому хосту одного сохранённого отчёта.
+Ошибки и неполный сбор отделены от количества находок. Веб-просмотр отчёта
+показывает ту же сводку и сравнение хостов одной проверки; ноль находок не
+означает, что хост безопасен.
 
 Один и тот же движок и проверки — в консоли и вебе, отчёты пишутся в общую базу
 `~/.netaudit/netaudit.db`, так что можно запустить из CLI, а открыть и проанализировать в вебе.

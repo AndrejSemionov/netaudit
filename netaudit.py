@@ -34,7 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from netaudit_pkg import __version__, hosts, storage, trends
+from netaudit_pkg import __version__, host_summary, hosts, storage, trends
 from netaudit_pkg.engine import (
     DEFAULT_MAX_PARALLEL,
     list_available,
@@ -253,6 +253,43 @@ def cmd_history(args):
         return
     for it in items:
         print(f"#{it['id']}  {it['timestamp']}  [{', '.join(it['checks'])}]  {it['total_time']}s")
+
+
+def cmd_summary(args):
+    """Read-only host summary or same-check comparison for one saved report."""
+    report_id = int(args.id)
+    report = load_report(report_id)
+    if report is None:
+        print(f'Report #{report_id} not found.')
+        return
+    data = (host_summary.compare_hosts(report, args.check) if args.check
+            else host_summary.host_summary(report))
+    if args.json:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+    if args.check:
+        print(f'Report #{report_id}, check {args.check}:')
+        for row in data['hosts']:
+            counts = row['observed_counts']
+            observed = ('no comparable findings' if counts is None
+                        else f'{sum(counts.values())} observed findings')
+            if row['status'] == 'incomplete':
+                observed += ' (collection incomplete)'
+            print(f"  {json.dumps(row['host'], ensure_ascii=False)} "
+                  f"[{row['instance_key'] or 'single'}]: {row['status']}; {observed}")
+    else:
+        print(f'Report #{report_id}, hosts:')
+        for row in data['hosts']:
+            counts = row['observed_counts']
+            observed = ('no comparable findings' if counts is None
+                        else f'{sum(counts.values())} observed findings')
+            if row['incomplete_checks']:
+                observed += ' (collection incomplete)'
+            print(f"  {json.dumps(row['host'], ensure_ascii=False)}: "
+                  f"{row['completed_checks']} completed, {row['errored_checks']} errors; {observed}")
+            for field in ('error_checks', 'incomplete_checks', 'unknown_checks', 'duplicate_checks'):
+                if row[field]:
+                    print(f"    {field}: {', '.join(row[field])}")
 
 
 def cmd_analyze(args):
@@ -475,6 +512,12 @@ def build_parser(detailed: bool = True):
 
     p_hist = sub.add_parser('history', help='List reports')
     p_hist.set_defaults(func=cmd_history)
+
+    p_summary = sub.add_parser('summary', help='Per-host summary of one saved report')
+    p_summary.add_argument('id', help='Report ID from history')
+    p_summary.add_argument('--check', help='Compare hosts for one check in this report')
+    p_summary.add_argument('--json', action='store_true', help='Machine-readable output')
+    p_summary.set_defaults(func=cmd_summary)
 
     p_an = sub.add_parser('analyze', help='AI analysis of a report by id (see history)')
     p_an.add_argument('id', help='Report ID from history')

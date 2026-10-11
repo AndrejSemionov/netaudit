@@ -2,11 +2,14 @@
 
 ## Unreleased
 
+- Saved multi-host reports now have a read-only host summary and same-check
+  comparison in the CLI (`summary <report_id> [--check ID]`) and Web report
+  view. Collection errors, incomplete log coverage, warnings, unknown result
+  formats, and duplicate host instances remain distinct from zero observed findings.
 - Web: saved SSH hosts (Settings → "SSH hosts": host, user, port, key path; never passwords)
   and a picker on the audit tab that fills one host block per chosen host in the selected SSH
   checks. `/api/hosts` refuses a password in the payload with 400 and never echoes it back;
   the database has no column that could hold one.
-
 - Multi-host runs use bounded workers (4 by default, configurable 1–16) and
   share at most 8 active instances across one Web process. Web estimates
   account for bounded batches, and oversized requests are rejected before
