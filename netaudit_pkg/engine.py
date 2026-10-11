@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 
 # importing registers all the checks
@@ -14,6 +15,95 @@ from . import (
 from .redaction import redact_params
 from .registry import registry
 from .utils import log, missing_tools
+
+DEFAULT_MAX_PARALLEL = 4
+MAX_PARALLEL_LIMIT = 16
+PROCESS_MAX_PARALLEL = 8
+MAX_INSTANCES_PER_CHECK = 64
+MAX_INSTANCES_PER_REQUEST = 256
+NOT_STARTED_ERROR = 'not started: the run was stopped'
+
+
+class _CancelledBeforeStart(Exception):
+    """A waiting Web worker was stopped before its check started."""
+
+
+def validate_multi_request(selected: list[dict], max_parallel: int = DEFAULT_MAX_PARALLEL) -> None:
+    """Reject oversized requests before any check has side effects."""
+    if type(max_parallel) is not int or not 1 <= max_parallel <= MAX_PARALLEL_LIMIT:
+        raise ValueError(f'max_parallel must be an integer from 1 to {MAX_PARALLEL_LIMIT}')
+    total = 0
+    for item in selected:
+        instances = item['instances'] if 'instances' in item else [item.get('params', {})]
+        if len(instances) > MAX_INSTANCES_PER_CHECK:
+            raise ValueError(f'too many instances for {item["id"]}: limit {MAX_INSTANCES_PER_CHECK}')
+        total += len(instances)
+        if total > MAX_INSTANCES_PER_REQUEST:
+            raise ValueError(f'too many instances in request: limit {MAX_INSTANCES_PER_REQUEST}')
+
+
+class _ProcessSlots:
+    """Round-robin Web slots: one waiting worker per run gets each free slot."""
+
+    def __init__(self):
+        self.cv = threading.Condition()
+        self.active = 0
+        self.queue = []
+        self.waiting = {}
+        self.grants = {}
+
+    def _dispatch(self):
+        while self.active < PROCESS_MAX_PARALLEL and self.queue:
+            run = self.queue.pop(0)
+            self.waiting[run] -= 1
+            self.grants[run] = self.grants.get(run, 0) + 1
+            self.active += 1
+            if self.waiting[run]:
+                self.queue.append(run)
+            else:
+                del self.waiting[run]
+        self.cv.notify_all()
+
+    @contextmanager
+    def slot(self, run, cancelled: threading.Event | None = None):
+        with self.cv:
+            if cancelled is not None and cancelled.is_set():
+                raise _CancelledBeforeStart
+            if run not in self.waiting:
+                self.waiting[run] = 0
+                self.queue.append(run)
+            self.waiting[run] += 1
+            self._dispatch()
+            while not self.grants.get(run):
+                if cancelled is not None and cancelled.is_set():
+                    self.waiting[run] -= 1
+                    if not self.waiting[run]:
+                        del self.waiting[run]
+                        self.queue.remove(run)
+                    self._dispatch()
+                    raise _CancelledBeforeStart
+                self.cv.wait(0.05 if cancelled is not None else None)
+            self.grants[run] -= 1
+            if not self.grants[run]:
+                del self.grants[run]
+            if cancelled is not None and cancelled.is_set():
+                self.active -= 1
+                self._dispatch()
+                raise _CancelledBeforeStart
+        try:
+            yield
+        finally:
+            with self.cv:
+                self.active -= 1
+                self._dispatch()
+
+
+_process_slots = _ProcessSlots()
+
+
+def execution_slot(run, cancelled: threading.Event | None = None):
+    """Shared Web process slot around one active check instance."""
+    return _process_slots.slot(run, cancelled)
 
 
 def run_checks(selected: list[dict]) -> dict:
@@ -107,9 +197,11 @@ def _dedupe_key(host_value, seen_counts: dict) -> str:
 
 
 def run_instances(check_id: str, spec, instances: list[dict],
-                   on_instance_done=None) -> tuple[dict, dict]:
+                   on_instance_done=None, *, max_parallel: int = DEFAULT_MAX_PARALLEL,
+                   shared_pool: bool = False, run_token=None,
+                   cancelled: threading.Event | None = None) -> tuple[dict, dict]:
     """
-    Runs N instances of ONE check, in parallel (threading), and returns
+    Runs N instances of ONE check with at most max_parallel workers, and returns
     (results_by_key, timing_by_key).
 
     This is the shared execution core behind both run_checks_multi() (plain
@@ -119,10 +211,8 @@ def run_instances(check_id: str, spec, instances: list[dict],
 
     - `key` is instance['host'] (stringified), suffixed with '#2', '#3', ...
       on repeats within this call so duplicate hosts don't collide.
-    - A single instance still goes through the same threading path (a thread
-      of one), kept simple rather than special-cased, since the cost is
-      negligible and it guarantees identical behavior between the 1- and
-      N-instance cases.
+    - Waiting instances remain in the input list; they do not create threads.
+      Web workers also acquire one of the shared process slots.
     - A failing instance (exception in spec.func) does not block the others -
       each instance is isolated in its own try/except (see _run_one_instance).
     - timing.record() is called once per instance via _run_one_instance,
@@ -132,47 +222,71 @@ def run_instances(check_id: str, spec, instances: list[dict],
       used by streaming.run_stream() to emit a per-host SSE event without
       run_instances() itself knowing anything about SSE/queues.
     """
-    results: dict = {}
-    timings: dict = {}
-    lock = threading.Lock()
+    validate_multi_request([{'id': check_id, 'instances': instances}], max_parallel)
     seen_counts: dict = {}
+    keys = [_dedupe_key(p.get('host', ''), seen_counts) for p in instances]
+    pending = object()
+    results_by_index: list = [pending] * len(instances)
+    timings_by_index: list = [pending] * len(instances)
+    next_index = 0
+    lock = threading.Lock()
     threads = []
+    token = run_token if run_token is not None else object()
 
-    def _worker(cid, sp, params, key, out_results, out_timing, out_lock, cb):
-        result, elapsed = _run_one_instance(cid, sp, params)
-        with out_lock:
-            out_results[key] = result
-            out_timing[key] = elapsed
-        if cb is not None:
+    def _worker():
+        nonlocal next_index
+        while True:
+            with lock:
+                if next_index == len(instances) or (cancelled is not None and cancelled.is_set()):
+                    return
+                index = next_index
+                next_index += 1
+            slot = execution_slot(token, cancelled) if shared_pool else nullcontext()
             try:
-                cb(key, result, elapsed)
-            except Exception:  # noqa: BLE001 - callback failure must not hide check results
-                # A misbehaving callback (e.g. streaming's SSE emit) must not
-                # take down this worker thread silently - results/timing for
-                # this instance are already recorded above regardless, but an
-                # uncaught exception here would otherwise propagate out of
-                # the thread target and be swallowed by threading's default
-                # excepthook, dropping the caller's per-instance notification
-                # (e.g. streaming.run_stream()'s per-host check_done event)
-                # without any visible error.
-                log.error(f'{cid}: on_instance_done callback failed for {key!r}', exc_info=True)
+                with slot:
+                    if cancelled is not None and cancelled.is_set():
+                        return
+                    result, elapsed = _run_one_instance(check_id, spec, instances[index])
+            except _CancelledBeforeStart:
+                return
+            results_by_index[index] = result
+            timings_by_index[index] = elapsed
+            if on_instance_done is not None:
+                try:
+                    on_instance_done(keys[index], result, elapsed)
+                except Exception:  # noqa: BLE001 - callback failure must not hide check results
+                    log.error('%s: on_instance_done callback failed for %r',
+                              check_id, keys[index], exc_info=True)
 
-    for instance_params in instances:
-        key = _dedupe_key(instance_params.get('host', ''), seen_counts)
-        t = threading.Thread(
-            target=_worker,
-            args=(check_id, spec, instance_params, key, results, timings, lock, on_instance_done),
-            daemon=True,
-        )
+    worker_count = min(len(instances), max_parallel,
+                       PROCESS_MAX_PARALLEL if shared_pool else max_parallel)
+    for _ in range(worker_count):
+        t = threading.Thread(target=_worker, daemon=True)
         threads.append(t)
         t.start()
     for t in threads:
         t.join()
 
-    return results, timings
+    for index, result in enumerate(results_by_index):
+        if result is pending:
+            if cancelled is None or not cancelled.is_set():
+                raise RuntimeError(f'{check_id}: worker did not return instance {index}')
+            skipped = {'error': NOT_STARTED_ERROR}
+            results_by_index[index] = skipped
+            timings_by_index[index] = 0.0
+            if on_instance_done is not None:
+                try:
+                    on_instance_done(keys[index], skipped, 0.0)
+                except Exception:  # noqa: BLE001 - callback failure must not hide skipped hosts
+                    log.error('%s: on_instance_done callback failed for %r',
+                              check_id, keys[index], exc_info=True)
+
+    return (dict(zip(keys, results_by_index, strict=True)),
+            dict(zip(keys, timings_by_index, strict=True)))
 
 
-def run_checks_multi(selected: list[dict]) -> dict:
+def run_checks_multi(selected: list[dict], *, max_parallel: int = DEFAULT_MAX_PARALLEL,
+                     shared_pool: bool = False) -> dict:
     """
     selected: list of {'id': 'cve', 'instances': [{'host': ..., ...}, {'host': ..., ...}]}
     or the legacy single-instance form {'id': 'cve', 'params': {'host': ..., ...}}
@@ -198,10 +312,12 @@ def run_checks_multi(selected: list[dict]) -> dict:
     A failing instance (missing tools, exception) does not block the others -
     each instance is isolated the same way run_checks() isolates each check.
 
-    report['total_time'] is a wall-clock approximation: for each check, the
-    max elapsed among its instances (since they ran in parallel), summed
-    across checks (since different checks still run one after another).
+    report['total_time'] approximates elapsed time from bounded groups of
+    instances, summed across sequential checks. Per-instance timings exclude
+    queue wait and timing-store overhead.
     """
+    validate_multi_request(selected, max_parallel)
+    run_token = object()
     report = {
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),  # noqa: DTZ005 - report history uses local naive timestamps for ordering
         'results': {},
@@ -240,7 +356,9 @@ def run_checks_multi(selected: list[dict]) -> dict:
         report['meta'][check_id] = {'label': spec.label, 'category': spec.category}
 
         if len(instances) == 1:
-            result, elapsed = _run_one_instance(check_id, spec, instances[0])
+            slot = execution_slot(run_token) if shared_pool else nullcontext()
+            with slot:
+                result, elapsed = _run_one_instance(check_id, spec, instances[0])
             report['results'][check_id] = result
             report['timing'][check_id] = elapsed
             # Flat shape, matching run_checks() - single instance means
@@ -250,7 +368,15 @@ def run_checks_multi(selected: list[dict]) -> dict:
             check_max_elapsed.append(elapsed)
             continue
 
-        by_host, by_host_timing = run_instances(check_id, spec, instances)
+        if max_parallel == DEFAULT_MAX_PARALLEL and not shared_pool:
+            # Keep the original positional call for existing callers that
+            # wrap run_instances(); CLI's default behavior is otherwise the
+            # same as passing both defaults explicitly.
+            by_host, by_host_timing = run_instances(check_id, spec, instances)
+        else:
+            by_host, by_host_timing = run_instances(
+                check_id, spec, instances, max_parallel=max_parallel,
+                shared_pool=shared_pool, run_token=run_token)
         report['results'][check_id] = {'_multi_host': True, 'by_host': by_host}
         report['timing'][check_id] = by_host_timing
         # execution_context uses the SAME dedup keying run_instances() uses
@@ -263,7 +389,10 @@ def run_checks_multi(selected: list[dict]) -> dict:
             _dedupe_key(inst.get('host', ''), seen_counts): redact_params(inst) for inst in instances
         }
         if by_host_timing:
-            check_max_elapsed.append(max(by_host_timing.values()))
+            values = list(by_host_timing.values())
+            width = min(max_parallel, PROCESS_MAX_PARALLEL) if shared_pool else max_parallel
+            check_max_elapsed.append(sum(
+                max(values[i:i + width]) for i in range(0, len(values), width)))
 
     report['total_time'] = round(sum(check_max_elapsed), 2)
     return report
