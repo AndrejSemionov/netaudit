@@ -152,6 +152,7 @@ def test_api_refuses_bad_records_with_400(client, isolated_db, payload):
     {'host': SECRET + '!'},
     {'host': 'h1', 'user': SECRET + '!'},
     {'host': 'h1', 'port': SECRET},
+    {'host': 'h1', SECRET: 'x'},
 ])
 def test_api_invalid_field_values_never_echo_payload(isolated_db, payload):
     raw = json.dumps(payload).encode()

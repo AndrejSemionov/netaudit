@@ -425,7 +425,16 @@ async def api_add_host(request: Request) -> dict:
     try:
         host_id = storage.ssh_host_add(record, label=label)
     except hosts.HostRecordError as e:
-        raise HTTPException(400, str(e)) from None
+        # The shared CLI validator may quote an invalid value. Keep the Web
+        # boundary field-only, even when a secret was pasted into user/host.
+        reason = str(e)
+        field = next((name for name in ('host', 'user', 'port', 'key_path', 'label',
+                                        'password', 'sudo_password')
+                      if reason.startswith((name + ' ', name + ':'))), None)
+        detail = (f'{field}: invalid value' if field else
+                  'unknown field; allowed: host, user, port, key_path, label'
+                  if reason.startswith('unknown field') else 'invalid host record')
+        raise HTTPException(400, detail) from None
     return {'ok': True, 'id': host_id}
 
 

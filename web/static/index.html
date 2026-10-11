@@ -1065,7 +1065,12 @@ async function runAudit() {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ checks, force_async: forceAsync })
   });
-  const { task_id } = await res.json();
+  const started = await res.json().catch(() => ({}));
+  if (!res.ok || !started.task_id) {
+    setStatus(t('run.error') + ': ' + (started.detail || t('run.unknown')));
+    return;
+  }
+  const { task_id } = started;
 
   // UI: кнопка запуска -> стоп
   const runBtn = document.getElementById('runBtn');

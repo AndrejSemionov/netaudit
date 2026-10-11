@@ -19,7 +19,9 @@ note fixes what §3.1 leaves open.
   characters. A direct caller cannot store a secret either.
 - **Same host twice.** Two records with the same host but a different `user`
   or `port` are allowed (§3.1). A run that would use both for one check is
-  refused in the Web UI (below).
+  refused in the Web UI (below). IPv4/IPv6 literals are stored in canonical
+  form so equivalent spellings have the same picker key; DNS spelling is
+  preserved for SSH host-key lookup.
 
 ## API
 
@@ -27,8 +29,8 @@ note fixes what §3.1 leaves open.
   per record. `user`, `port` and `key_path` are `null` when unset.
 - `POST /api/hosts` takes a JSON object and returns `{ok, id}`. An invalid or
   secret-carrying payload gets **400** with a message that names fields, never
-  values. It is not FastAPI's 422, whose body echoes the submitted input back,
-  secret included.
+  values (including invalid `host`, `user` and `port` values). It is not
+  FastAPI's 422, whose body echoes the submitted input back, secret included.
 - `DELETE /api/hosts/{id}` deletes the record.
 - `/api/targets`, `/api/presets`, `/api/run` and `/api/stream/start` do not
   change. The run API keeps its `#2` handling for duplicate hosts (§2).
