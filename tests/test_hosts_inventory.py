@@ -7,15 +7,19 @@ at the storage layer, never echoed back, never stored.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 import sqlite3
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from netaudit_pkg.hosts import HostRecordError
-from web.app import app
+from web.app import api_add_host, app
 
 SECRET = 'INVENTORY-TEST-SECRET-PW'
 FIELDS = {'id', 'label', 'host', 'user', 'port', 'key_path'}
@@ -51,6 +55,12 @@ def test_same_host_with_another_user_is_a_separate_record(isolated_db):
     isolated_db.ssh_host_add({'host': 'h1', 'user': 'root'})
     isolated_db.ssh_host_add({'host': 'h1', 'user': 'audit', 'port': 2222})
     assert len(isolated_db.ssh_hosts_list()) == 2
+
+
+def test_ipv6_aliases_are_canonical_for_picker_duplicate_detection(isolated_db):
+    isolated_db.ssh_host_add({'host': '2001:db8::1'})
+    isolated_db.ssh_host_add({'host': '2001:0db8:0:0:0:0:0:1', 'user': 'audit'})
+    assert [record['host'] for record in isolated_db.ssh_hosts_list()] == ['2001:db8::1'] * 2
 
 
 @pytest.mark.parametrize('record, label', [
@@ -136,6 +146,31 @@ def test_api_refuses_bad_records_with_400(client, isolated_db, payload):
     resp = client.post('/api/hosts', json=payload)
     assert resp.status_code == 400
     assert client.get('/api/hosts').json() == []
+
+
+@pytest.mark.parametrize('payload', [
+    {'host': SECRET + '!'},
+    {'host': 'h1', 'user': SECRET + '!'},
+    {'host': 'h1', 'port': SECRET},
+])
+def test_api_invalid_field_values_never_echo_payload(isolated_db, payload):
+    raw = json.dumps(payload).encode()
+    sent = False
+
+    async def receive():
+        nonlocal sent
+        if sent:
+            return {'type': 'http.request', 'body': b'', 'more_body': False}
+        sent = True
+        return {'type': 'http.request', 'body': raw, 'more_body': False}
+
+    request = Request({'type': 'http', 'method': 'POST', 'path': '/api/hosts',
+                       'headers': [(b'content-type', b'application/json')]}, receive)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(api_add_host(request))
+    assert error.value.status_code == 400
+    assert SECRET not in str(error.value.detail)
+    assert isolated_db.ssh_hosts_list() == []
 
 
 def test_targets_api_is_unchanged(client, isolated_db):
