@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Multi-host runs use bounded workers (4 by default, configurable 1–16) and
+  share at most 8 active instances across one Web process. Web estimates
+  account for bounded batches, and oversized requests are rejected before
+  running checks (64 instances per check, 256 per request).
+
 - SSH host keys are no longer lost when NetAudit connects to several new hosts
   at once (Web runs the hosts of a check in parallel). Before, on a fresh
   install only the last host's key was kept, so the others were trusted again
