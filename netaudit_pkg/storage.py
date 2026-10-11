@@ -587,7 +587,6 @@ def ssh_host_add(record: dict, label: str = '') -> int:
     """Save a host record. Validated here, not only at the API, so no caller
     can store a secret or an unknown field (raises hosts.HostRecordError)."""
     clean = hosts.validate_host_record(record)
-    clean['host'] = hosts.canonical_ip_host(clean['host'])
     label = hosts.validate_label(label)
     conn = _conn()
     cur = conn.execute('INSERT INTO ssh_hosts (label, host, user, port, key_path) VALUES (?,?,?,?,?)',

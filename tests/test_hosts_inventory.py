@@ -72,6 +72,21 @@ def test_ipv6_aliases_are_refused_by_picker_validation_without_rewriting_hosts(i
     assert error.value.detail == {'duplicate_id': second}
 
 
+def test_picker_validation_accepts_distinct_hosts_and_refuses_bad_ids(isolated_db):
+    from web.app import api_validate_host_selection
+
+    first = isolated_db.ssh_host_add({'host': 'h1'})
+    second = isolated_db.ssh_host_add({'host': 'h2'})
+    request = _json_request('/api/hosts/validate-selection', {'ids': [first, second]})
+    assert asyncio.run(api_validate_host_selection(request)) == {'ok': True}
+    for ids in ([first, first], [first, 99999], [True], ['INVENTORY-TEST-SECRET-PW'], list(range(65))):
+        request = _json_request('/api/hosts/validate-selection', {'ids': ids})
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(api_validate_host_selection(request))
+        assert error.value.status_code == 400
+        assert SECRET not in str(error.value.detail)
+
+
 @pytest.mark.parametrize('record, label', [
     ({'host': 'h1', 'password': SECRET}, ''),
     ({'host': 'h1', 'sudo_password': SECRET}, ''),

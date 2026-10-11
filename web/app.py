@@ -32,6 +32,7 @@ from netaudit_pkg import (
 )
 from netaudit_pkg.engine import (
     DEFAULT_MAX_PARALLEL,
+    MAX_INSTANCES_PER_CHECK,
     PROCESS_MAX_PARALLEL,
     list_available,
     run_checks_multi,
@@ -408,6 +409,34 @@ def api_delete_target(target_id: int) -> dict:
 @app.get('/api/hosts')
 def api_hosts() -> list[dict]:
     return storage.ssh_hosts_list()
+
+
+@app.post('/api/hosts/validate-selection')
+async def api_validate_host_selection(request: Request) -> dict:
+    """Refuse ambiguous saved-host picks using the same identity as the CLI.
+    Only integer IDs cross this boundary; stored host strings stay unchanged
+    for SSH host-key lookup.
+    """
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(400, 'ids must be a JSON array of saved host IDs') from None
+    ids = payload.get('ids') if isinstance(payload, dict) else None
+    if (not isinstance(ids, list) or not ids or len(ids) > MAX_INSTANCES_PER_CHECK
+            or any(type(host_id) is not int or host_id <= 0 for host_id in ids)):
+        raise HTTPException(400, f'ids must be a JSON array of 1-{MAX_INSTANCES_PER_CHECK} saved host IDs')
+    by_id = {row['id']: row for row in storage.ssh_hosts_list()}
+    seen_ids = set()
+    seen_hosts = set()
+    for host_id in ids:
+        if host_id in seen_ids or host_id not in by_id:
+            raise HTTPException(400, 'ids must name distinct saved hosts')
+        seen_ids.add(host_id)
+        identity = hosts.host_identity(by_id[host_id]['host'])
+        if identity in seen_hosts:
+            raise HTTPException(409, {'duplicate_id': host_id})
+        seen_hosts.add(identity)
+    return {'ok': True}
 
 
 @app.post('/api/hosts')

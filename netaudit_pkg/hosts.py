@@ -84,17 +84,10 @@ def validate_label(label) -> str:
 def host_identity(host: str) -> str:
     """How two records are compared for "the same host": IP addresses in
     normalised form, names case-insensitively."""
-    return canonical_ip_host(host).lower()
-
-
-def canonical_ip_host(host: str) -> str:
-    """Store IP addresses in one form so the Web picker sees equal aliases.
-    Preserve DNS spelling because that value is also used for SSH host-key lookup.
-    """
     try:
         return ipaddress.ip_address(host).compressed
     except ValueError:
-        return host
+        return host.lower()
 
 
 def reject_duplicate_hosts(records: list[dict]) -> None:

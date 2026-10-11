@@ -202,6 +202,7 @@ const I18N = {
     'hostpicker.apply': 'Подставить в выбранные проверки',
     'hostpicker.none_chosen': 'Отметь хотя бы один хост.',
     'hostpicker.duplicate': 'Хост {host} выбран дважды — оставь одну запись.',
+    'hostpicker.validation_failed': 'Не удалось проверить выбранные хосты. Повтори попытку.',
     'hostpicker.no_checks': 'Сначала выбери проверки с параметром host (SSH).',
     'hostpicker.applied': 'Хостов: {hosts}, проверок: {checks}. Пароль, введённый в первом блоке проверки, скопирован во все блоки.',
     // репутация
@@ -528,6 +529,7 @@ const I18N = {
     'hostpicker.apply': 'Apply to selected checks',
     'hostpicker.none_chosen': 'Tick at least one host.',
     'hostpicker.duplicate': 'Host {host} is chosen twice — keep one record.',
+    'hostpicker.validation_failed': 'Could not validate the selected hosts. Try again.',
     'hostpicker.no_checks': 'First select checks that take a host (SSH).',
     'hostpicker.applied': 'Hosts: {hosts}, checks: {checks}. A password typed in a check\'s first block was copied to every block.',
     // reputation

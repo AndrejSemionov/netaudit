@@ -19,9 +19,10 @@ note fixes what §3.1 leaves open.
   characters. A direct caller cannot store a secret either.
 - **Same host twice.** Two records with the same host but a different `user`
   or `port` are allowed (§3.1). A run that would use both for one check is
-  refused in the Web UI (below). IPv4/IPv6 literals are stored in canonical
-  form so equivalent spellings have the same picker key; DNS spelling is
-  preserved for SSH host-key lookup.
+  refused in the Web UI (below). The picker sends only selected record IDs
+  to `/api/hosts/validate-selection`; the server compares hosts with the
+  CLI's `host_identity()` (including equivalent IPv6 spellings), without
+  rewriting stored host strings used for SSH host-key lookup.
 
 ## API
 
@@ -32,6 +33,11 @@ note fixes what §3.1 leaves open.
   values (including invalid `host`, `user` and `port` values). It is not
   FastAPI's 422, whose body echoes the submitted input back, secret included.
 - `DELETE /api/hosts/{id}` deletes the record.
+- `POST /api/hosts/validate-selection` accepts only a bounded list of saved
+  IDs (1–64), rejects missing/repeated IDs, and returns 409 plus the repeated
+  record ID when two selected records identify the same host. It returns no
+  host values; the picker shows its local label and changes no form until the
+  server accepts the selection.
 - `/api/targets`, `/api/presets`, `/api/run` and `/api/stream/start` do not
   change. The run API keeps its `#2` handling for duplicate hosts (§2).
 

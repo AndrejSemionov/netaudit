@@ -2049,7 +2049,7 @@ async function loadHostPicker() {
 // One host block per chosen saved host in every selected multi-host check:
 // the record fills host/user/port/key_path, every other field (passwords
 // included) is copied from the check's first block. Nothing is saved.
-function applySavedHosts() {
+async function applySavedHosts() {
   const msg = document.getElementById('hostPickerMsg');
   const chosen = Array.from(document.querySelectorAll('#hostPicker input[data-host-index]:checked'))
     .map(cb => SAVED_HOSTS[Number(cb.dataset.hostIndex)]);
@@ -2065,6 +2065,20 @@ function applySavedHosts() {
     return c && c.params.some(p => p.name === 'host') && !NO_MULTI_HOST_IDS.has(c.id);
   });
   if (!targets.length) { msg.textContent = t('hostpicker.no_checks'); return; }
+  try {
+    const res = await fetch('/api/hosts/validate-selection', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ ids: chosen.map(h => h.id) })
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const duplicate = res.status === 409 && chosen.find(h => h.id === body.detail?.duplicate_id);
+      msg.textContent = duplicate
+        ? t('hostpicker.duplicate').replace('{host}', duplicate.host)
+        : t('hostpicker.validation_failed');
+      return;
+    }
+  } catch (e) { msg.textContent = t('hostpicker.validation_failed'); return; }
   targets.forEach(el => {
     const checkId = el.dataset.id;
     const c = CHECKS.find(cc => cc.id === checkId);
