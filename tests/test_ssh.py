@@ -236,17 +236,9 @@ def test_host_key_mismatch_raises_clear_error(monkeypatch):
 
 
 def test_tofu_policy_saves_key_on_first_connection(tmp_path, monkeypatch):
+    import paramiko
+
     monkeypatch.setattr(ssh_mod, 'KNOWN_HOSTS_PATH', tmp_path / 'known_hosts')
-
-    class FakeKey:
-        def get_fingerprint(self):
-            class FP:
-                def hex(self, sep=':'):
-                    return 'aa:bb:cc'
-            return FP()
-
-        def get_name(self):
-            return 'ssh-ed25519'
 
     class FakeHostKeys(dict):
         def add(self, hostname, keytype, key):
@@ -264,7 +256,8 @@ def test_tofu_policy_saves_key_on_first_connection(tmp_path, monkeypatch):
 
     policy = TofuPolicy()
     client = FakeClient()
-    policy.missing_host_key(client, 'testhost', FakeKey())
+    # a real key: the policy writes known_hosts itself (tofu_known_hosts_lock.md)
+    policy.missing_host_key(client, 'testhost', paramiko.ECDSAKey.generate())
 
     assert 'testhost' in client._hk
     assert ssh_mod.KNOWN_HOSTS_PATH.exists()
