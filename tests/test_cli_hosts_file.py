@@ -187,9 +187,33 @@ def test_repeated_host_flag_is_refused_with_a_hint(engine_calls, capsys, caplog)
     assert engine_calls['single'] == [] and engine_calls['multi'] == []
 
 
-def test_any_repeated_parameter_is_refused(engine_calls, capsys, caplog):
-    _refused(capsys, caplog, _ns(['ssh_hardening'], ['--host', 'a', '--port', '22', '--port', '2222']),
+def test_any_repeated_parameter_is_refused_in_the_group_form(tmp_path, engine_calls, capsys, caplog):
+    hosts = _hosts_file(tmp_path, [{'host': 'h1'}])
+    _refused(capsys, caplog, _ns(['ssh_hardening'], ['--hosts-file', hosts, '--port', '22', '--port', '2222']),
              '--port', 'more than once')
+    assert engine_calls['multi'] == []
+
+
+def test_single_form_keeps_the_last_value_of_a_repeated_non_host_parameter(engine_calls):
+    # review #35 pass 1: only a repeated --host is refused in the old form;
+    # scripts that append an overriding flag keep working (last value wins)
+    netaudit.cmd_run(_ns(['ssh_hardening'], ['--host', 'a', '--port', '22', '--port', '2222']))
+
+    [selected] = engine_calls['single']
+    assert selected == [{'id': 'ssh_hardening', 'params': {'host': 'a', 'port': 2222}}]
+
+
+@pytest.mark.parametrize('value', ['LITERAL-UNUSED-SECRET', '-'])
+def test_secret_flag_no_selected_check_uses_is_refused(tmp_path, engine_calls, capsys, caplog, monkeypatch, value):
+    # review #35 pass 1: backup_check has `password` but no `sudo_password`
+    asked = []
+    monkeypatch.setattr(netaudit.getpass, 'getpass', lambda prompt: asked.append(prompt) or 'x')
+    hosts = _hosts_file(tmp_path, [{'host': 'h1'}])
+    text = _refused(capsys, caplog, _ns(['backup_check'], ['--hosts-file', hosts, '--sudo_password', value]),
+                    '--sudo_password')
+    assert 'LITERAL-UNUSED-SECRET' not in text
+    assert asked == []
+    assert engine_calls['multi'] == []
 
 
 def test_single_host_form_still_uses_run_checks(engine_calls):
