@@ -27,7 +27,15 @@ from . import (
     storage,
     timing,
 )
-from .engine import _dedupe_key, run_instances
+from .engine import (
+    NOT_STARTED_ERROR,
+    PROCESS_MAX_PARALLEL,
+    _CancelledBeforeStart,
+    _dedupe_key,
+    execution_slot,
+    run_instances,
+    validate_multi_request,
+)
 from .redaction import redact_params
 from .registry import registry
 from .utils import log
@@ -66,9 +74,10 @@ def _tcptr_cmd(params):
 
 
 class StreamTask:
-    def __init__(self, task_id, selected):
+    def __init__(self, task_id, selected, max_parallel=4):
         self.id = task_id
         self.selected = selected
+        self.max_parallel = max_parallel
         self.q: queue.Queue = queue.Queue()
         self.process: subprocess.Popen | None = None
         self.cancelled = threading.Event()
@@ -164,6 +173,8 @@ STREAM_FUNCS = {'mtr': _stream_mtr, 'ping': _stream_ping, 'tcptraceroute': _stre
 
 def run_stream(task: StreamTask):
     """Runs all selected checks, emitting events into the task queue."""
+    validate_multi_request(task.selected, task.max_parallel)
+    run_token = object()
     report = {
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),  # noqa: DTZ005 - report history uses local naive timestamps for ordering
         'results': {}, 'timing': {}, 'meta': {},
@@ -203,7 +214,9 @@ def run_stream(task: StreamTask):
                                'result': result, 'elapsed': elapsed})
 
                 by_host, by_host_timing = run_instances(
-                    check_id, spec, instances, on_instance_done=_on_instance_done)
+                    check_id, spec, instances, on_instance_done=_on_instance_done,
+                    max_parallel=task.max_parallel, shared_pool=True,
+                    run_token=run_token, cancelled=task.cancelled)
 
                 report['results'][check_id] = {'_multi_host': True, 'by_host': by_host}
                 report['timing'][check_id] = by_host_timing
@@ -231,32 +244,38 @@ def run_stream(task: StreamTask):
                        'label': spec.label, 'streaming': check_id in STREAMING_IDS})
             start = time.monotonic()
 
-            if check_id in STREAM_FUNCS:
-                # live stream + a final parse of the full output by the regular parser
-                out_lines: list[str] = []
-                try:
-                    STREAM_FUNCS[check_id](task, params, out_lines)
-                except Exception as e:  # noqa: BLE001 - isolate arbitrary streaming check failures
-                    report['results'][check_id] = {'error': f'{type(e).__name__}: {e}'}
-                    task.emit({'type': 'check_done', 'id': check_id,
-                               'result': report['results'][check_id]})
-                    continue
-                # final authoritative result via the regular check function
-                # (full report with loss etc), if not cancelled
-                if not task.cancelled.is_set():
-                    try:
-                        result = spec.func(**params)
-                    except Exception as e:  # noqa: BLE001 - isolate arbitrary registered check failures
-                        result = {'error': f'{type(e).__name__}: {e}'}
-                else:
-                    result = _partial_from_lines(check_id, out_lines)
-                    result['stopped'] = True
-            else:
-                # regular (instant/non-streaming) check
-                try:
-                    result = spec.func(**params)
-                except Exception as e:  # noqa: BLE001 - isolate arbitrary registered check failures
-                    result = {'error': f'{type(e).__name__}: {e}'}
+            try:
+                with execution_slot(run_token, task.cancelled):
+                    if task.cancelled.is_set():
+                        result = {'error': NOT_STARTED_ERROR}
+                    elif check_id in STREAM_FUNCS:
+                        # live stream + a final parse of the full output by the regular parser
+                        out_lines: list[str] = []
+                        try:
+                            STREAM_FUNCS[check_id](task, params, out_lines)
+                        except Exception as e:  # noqa: BLE001 - isolate arbitrary streaming check failures
+                            report['results'][check_id] = {'error': f'{type(e).__name__}: {e}'}
+                            task.emit({'type': 'check_done', 'id': check_id,
+                                       'result': report['results'][check_id]})
+                            continue
+                        # final authoritative result via the regular check function
+                        # (full report with loss etc), if not cancelled
+                        if not task.cancelled.is_set():
+                            try:
+                                result = spec.func(**params)
+                            except Exception as e:  # noqa: BLE001 - isolate arbitrary registered check failures
+                                result = {'error': f'{type(e).__name__}: {e}'}
+                        else:
+                            result = _partial_from_lines(check_id, out_lines)
+                            result['stopped'] = True
+                    else:
+                        # regular (instant/non-streaming) check
+                        try:
+                            result = spec.func(**params)
+                        except Exception as e:  # noqa: BLE001 - isolate arbitrary registered check failures
+                            result = {'error': f'{type(e).__name__}: {e}'}
+            except _CancelledBeforeStart:
+                result = {'error': NOT_STARTED_ERROR}
 
             elapsed = round(time.monotonic() - start, 2)
             if not (isinstance(result, dict) and result.get('error')):
@@ -269,11 +288,15 @@ def run_stream(task: StreamTask):
             report['meta'][check_id] = {'label': spec.label, 'category': spec.category}
             task.emit({'type': 'check_done', 'id': check_id, 'result': result, 'elapsed': elapsed})
 
-        check_elapsed_contributions = [
-            max(v.values()) if isinstance(v, dict) else v
-            for v in report['timing'].values()
-            if not (isinstance(v, dict) and not v)  # skip empty dict (no successful instances)
-        ]
+        check_elapsed_contributions = []
+        width = min(task.max_parallel, PROCESS_MAX_PARALLEL)
+        for value in report['timing'].values():
+            if isinstance(value, dict):
+                elapsed = list(value.values())
+                check_elapsed_contributions.append(sum(
+                    max(elapsed[i:i + width]) for i in range(0, len(elapsed), width)))
+            else:
+                check_elapsed_contributions.append(value)
         report['total_time'] = round(sum(check_elapsed_contributions), 2)
         try:
             rid = storage.save_report(report)
