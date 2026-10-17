@@ -1,9 +1,10 @@
 # C1: scheduled audits and notifications — research and contract
 
-Status: **DRAFT for USER approval.** USER 2026-10-17: «этап C: только research и
+Status: **APPROVED by USER 2026-10-17**, with the recommended option for
+every decision D1–D7 (§5). USER the same day: «этап C: только research и
 контракт по расписанию и уведомлениям, без кода. Контракт утверждаю я.»
-Implementer: Claude. Reviewer: GPT/Codex. No code in C1. Implementation (C2) starts
-only after USER approves this contract and its decisions (§5).
+Implementer: Claude. Reviewer: GPT/Codex (AGREED, pass 2 / 3). No code in C1;
+C2 implements §4.
 
 Base: `main` `85f5bd5`. FACT = checked in code or run with a temporary HOME;
 the real database was not opened.
@@ -331,6 +332,9 @@ Tests (RED first, in C2):
 - database permissions on a fresh and an existing temporary HOME.
 
 ## 5. Decisions for USER
+
+USER chose the recommended option of each (2026-10-17): D1 A, D2 Telegram
+only, D3 `medium`, D4 no heartbeat, D5 key + `sudo -n`, D6 in C2, D7 daily.
 
 - **D1. Where the schedule runs:** A systemd timer + CLI (recommended) / B
   thread in the Web / C schedules in the DB + one timer.
