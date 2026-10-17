@@ -655,7 +655,8 @@ sudo systemctl stop 'netaudit-audit-*.timer' 'netaudit-audit-*.service' netaudit
 ```
 
 **Шаг 3.** Убедитесь, что NetAudit больше нигде не запущен. Команда не должна ничего вывести.
-Если что-то вывела, завершите эти процессы, например `Ctrl+C` в их терминале.
+Если что-то вывела, завершите эти процессы, например `Ctrl+C` в их терминале. Скрипт на шаге 4
+проверит это ещё раз сам.
 
 ```bash
 pgrep -af netaudit.py
@@ -665,8 +666,12 @@ pgrep -af netaudit.py
 
 ```bash
 python3 - ~/netaudit-backup-20261017-030000.db <<'EOF'
-import os, sqlite3, sys, time
+import glob, os, shutil, sqlite3, sys, time
 backup, db = sys.argv[1], os.path.expanduser('~/.netaudit/netaudit.db')
+files = [db, db + '-wal', db + '-shm']
+new = db + '.restoring'
+saved = os.path.expanduser(time.strftime('~/netaudit-before-restore-%Y%m%d-%H%M%S'))
+# 1. the backup must be a usable NetAudit database
 if not os.path.isfile(backup):
     sys.exit(f'no backup at {backup}; nothing was changed')
 try:
@@ -677,21 +682,58 @@ except sqlite3.DatabaseError:
     ok = False
 if not ok:
     sys.exit(f'{backup} is not a usable NetAudit database; nothing was changed')
-before = os.path.expanduser(time.strftime('~/netaudit-before-restore-%Y%m%d-%H%M%S.db'))
-os.close(os.open(before, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
-cur, keep = sqlite3.connect(db), sqlite3.connect(before)
-cur.backup(keep); keep.close()           # the current state, in case you need it back
-b.backup(cur)                            # the restore itself, through SQLite
-print(f'restored {reports} reports from {backup}; the previous state is in {before}')
-cur.close(); b.close()
+# 2. no process may have the database open
+real = {os.path.realpath(f) for f in files}
+busy = set()
+for fd in glob.glob('/proc/[0-9]*/fd/*'):
+    try:
+        if os.path.realpath(fd) in real:
+            busy.add(fd.split('/')[2])
+    except OSError:
+        pass
+if busy:
+    sys.exit(f'the database is still open by process {", ".join(sorted(busy))}; stop it first; nothing was changed')
+if os.path.exists(new) or os.path.exists(saved):
+    sys.exit(f'{new} or {saved} already exists; nothing was changed')
+# 3. the current files, byte for byte, into a folder only you can open
+try:
+    os.mkdir(saved, 0o700)
+    for f in files:
+        if os.path.exists(f):
+            shutil.copy2(f, saved)
+except OSError as e:
+    sys.exit(f'could not save the current files to {saved}: {e.strerror}; nothing was changed')
+# 4. a new private database from the backup, checked before it replaces anything
+os.close(os.open(new, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+try:
+    n = sqlite3.connect(new)
+    b.backup(n)
+    good = n.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+    n.close()
+except sqlite3.Error:
+    good = False
+if not good:
+    os.remove(new)
+    sys.exit(f'the restored copy failed its check; nothing was changed (current files also kept in {saved})')
+# 5. swap; the old -wal/-shm belong to the old database and are kept in the folder above
+for f in files[1:]:
+    if os.path.exists(f):
+        os.remove(f)
+os.replace(new, db)
+print(f'restored {reports} reports from {backup}; the previous files are in {saved}')
 EOF
 ```
 
 Что делает скрипт:
-- если копии нет или она повреждена, отказывает и ничего не меняет;
-- иначе сначала сохраняет текущее состояние базы в `~/netaudit-before-restore-…db` (права `600`);
-- затем записывает копию в базу средствами самого SQLite. Файлы `-wal` и `-shm` вручную удалять
-  не нужно.
+- если копии нет, она повреждена или это не база NetAudit, отказывает и ничего не меняет;
+- если какой-то процесс ещё держит базу открытой, отказывает и ничего не меняет;
+- сохраняет текущие файлы базы как есть, байт в байт, в новый каталог
+  `~/netaudit-before-restore-…` (права `700`). Это работает, даже если текущая база повреждена:
+  её не нужно читать;
+- собирает из копии новую базу (права `600`), проверяет её и только потом заменяет ею старую.
+  Старые `-wal` и `-shm` уходят вместе со старой базой в тот же каталог.
+
+Если что-то пошло не так, прежние файлы лежат в этом каталоге.
 
 **Шаг 5.** Запустите всё обратно: Web-службу и каждый timer из списка шага 1.
 

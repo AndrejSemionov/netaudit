@@ -654,7 +654,8 @@ sudo systemctl stop 'netaudit-audit-*.timer' 'netaudit-audit-*.service' netaudit
 ```
 
 **Step 3.** Make sure NetAudit runs nowhere else. The command must print nothing. If it prints
-something, end those processes, e.g. with `Ctrl+C` in their terminal.
+something, end those processes, e.g. with `Ctrl+C` in their terminal. The script in step 4
+checks this again by itself.
 
 ```bash
 pgrep -af netaudit.py
@@ -664,8 +665,12 @@ pgrep -af netaudit.py
 
 ```bash
 python3 - ~/netaudit-backup-20261017-030000.db <<'EOF'
-import os, sqlite3, sys, time
+import glob, os, shutil, sqlite3, sys, time
 backup, db = sys.argv[1], os.path.expanduser('~/.netaudit/netaudit.db')
+files = [db, db + '-wal', db + '-shm']
+new = db + '.restoring'
+saved = os.path.expanduser(time.strftime('~/netaudit-before-restore-%Y%m%d-%H%M%S'))
+# 1. the backup must be a usable NetAudit database
 if not os.path.isfile(backup):
     sys.exit(f'no backup at {backup}; nothing was changed')
 try:
@@ -676,21 +681,58 @@ except sqlite3.DatabaseError:
     ok = False
 if not ok:
     sys.exit(f'{backup} is not a usable NetAudit database; nothing was changed')
-before = os.path.expanduser(time.strftime('~/netaudit-before-restore-%Y%m%d-%H%M%S.db'))
-os.close(os.open(before, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
-cur, keep = sqlite3.connect(db), sqlite3.connect(before)
-cur.backup(keep); keep.close()           # the current state, in case you need it back
-b.backup(cur)                            # the restore itself, through SQLite
-print(f'restored {reports} reports from {backup}; the previous state is in {before}')
-cur.close(); b.close()
+# 2. no process may have the database open
+real = {os.path.realpath(f) for f in files}
+busy = set()
+for fd in glob.glob('/proc/[0-9]*/fd/*'):
+    try:
+        if os.path.realpath(fd) in real:
+            busy.add(fd.split('/')[2])
+    except OSError:
+        pass
+if busy:
+    sys.exit(f'the database is still open by process {", ".join(sorted(busy))}; stop it first; nothing was changed')
+if os.path.exists(new) or os.path.exists(saved):
+    sys.exit(f'{new} or {saved} already exists; nothing was changed')
+# 3. the current files, byte for byte, into a folder only you can open
+try:
+    os.mkdir(saved, 0o700)
+    for f in files:
+        if os.path.exists(f):
+            shutil.copy2(f, saved)
+except OSError as e:
+    sys.exit(f'could not save the current files to {saved}: {e.strerror}; nothing was changed')
+# 4. a new private database from the backup, checked before it replaces anything
+os.close(os.open(new, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+try:
+    n = sqlite3.connect(new)
+    b.backup(n)
+    good = n.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+    n.close()
+except sqlite3.Error:
+    good = False
+if not good:
+    os.remove(new)
+    sys.exit(f'the restored copy failed its check; nothing was changed (current files also kept in {saved})')
+# 5. swap; the old -wal/-shm belong to the old database and are kept in the folder above
+for f in files[1:]:
+    if os.path.exists(f):
+        os.remove(f)
+os.replace(new, db)
+print(f'restored {reports} reports from {backup}; the previous files are in {saved}')
 EOF
 ```
 
 What the script does:
-- if the backup is missing or damaged, it refuses and changes nothing;
-- otherwise it first saves the current database to `~/netaudit-before-restore-…db` (mode `600`);
-- then it writes the backup into the database through SQLite itself. You don't remove the `-wal`
-  and `-shm` files by hand.
+- if the backup is missing, damaged or not a NetAudit database, it refuses and changes nothing;
+- if any process still has the database open, it refuses and changes nothing;
+- it saves the current database files as they are, byte for byte, into a new folder
+  `~/netaudit-before-restore-…` (mode `700`). This works even when the current database is
+  damaged: it does not have to be read;
+- it builds a new database from the backup (mode `600`), checks it, and only then puts it in
+  place of the old one. The old `-wal` and `-shm` go with the old database into that folder.
+
+If anything goes wrong, the previous files are in that folder.
 
 **Step 5.** Start everything again: the Web service, and each timer from the list in step 1.
 
