@@ -8,7 +8,7 @@ Console:
     netaudit.py run mtr ping                 - run checks (default params)
     netaudit.py run mtr --target 5.20.136.3   - with params
     netaudit.py run ssl http --url https://example.com
-    netaudit.py run --quick --url https://example.com   - default site bundle
+    netaudit.py run --quick --url https://example.com --domain example.com - default site bundle
     netaudit.py run --quick --host 1.2.3.4 --user root  - default server bundle
     netaudit.py history                       - list reports
     netaudit.py analyze <report_id>            - AI analysis of a saved report (see history)
@@ -47,14 +47,18 @@ from netaudit_pkg.redaction import SECRET_PARAM_NAMES
 from netaudit_pkg.utils import log
 
 QUICK_BUNDLE_SITE = ['ssl', 'security_headers', 'web_security_external', 'dns_audit']
-QUICK_BUNDLE_SERVER = ['server_audit', 'ports', 'firewall', 'lynis_audit', 'cve_audit']
+# remote checks only: `ports`/`firewall` audit the NetAudit machine itself
+# (docs/research/quick_bundle_targets.md)
+QUICK_BUNDLE_SERVER = ['server_audit', 'ssh_audit', 'lynis_audit', 'cve_audit']
+# what a bundle check audits: the first of these params it declares
+QUICK_TARGET_PARAMS = ('url', 'domain', 'host')
 
 BANNER = f"""\
 NetAudit v{__version__} — modular network & security audit
 https://github.com/AndrejSemionov/netaudit
 
   netaudit run ssl web_security_external --url https://example.com
-  netaudit run --quick --url https://example.com
+  netaudit run --quick --url https://example.com --domain example.com
   netaudit run --quick --host 1.2.3.4 --user root
   netaudit run kernel_hardening --host 1.2.3.4 --sudo_password -   (asks, no echo)
   netaudit list
@@ -101,14 +105,29 @@ def _typed(param: dict, value):
     return int(value) if param['type'] == 'number' and str(value).isdigit() else value
 
 
+def _quick_bundle(bundle: list[str], extra: dict) -> list[str]:
+    """The bundle checks whose target was given. The others are skipped with a
+    hint rather than run on their default target (dns_audit on example.com);
+    the domain is never guessed from --url."""
+    avail = {c['id']: {p['name'] for p in c['params']} for c in list_available()}
+    picked = []
+    for check_id in bundle:
+        target = next(name for name in QUICK_TARGET_PARAMS if name in avail[check_id])
+        if target in extra:
+            picked.append(check_id)
+        else:
+            log.warning(f'--quick: skipping {check_id}: add --{target} <value> to include it')
+    return picked
+
+
 def _single_selection(args, extra: dict) -> list[dict]:
     check_ids = args.checks or []
     if args.quick:
         if not check_ids:
             if 'url' in extra:
-                check_ids = QUICK_BUNDLE_SITE
+                check_ids = _quick_bundle(QUICK_BUNDLE_SITE, extra)
             elif 'host' in extra:
-                check_ids = QUICK_BUNDLE_SERVER
+                check_ids = _quick_bundle(QUICK_BUNDLE_SERVER, extra)
             else:
                 log.error('--quick needs --url <site> or --host <server> to pick a check bundle.')
                 sys.exit(1)
@@ -506,7 +525,8 @@ def build_parser(detailed: bool = True):
     p_run.add_argument(
         '--quick', '--simple', dest='quick', action='store_true',
         help='Run a sensible default bundle for --url (site) or --host (server) '
-             'without picking individual check IDs.',
+             'without picking individual check IDs. The site bundle audits DNS '
+             'only with --domain.',
     )
     p_run.set_defaults(func=cmd_run)
 
