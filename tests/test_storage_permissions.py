@@ -148,6 +148,7 @@ def test_sidecars_vanishing_after_chmod_are_not_an_error(tmp_path, monkeypatch):
     monkeypatch.setattr(storage.os, 'chmod', chmod_then_vanish)
     storage._make_private()
     assert not any(side.exists() for side in sides)
+    assert _mode(db) == 0o600
 
 
 def test_the_database_itself_vanishing_is_still_an_error(tmp_path, monkeypatch):
