@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- CLI `--quick` now audits only the target you name. The server bundle
+  (`--quick --host`) ran `ports` and `firewall` on the machine NetAudit runs
+  on, so a report for another server showed NetAudit's own ports and firewall,
+  even when SSH failed. They are replaced with `ssh_audit`, which reads the
+  target's ports, firewall and fail2ban over SSH. The site bundle
+  (`--quick --url`) ran `dns_audit` on `example.com`; it now runs it only with
+  `--domain` and otherwise skips it with a hint.
+
 - Saved multi-host reports now have a read-only host summary and same-check
   comparison in the CLI (`summary <report_id> [--check ID]`) and Web report
   view. Collection errors, incomplete log coverage, warnings, unknown result

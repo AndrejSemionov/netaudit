@@ -271,15 +271,21 @@ python3 netaudit.py analyze 42                            # AI-анализ от
 **Аудит публичного сайта (доступ к серверу не нужен):**
 
 ```bash
-python3 netaudit.py run ssl security_headers web_security_external dns_audit --url https://example.com
+python3 netaudit.py run ssl security_headers web_security_external dns_audit \
+    --url https://example.com --domain example.com
 ```
 
 **Быстрый набор по умолчанию** — то же самое, но без ручного выбора id проверок:
 
 ```bash
-python3 netaudit.py run --quick --url https://example.com          # набор для сайта
-python3 netaudit.py run --quick --host 1.2.3.4 --user root         # набор для сервера
+python3 netaudit.py run --quick --url https://example.com --domain example.com   # набор для сайта
+python3 netaudit.py run --quick --host 1.2.3.4 --user root                       # набор для сервера
 ```
+
+Набор для сайта: `ssl security_headers web_security_external dns_audit`. Для `dns_audit` нужен
+`--domain`: без него проверка DNS пропускается с подсказкой (домен из URL не угадывается).
+Набор для сервера: `server_audit ssh_audit lynis_audit cve_audit`, все выполняются на указанном
+хосте по SSH.
 
 **Аудит сервера по SSH** (по ключу — обычный случай):
 
