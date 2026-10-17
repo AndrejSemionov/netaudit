@@ -18,7 +18,9 @@ DB: ~/.netaudit/netaudit.db
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import stat
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +33,24 @@ DB_PATH = Path.home() / '.netaudit' / 'netaudit.db'
 _local = threading.local()
 
 
+def _make_private() -> None:
+    """~/.netaudit 0700 and the database 0600 (C1 D6): it holds the AI key,
+    the Telegram token and the MikroTik password. Created that way on a fresh
+    install, tightened on an existing one. SQLite gives its -wal/-shm files
+    the database file's mode."""
+    DB_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not DB_PATH.exists():
+        os.close(os.open(DB_PATH, os.O_WRONLY | os.O_CREAT, 0o600))
+    for path, mode in ((DB_PATH.parent, 0o700), (DB_PATH, 0o600),
+                       (DB_PATH.with_name(DB_PATH.name + '-wal'), 0o600),
+                       (DB_PATH.with_name(DB_PATH.name + '-shm'), 0o600)):
+        try:
+            if path.exists() and stat.S_IMODE(path.stat().st_mode) != mode:
+                os.chmod(path, mode)
+        except OSError:
+            pass  # not our file (another owner): leave it, SQLite says if it cannot open it
+
+
 def _conn() -> sqlite3.Connection:
     """Per-thread connection (SQLite doesn't like being shared across threads).
 
@@ -41,7 +61,7 @@ def _conn() -> sqlite3.Connection:
     (observed empirically: passes most of the time, but not reliably across
     Python versions/CI runners - see e.g. 3.12 CI and the VM on 3.14)."""
     if not hasattr(_local, 'conn'):
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _make_private()
         conn = sqlite3.connect(str(DB_PATH), timeout=10)
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA journal_mode=WAL')  # safer under concurrent reads
