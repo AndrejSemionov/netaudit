@@ -534,6 +534,69 @@ internal event models and a different definition of "coverage uncertainty" suite
 format. That divergence is intentional for now: a common abstraction across log sources is only
 introduced once a third independent source shows an actual need for one, not preemptively.
 
+## Scheduled audits and Telegram notifications
+
+NetAudit has no scheduler of its own. A systemd timer runs
+`netaudit run … --hosts-file … --notify`, and that run sends one Telegram message when something
+needs attention.
+
+1. In the Web UI, Settings → "Telegram alerts": the bot token and the chat ID.
+2. As the account of `netaudit.service` (not root), from the NetAudit directory:
+
+```bash
+python3 netaudit.py setup-timer --name daily --on-calendar daily \
+    --hosts-file /home/netaudit/hosts.json server_audit ssh_hardening kernel_hardening
+```
+
+It checks the hosts file, the checks, the calendar (with `systemd-analyze calendar`) and the
+Telegram settings. Then it writes `netaudit-audit-daily.service` and `netaudit-audit-daily.timer`
+to the current directory and prints the `sudo` commands that install them. It never installs
+anything itself. A path in a unit may only contain letters, digits and `. _ / @ + -`: `%`, `$`,
+spaces and quotes are refused, not escaped. `--timeout` (default `1h`) limits one run, and
+`--notify-min-severity` (default `medium`) sets the threshold. `--notify` also works on any `run`,
+e.g. `run ssh_hardening --host 1.2.3.4 --notify --job manual`. A `key_path` in the hosts file
+must be absolute (or `~/…`): the unit runs in the NetAudit directory, so a relative path would
+point to another file there.
+
+A message is sent when:
+- a check failed or a host could not be reached;
+- a check collected only part of its data. This includes sudo refusing a command, so such a check
+  is reported on every run until it is fixed;
+- new problems at or above the threshold appeared since the previous run of the same check on the
+  same host. This includes a count that grew for findings without a stable id, and an id whose
+  severity went up;
+- the first run of a check on a host has problems at or above the threshold. Here "first" means no
+  earlier run in the last 200 reports, and the message gets one "baseline" line, not a list.
+
+Resolved findings and findings that were not checked this time are listed in a message, but never
+send one on their own. Log checks (`ssh_auth_audit`, `nginx_logs_audit`, `kern_log_audit`,
+`fail2ban_logs_audit`) only report collection problems.
+
+What this does **not** guarantee:
+- **No message does not mean "all fine"**: it also means that the timer is not running. There is
+  no "still alive" message, so look at `systemctl list-timers` now and then.
+- A process killed from outside (OOM, the `TimeoutStartSec=` limit) sends nothing; systemd marks
+  the unit failed. Add your own `OnFailure=` unit if you want a signal for that.
+- Delivery is best effort. There is one attempt, and a second one only when the first certainly
+  never reached Telegram. An undelivered message is not queued: the run exits non-zero and the
+  journal says why, and a new finding from that run is not sent again later.
+- A finding without an id that is replaced by another of the same severity is not seen as new.
+
+Unattended runs cannot type passwords. Use an SSH key without a passphrase that only the service
+account can read, and `sudo -n` rules (see "SSH and sudo"); `setup-timer` refuses password flags.
+
+The message goes to Telegram's servers. It contains host names, check ids, finding ids, severities
+and titles; it never contains passwords, details or command output. It is plain text, with link
+previews off and at most 4096 characters.
+
+Daily is a good cadence. Trends and AI history read the latest 200 reports of the whole database,
+so an hourly job pushes everything else out of that window within about eight days.
+
+`~/.netaudit` is `0700` and the database `0600`, because the database holds the AI key, the
+Telegram token and the MikroTik password. An existing install is tightened on its next start.
+If that is not possible (the files belong to another account), NetAudit stops with an error that
+names the file, instead of keeping secrets in it.
+
 ## SSH and sudo
 
 SSH checks take these credentials:

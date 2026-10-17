@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Scheduled audits with Telegram notifications. `netaudit setup-timer` writes a
+  systemd service and timer that run `run … --hosts-file … --notify` (it never
+  installs them). `run --notify` sends one plain-text message when a check
+  failed or collected only part of its data, or when new problems at or above
+  `--notify-min-severity` (default `medium`) appeared since the previous run.
+  The message is built from all hosts and findings of the run, the report is
+  saved before sending, a failed delivery makes the run exit non-zero, and
+  the bot token is kept out of logs and error texts. No message does not mean
+  "all fine": see README, "Scheduled audits and Telegram notifications".
+- `~/.netaudit` is now `0700` and its database `0600`, also on existing
+  installs; the database holds the AI key, the Telegram token and the
+  MikroTik password. When the mode cannot be fixed (another owner),
+  NetAudit stops with an error naming the file.
+
 - CLI `--quick` now audits only the target you name. The server bundle
   (`--quick --host`) ran `ports` and `firewall` on the machine NetAudit runs
   on, so a report for another server showed NetAudit's own ports and firewall,

@@ -13,16 +13,23 @@ from netaudit_pkg.registry import CheckSpec, registry
 
 @pytest.fixture
 def slow_check():
-    lock = threading.Lock()
-    state = {'active': 0, 'peak': 0, 'called': []}
+    cond = threading.Condition()
+    # gate/total: when set, a check holds its slot until `gate` checks run at
+    # once or all `total` have started (at most 5 s), so the peak does not
+    # depend on how fast a loaded runner starts threads within the 20 ms sleep
+    state = {'active': 0, 'peak': 0, 'called': [], 'gate': None, 'total': None}
 
     def check(host=''):
-        with lock:
+        with cond:
             state['active'] += 1
             state['peak'] = max(state['peak'], state['active'])
             state['called'].append(host)
+            cond.notify_all()
+            if state['gate']:
+                cond.wait_for(lambda: state['active'] >= state['gate']
+                              or len(state['called']) >= state['total'], timeout=5)
         time.sleep(0.02)
-        with lock:
+        with cond:
             state['active'] -= 1
         return {'host': host}
 
@@ -37,6 +44,7 @@ def slow_check():
 def test_run_instances_bounded(slow_check, isolated_db, limit, expected):
     cid, spec, state = slow_check
     instances = [{'host': str(i)} for i in range(20)]
+    state['gate'], state['total'] = expected, len(instances)
     kw = {} if limit is None else {'max_parallel': limit}
     results, _timing = engine.run_instances(cid, spec, instances, **kw)
     assert state['peak'] == expected

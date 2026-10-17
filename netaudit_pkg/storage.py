@@ -18,7 +18,9 @@ DB: ~/.netaudit/netaudit.db
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import stat
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +33,48 @@ DB_PATH = Path.home() / '.netaudit' / 'netaudit.db'
 _local = threading.local()
 
 
+class InsecureStorageError(RuntimeError):
+    """The database is open to other accounts and its mode could not be fixed."""
+
+
+def _make_private() -> None:
+    """~/.netaudit 0700 and the database 0600 (C1 D6): it holds the AI key,
+    the Telegram token and the MikroTik password. Created that way on a fresh
+    install, tightened on an existing one; a path that stays open to group or
+    others (chmod refused: another owner) is an error, not a silent pass -
+    writing may still be allowed there (review C2 pass 1). The -wal/-shm
+    files are optional: SQLite removes them when the last connection closes,
+    possibly in the middle of this check (review C2 pass 2), and gives new
+    ones the database file's mode."""
+    DB_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not DB_PATH.exists():
+        os.close(os.open(DB_PATH, os.O_WRONLY | os.O_CREAT, 0o600))
+    _private_path(DB_PATH.parent, 0o700)
+    _private_path(DB_PATH, 0o600)
+    for suffix in ('-wal', '-shm'):
+        try:
+            _private_path(DB_PATH.with_name(DB_PATH.name + suffix), 0o600)
+        except FileNotFoundError:
+            pass  # absent, or removed by SQLite during the check: nothing to protect
+
+
+def _private_path(path: Path, mode: int) -> None:
+    """Closes `path` to group and others, or raises InsecureStorageError.
+    FileNotFoundError when it does not exist or disappears meanwhile."""
+    if not stat.S_IMODE(path.stat().st_mode) & 0o077:
+        return  # private already: no group or other bits
+    try:
+        os.chmod(path, mode)
+    except OSError as e:
+        if isinstance(e, FileNotFoundError):
+            raise
+        # refused (another owner): checked right below
+    if stat.S_IMODE(path.stat().st_mode) & 0o077:
+        raise InsecureStorageError(
+            f'{path} is open to other accounts and its mode could not be changed; '
+            f'run NetAudit as its owner, or fix it: chmod {mode:o} {path}')
+
+
 def _conn() -> sqlite3.Connection:
     """Per-thread connection (SQLite doesn't like being shared across threads).
 
@@ -41,7 +85,7 @@ def _conn() -> sqlite3.Connection:
     (observed empirically: passes most of the time, but not reliably across
     Python versions/CI runners - see e.g. 3.12 CI and the VM on 3.14)."""
     if not hasattr(_local, 'conn'):
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _make_private()
         conn = sqlite3.connect(str(DB_PATH), timeout=10)
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA journal_mode=WAL')  # safer under concurrent reads
