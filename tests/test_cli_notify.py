@@ -295,3 +295,43 @@ def test_generated_units_pass_systemd_analyze_verify(telegram, monkeypatch, tmp_
     proc = subprocess.run(['systemd-analyze', 'verify', *files], capture_output=True, text=True,
                           check=False, timeout=60)
     assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize('flag', ['--password=SECRET-VALUE', '--sudo_password=SECRET-VALUE',
+                                  '--whatever=SECRET-VALUE'])
+def test_setup_timer_never_echoes_a_flag_value_given_with_equals(timer_env, flag, caplog, capsys):
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit):
+        _setup_timer(_valid_argv(timer_env), rest=[flag])
+    out = capsys.readouterr()
+    assert 'SECRET-VALUE' not in caplog.text + out.out + out.err
+    assert flag.split('=')[0] in caplog.text
+    assert not list(timer_env['dir'].glob('netaudit-audit-*'))
+
+
+def test_setup_timer_from_main_never_echoes_a_password(timer_env, monkeypatch, caplog, capsys):
+    monkeypatch.setattr(sys, 'argv', ['netaudit.py', 'setup-timer', *_valid_argv(timer_env),
+                                      '--password=SECRET-VALUE'])
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit):
+        netaudit.main()
+    out = capsys.readouterr()
+    assert 'SECRET-VALUE' not in caplog.text + out.out + out.err
+
+
+def test_setup_timer_refuses_a_relative_key_path(timer_env):
+    # review C2 pass 1: the unit runs in the NetAudit directory, not in the
+    # directory setup-timer was started from, so "key" would point elsewhere
+    (timer_env['dir'] / 'key').write_bytes(b'not a real key')
+    hosts = timer_env['dir'] / 'rel.json'
+    hosts.write_text(json.dumps([{'host': '10.0.0.5', 'key_path': 'key'}]), encoding='utf-8')
+    with pytest.raises(SystemExit):
+        _setup_timer(['--name', 'daily', '--on-calendar', 'daily', '--hosts-file', str(hosts), 'ssh_hardening'])
+    assert not list(timer_env['dir'].glob('netaudit-audit-*'))
+
+
+def test_setup_timer_accepts_an_absolute_key_path(timer_env):
+    key = timer_env['dir'] / 'key'
+    key.write_bytes(b'not a real key')
+    hosts = timer_env['dir'] / 'abs.json'
+    hosts.write_text(json.dumps([{'host': '10.0.0.5', 'key_path': str(key)}]), encoding='utf-8')
+    _setup_timer(['--name', 'daily', '--on-calendar', 'daily', '--hosts-file', str(hosts), 'ssh_hardening'])
+    assert (timer_env['dir'] / 'netaudit-audit-daily.service').exists()

@@ -59,3 +59,39 @@ def test_existing_open_permissions_are_tightened(tmp_path, monkeypatch):
 
     assert _mode(home) == 0o700
     assert _mode(db) == 0o600
+
+
+def _open_install(tmp_path, monkeypatch):
+    home = tmp_path / 'home' / '.netaudit'
+    home.mkdir(parents=True)
+    home.chmod(0o775)
+    db = home / 'netaudit.db'
+    sqlite3.connect(db).close()
+    db.chmod(0o644)
+    monkeypatch.setattr(storage, 'DB_PATH', db)
+    return home, db
+
+
+def _chmod_refused(*args, **kwargs):
+    raise PermissionError(1, 'Operation not permitted')
+
+
+def test_a_refused_chmod_on_an_open_database_is_not_silent(tmp_path, monkeypatch):
+    # review C2 pass 1: chmod may be refused (another owner) while writing is
+    # still allowed - secrets must not be stored in a file others can read
+    home, db = _open_install(tmp_path, monkeypatch)
+    monkeypatch.setattr(storage.os, 'chmod', _chmod_refused)
+    with pytest.raises(storage.InsecureStorageError) as exc:
+        _reconnect()
+    assert str(db.parent) in str(exc.value) or str(db) in str(exc.value)
+    assert _mode(db) == 0o644
+
+
+def test_already_private_files_need_no_chmod(tmp_path, monkeypatch):
+    home, db = _open_install(tmp_path, monkeypatch)
+    home.chmod(0o700)
+    db.chmod(0o600)
+    monkeypatch.setattr(storage.os, 'chmod', _chmod_refused)
+    _reconnect()
+    storage.setting_set('telegram_token', 'FAKE')
+    assert storage.setting_get('telegram_token') == 'FAKE'

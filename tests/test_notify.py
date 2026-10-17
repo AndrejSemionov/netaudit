@@ -320,3 +320,14 @@ def test_telegram_config_needs_token_and_chat(isolated_db):
     assert TOKEN not in str(exc.value)
     storage.setting_set('telegram_chat', CHAT)
     assert notify.telegram_config() == (TOKEN, CHAT)
+
+
+def test_a_raised_id_sends_even_when_another_id_was_fixed(isolated_db):
+    # review C2 pass 1: A low -> high while B (high) is fixed leaves
+    # counts_delta.high == 0, but a finding got worse
+    _, _, changes = _run([_finding('SSH-A-001', 'low'), _finding('SSH-B-001', 'high')],
+                         [_finding('SSH-A-001', 'high')])
+    assert notify.decide(changes, 'medium') is True
+    assert notify.decide(changes, 'critical') is False
+    line = next(line for line in notify.render(changes, 2, None).splitlines() if 'SSH-A-001' in line)
+    assert 'HIGH' in line and 'was low' in line
