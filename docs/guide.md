@@ -470,8 +470,9 @@ NetAudit machine and is never sent back to the browser.
    `123456789:AA…`.
 2. Send your bot any message (otherwise it cannot write to you).
 3. Find the **chat ID**: open the address below in a browser (with your token) and look for
-   `"chat":{"id":…}`. For a group: add the bot to the group, write a message there and open the
-   address again; a group's ID is negative.
+   `"chat":{"id":…}`. For a group: add the bot to the group, send `/start@your_bot_name` there (by
+   default a bot does not see plain text in a group), and open the address again. Take the `id` of
+   the entry whose `"type"` is `"group"` or `"supergroup"`; a group's ID is negative.
 
 ```text
 https://api.telegram.org/bot<TOKEN>/getUpdates
@@ -607,28 +608,98 @@ Everything is in `~/.netaudit/` of the user NetAudit runs as:
 
 Only the owner can open the directory (`700`) and the database (`600`).
 
-A backup (fine while the service runs; the copy also gets mode `600`):
+### 14.1 Backup
+
+Run this as the NetAudit user. You do not need to stop the service: SQLite makes the copy, and it
+stays consistent. Each run creates a **new** file `~/netaudit-backup-YYYYMMDD-HHMMSS.db` with mode
+`600`. The mode is set before any secret goes into the file, and existing files are never touched.
 
 ```bash
-(umask 077; python3 -c "import sqlite3, os; s = sqlite3.connect(os.path.expanduser('~/.netaudit/netaudit.db')); d = sqlite3.connect(os.path.expanduser('~/netaudit-backup.db')); s.backup(d); d.close(); s.close()")
+python3 - <<'EOF'
+import os, sqlite3, sys, time
+db = os.path.expanduser('~/.netaudit/netaudit.db')
+copy = os.path.expanduser(time.strftime('~/netaudit-backup-%Y%m%d-%H%M%S.db'))
+if not os.path.isfile(db):
+    sys.exit(f'no database at {db}')
+try:  # a new file that only you can read, before any secret goes into it
+    os.close(os.open(copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+except FileExistsError:
+    sys.exit(f'{copy} already exists; run again in a second')
+src, dst = sqlite3.connect(db), sqlite3.connect(copy)
+src.backup(dst)
+print(copy, '-', dst.execute('SELECT count(*) FROM reports').fetchone()[0], 'reports')
+dst.close(); src.close()
+EOF
 ```
 
-The copy holds the same secrets as the database: keep it just as private. To restore:
+At the end the script prints the file name and the number of reports in the copy. The copy holds
+the same secrets as the database: keep it just as private.
+
+### 14.2 Restore from a backup
+
+While you restore, nothing may use the database: not the Web service, not scheduled audits, not
+commands started by hand.
+
+**Step 1.** Note which audit timers you have: you start them again after the restore.
 
 ```bash
-sudo systemctl stop netaudit
+systemctl list-timers --all 'netaudit-audit-*'
 ```
 
-```bash
-cp ~/netaudit-backup.db ~/.netaudit/netaudit.db
-```
+**Step 2.** Stop the timers, the scheduled audits and the Web service. A scheduled audit that is
+running right now is interrupted without a report, so better wait for it to finish.
 
 ```bash
-rm -f ~/.netaudit/netaudit.db-wal ~/.netaudit/netaudit.db-shm
+sudo systemctl stop 'netaudit-audit-*.timer' 'netaudit-audit-*.service' netaudit
 ```
+
+**Step 3.** Make sure NetAudit runs nowhere else. The command must print nothing. If it prints
+something, end those processes, e.g. with `Ctrl+C` in their terminal.
+
+```bash
+pgrep -af netaudit.py
+```
+
+**Step 4.** Restore the database. Put your backup file on the first line.
+
+```bash
+python3 - ~/netaudit-backup-20261017-030000.db <<'EOF'
+import os, sqlite3, sys, time
+backup, db = sys.argv[1], os.path.expanduser('~/.netaudit/netaudit.db')
+if not os.path.isfile(backup):
+    sys.exit(f'no backup at {backup}; nothing was changed')
+try:
+    b = sqlite3.connect(f'file:{backup}?mode=ro', uri=True)
+    ok = b.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+    reports = b.execute('SELECT count(*) FROM reports').fetchone()[0]
+except sqlite3.DatabaseError:
+    ok = False
+if not ok:
+    sys.exit(f'{backup} is not a usable NetAudit database; nothing was changed')
+before = os.path.expanduser(time.strftime('~/netaudit-before-restore-%Y%m%d-%H%M%S.db'))
+os.close(os.open(before, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+cur, keep = sqlite3.connect(db), sqlite3.connect(before)
+cur.backup(keep); keep.close()           # the current state, in case you need it back
+b.backup(cur)                            # the restore itself, through SQLite
+print(f'restored {reports} reports from {backup}; the previous state is in {before}')
+cur.close(); b.close()
+EOF
+```
+
+What the script does:
+- if the backup is missing or damaged, it refuses and changes nothing;
+- otherwise it first saves the current database to `~/netaudit-before-restore-…db` (mode `600`);
+- then it writes the backup into the database through SQLite itself. You don't remove the `-wal`
+  and `-shm` files by hand.
+
+**Step 5.** Start everything again: the Web service, and each timer from the list in step 1.
 
 ```bash
 sudo systemctl start netaudit
+```
+
+```bash
+sudo systemctl start netaudit-audit-daily.timer
 ```
 
 ## 15. Common errors

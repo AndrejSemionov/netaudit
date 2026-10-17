@@ -470,8 +470,9 @@ python3 netaudit.py run ssl web_security_external --url https://example.com --ai
    вида `123456789:AA…`.
 2. Напишите своему боту любое сообщение (иначе он не сможет вам писать).
 3. Узнайте **chat ID**: откройте в браузере адрес ниже (подставьте токен) и найдите
-   `"chat":{"id":…}`. Для группы добавьте бота в группу, напишите там сообщение и откройте адрес
-   снова: у группы ID отрицательный.
+   `"chat":{"id":…}`. Для группы добавьте бота в группу и отправьте там `/start@имя_бота` (обычный
+   текст в группе бот по умолчанию не видит), затем откройте адрес снова. Берите `id` из той записи,
+   где `"type"` — `"group"` или `"supergroup"`: у группы ID отрицательный.
 
 ```text
 https://api.telegram.org/bot<ТОКЕН>/getUpdates
@@ -606,28 +607,100 @@ cd ~/netaudit && git pull origin main && sudo systemctl restart netaudit
 
 Каталог доступен только владельцу (`700`), база — тоже (`600`).
 
-Резервная копия (можно при работающей службе, копия тоже получит права `600`):
+### 14.1 Резервная копия
+
+Выполняйте под пользователем NetAudit. Службу останавливать не нужно: копия делается через
+SQLite и остаётся целостной. Каждый запуск создаёт **новый** файл
+`~/netaudit-backup-ГГГГММДД-ЧЧММСС.db` с правами `600`. Права выставляются ещё до того, как в файл
+попадут секреты, а существующие файлы скрипт не трогает.
 
 ```bash
-(umask 077; python3 -c "import sqlite3, os; s = sqlite3.connect(os.path.expanduser('~/.netaudit/netaudit.db')); d = sqlite3.connect(os.path.expanduser('~/netaudit-backup.db')); s.backup(d); d.close(); s.close()")
+python3 - <<'EOF'
+import os, sqlite3, sys, time
+db = os.path.expanduser('~/.netaudit/netaudit.db')
+copy = os.path.expanduser(time.strftime('~/netaudit-backup-%Y%m%d-%H%M%S.db'))
+if not os.path.isfile(db):
+    sys.exit(f'no database at {db}')
+try:  # a new file that only you can read, before any secret goes into it
+    os.close(os.open(copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+except FileExistsError:
+    sys.exit(f'{copy} already exists; run again in a second')
+src, dst = sqlite3.connect(db), sqlite3.connect(copy)
+src.backup(dst)
+print(copy, '-', dst.execute('SELECT count(*) FROM reports').fetchone()[0], 'reports')
+dst.close(); src.close()
+EOF
 ```
 
-В копии те же секреты, что в базе: храните её так же закрыто. Восстановление:
+В конце скрипт печатает имя файла и число отчётов в копии. В копии те же секреты, что в базе:
+храните её так же закрыто.
+
+### 14.2 Восстановление из копии
+
+Пока идёт восстановление, базой не должен пользоваться никто: ни Web-служба, ни аудиты по
+расписанию, ни запущенные вручную команды.
+
+**Шаг 1.** Запишите, какие timer'ы аудитов у вас есть: после восстановления их нужно будет
+включить обратно.
 
 ```bash
-sudo systemctl stop netaudit
+systemctl list-timers --all 'netaudit-audit-*'
 ```
 
-```bash
-cp ~/netaudit-backup.db ~/.netaudit/netaudit.db
-```
+**Шаг 2.** Остановите timer'ы, аудиты по расписанию и Web-службу. Если аудит по расписанию
+выполняется прямо сейчас, он прервётся без отчёта, поэтому лучше дождаться его окончания.
 
 ```bash
-rm -f ~/.netaudit/netaudit.db-wal ~/.netaudit/netaudit.db-shm
+sudo systemctl stop 'netaudit-audit-*.timer' 'netaudit-audit-*.service' netaudit
 ```
+
+**Шаг 3.** Убедитесь, что NetAudit больше нигде не запущен. Команда не должна ничего вывести.
+Если что-то вывела, завершите эти процессы, например `Ctrl+C` в их терминале.
+
+```bash
+pgrep -af netaudit.py
+```
+
+**Шаг 4.** Восстановите базу. В первой строке укажите свой файл копии.
+
+```bash
+python3 - ~/netaudit-backup-20261017-030000.db <<'EOF'
+import os, sqlite3, sys, time
+backup, db = sys.argv[1], os.path.expanduser('~/.netaudit/netaudit.db')
+if not os.path.isfile(backup):
+    sys.exit(f'no backup at {backup}; nothing was changed')
+try:
+    b = sqlite3.connect(f'file:{backup}?mode=ro', uri=True)
+    ok = b.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+    reports = b.execute('SELECT count(*) FROM reports').fetchone()[0]
+except sqlite3.DatabaseError:
+    ok = False
+if not ok:
+    sys.exit(f'{backup} is not a usable NetAudit database; nothing was changed')
+before = os.path.expanduser(time.strftime('~/netaudit-before-restore-%Y%m%d-%H%M%S.db'))
+os.close(os.open(before, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+cur, keep = sqlite3.connect(db), sqlite3.connect(before)
+cur.backup(keep); keep.close()           # the current state, in case you need it back
+b.backup(cur)                            # the restore itself, through SQLite
+print(f'restored {reports} reports from {backup}; the previous state is in {before}')
+cur.close(); b.close()
+EOF
+```
+
+Что делает скрипт:
+- если копии нет или она повреждена, отказывает и ничего не меняет;
+- иначе сначала сохраняет текущее состояние базы в `~/netaudit-before-restore-…db` (права `600`);
+- затем записывает копию в базу средствами самого SQLite. Файлы `-wal` и `-shm` вручную удалять
+  не нужно.
+
+**Шаг 5.** Запустите всё обратно: Web-службу и каждый timer из списка шага 1.
 
 ```bash
 sudo systemctl start netaudit
+```
+
+```bash
+sudo systemctl start netaudit-audit-daily.timer
 ```
 
 ## 15. Типичные ошибки
