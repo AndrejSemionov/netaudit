@@ -33,22 +33,33 @@ DB_PATH = Path.home() / '.netaudit' / 'netaudit.db'
 _local = threading.local()
 
 
+class InsecureStorageError(RuntimeError):
+    """The database is open to other accounts and its mode could not be fixed."""
+
+
 def _make_private() -> None:
     """~/.netaudit 0700 and the database 0600 (C1 D6): it holds the AI key,
     the Telegram token and the MikroTik password. Created that way on a fresh
-    install, tightened on an existing one. SQLite gives its -wal/-shm files
-    the database file's mode."""
+    install, tightened on an existing one; a path that stays open to group or
+    others (chmod refused: another owner) is an error, not a silent pass -
+    writing may still be allowed there (review C2 pass 1). SQLite gives its
+    -wal/-shm files the database file's mode."""
     DB_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if not DB_PATH.exists():
         os.close(os.open(DB_PATH, os.O_WRONLY | os.O_CREAT, 0o600))
     for path, mode in ((DB_PATH.parent, 0o700), (DB_PATH, 0o600),
                        (DB_PATH.with_name(DB_PATH.name + '-wal'), 0o600),
                        (DB_PATH.with_name(DB_PATH.name + '-shm'), 0o600)):
+        if not path.exists() or not stat.S_IMODE(path.stat().st_mode) & 0o077:
+            continue  # private already: no group or other bits
         try:
-            if path.exists() and stat.S_IMODE(path.stat().st_mode) != mode:
-                os.chmod(path, mode)
+            os.chmod(path, mode)
         except OSError:
-            pass  # not our file (another owner): leave it, SQLite says if it cannot open it
+            pass  # checked right below
+        if stat.S_IMODE(path.stat().st_mode) & 0o077:
+            raise InsecureStorageError(
+                f'{path} is open to other accounts and its mode could not be changed; '
+                f'run NetAudit as its owner, or fix it: chmod {mode:o} {path}')
 
 
 def _conn() -> sqlite3.Connection:

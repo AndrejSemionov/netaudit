@@ -183,9 +183,11 @@ def decide(changes: dict, threshold: str = DEFAULT_THRESHOLD) -> bool:
             if any(unit['counts'][s] > 0 for s in relevant):
                 return True
             continue
-        if any(at_or_above(f['severity'], threshold) for f in unit['new']):
+        # a new id, or an id that got worse: A low -> high while another HIGH
+        # was fixed leaves the HIGH count as it was (review C2 pass 1)
+        if any(at_or_above(f['severity'], threshold) for f in unit['new'] + unit['raised']):
             return True
-        # also an id-less finding, or an id whose severity went up
+        # an id-less finding shows only as a count that went up
         if any(unit['counts_delta'][s] > 0 for s in relevant):
             return True
     return False

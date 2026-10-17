@@ -79,7 +79,7 @@ def _chmod_refused(*args, **kwargs):
 def test_a_refused_chmod_on_an_open_database_is_not_silent(tmp_path, monkeypatch):
     # review C2 pass 1: chmod may be refused (another owner) while writing is
     # still allowed - secrets must not be stored in a file others can read
-    home, db = _open_install(tmp_path, monkeypatch)
+    _home, db = _open_install(tmp_path, monkeypatch)
     monkeypatch.setattr(storage.os, 'chmod', _chmod_refused)
     with pytest.raises(storage.InsecureStorageError) as exc:
         _reconnect()

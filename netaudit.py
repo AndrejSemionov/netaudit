@@ -620,8 +620,12 @@ def cmd_setup_timer(args):
     """Writes netaudit-audit-<name>.service/.timer to the current directory
     (docs/research/c1_schedule_notifications.md §4.3). Never installs them."""
     if args.rest:
-        flags = [t for t in args.rest if t.startswith('--')]
-        secret = [f for f in flags if f[2:] in SECRET_PARAM_NAMES]
+        # option names only, cut before "=": a value - a password in
+        # --password=... - is never echoed (review C2 pass 1)
+        flags = list(dict.fromkeys(t.split('=', 1)[0] for t in args.rest if t.startswith('--')))
+        secret_names = SECRET_PARAM_NAMES | {p['name'] for c in list_available()
+                                             for p in c['params'] if p['type'] == 'password'}
+        secret = [f for f in flags if f[2:] in secret_names]
         if secret:
             _refuse(f'{", ".join(secret)}: a unit file is no place for a secret; scheduled runs use a key '
                     'without a passphrase and sudo -n (README, "Scheduled audits")')
@@ -655,8 +659,19 @@ def cmd_setup_timer(args):
         notify.telegram_config()
     except notify.NotifyError as e:
         _refuse(f'{e}; every scheduled run sends through it')
+    # the unit runs in the NetAudit directory, not in this one: a relative
+    # key_path would point to another file there (review C2 pass 1)
+    try:
+        records = hosts.load_hosts_file(hosts_path)
+    except hosts.HostRecordError as e:
+        _refuse(str(e))
+    relative = [r['host'] for r in records
+                if 'key_path' in r and not Path(r['key_path']).expanduser().is_absolute()]
+    if relative:
+        _refuse(f'--hosts-file: key_path of {", ".join(relative)} is relative; the timer runs in '
+                f'{workdir}, so write it as an absolute path (or ~/...)')
     # the same checks as the run itself: a readable hosts file without
-    # secrets, checks with a host parameter, the B2.1 limits
+    # secrets, checks with a host parameter, readable key files, the B2.1 limits
     _group_selection(argparse.Namespace(checks=args.checks, quick=False), {}, hosts_path)
 
     service_name = f'netaudit-audit-{name}.service'
