@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `/api/settings` no longer returns the MikroTik password or the Web login
+  hash and salt; it returns only the settings page's values, with each key
+  and token as a set/not-set flag. Saving through it accepts only those keys:
+  any other key (the Web login, MikroTik capture, unknown names) is refused
+  with 400 before anything is written. The Web login and MikroTik capture
+  keep their own endpoints. A script that read or wrote other keys here
+  must use those endpoints.
 - Scheduled audits with Telegram notifications. `netaudit setup-timer` writes a
   systemd service and timer that run `run … --hosts-file … --notify` (it never
   installs them). `run --notify` sends one plain-text message when a check

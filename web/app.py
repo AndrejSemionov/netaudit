@@ -334,33 +334,42 @@ def api_analyze(req: AnalyzeRequest) -> dict:
 
 
 # --- Settings ---
-# keys never sent back to the frontend in the clear
-SECRET_KEYS = {'anthropic_api_key', 'telegram_token', 'hibp_api_key'}
+# Allow-lists, not a deny-list (docs/research/settings_api_secrets.md): the
+# settings table also holds the Web login hash and salt and the MikroTik
+# password, owned by /api/settings/web-auth and /api/history_capture/settings,
+# and a key added later must not leak through here by default.
+PUBLIC_SETTINGS = ('sync_threshold_sec', 'ema_alpha', 'ai_language', 'telegram_chat')
+# never sent back in the clear, only a set/not-set flag
+SECRET_KEYS = frozenset({'anthropic_api_key', 'telegram_token', 'hibp_api_key'})
+WRITABLE_SETTINGS = frozenset(PUBLIC_SETTINGS) | SECRET_KEYS
 
 
 @app.get('/api/settings')
 def api_get_settings() -> dict:
-    """Returns settings. Secrets are masked - only a set/not-set flag."""
-    raw = storage.settings_all()
-    out = {}
-    for k, v in raw.items():
-        if k in SECRET_KEYS:
-            out[k] = {'set': bool(v)}  # never return the actual value
-        else:
-            out[k] = v
-    # defaults, if not set
-    out.setdefault('sync_threshold_sec', str(timing.DEFAULT_SYNC_THRESHOLD_SEC))
-    out.setdefault('ema_alpha', str(timing.DEFAULT_EMA_ALPHA))
+    """The settings page's values. Secrets only as a set/not-set flag; any
+    other stored key is never returned."""
     from netaudit_pkg.history import DEFAULT_AI_LANGUAGE
-    out.setdefault('ai_language', DEFAULT_AI_LANGUAGE)
-    out['web_auth_user'] = storage.setting_get('web_auth_user') or ''
-    out['web_auth_configured'] = bool(storage.setting_get('web_auth_password_hash'))
+    defaults = {'sync_threshold_sec': str(timing.DEFAULT_SYNC_THRESHOLD_SEC),
+                'ema_alpha': str(timing.DEFAULT_EMA_ALPHA),
+                'ai_language': DEFAULT_AI_LANGUAGE, 'telegram_chat': ''}
+    raw = storage.settings_all()
+    out = {k: raw.get(k) or defaults[k] for k in PUBLIC_SETTINGS}
+    out.update({k: {'set': bool(raw.get(k))} for k in sorted(SECRET_KEYS)})
+    out['web_auth_user'] = raw.get('web_auth_user') or ''
+    out['web_auth_configured'] = bool(raw.get('web_auth_password_hash'))
     return out
 
 
 @app.post('/api/settings')
 def api_set_settings(req: SettingsRequest) -> dict:
-    """Saves settings. Empty secret values are ignored (to avoid wiping them out)."""
+    """Saves the settings page's keys. Anything else is refused before a
+    single write, naming the keys but never echoing a value. Empty secret
+    values are ignored (to avoid wiping them out)."""
+    refused = sorted(str(k)[:64] for k in req.settings if k not in WRITABLE_SETTINGS)
+    if refused:
+        raise HTTPException(400, f'not a setting this endpoint changes: {", ".join(refused)}; '
+                                 'the Web login is changed via /api/settings/web-auth, '
+                                 'MikroTik capture via /api/history_capture/settings')
     for k, v in req.settings.items():
         if k in SECRET_KEYS and (v is None or v == ''):
             continue  # don't overwrite a secret with an empty value
