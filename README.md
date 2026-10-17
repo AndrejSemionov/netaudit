@@ -257,15 +257,21 @@ each check's exact param names and defaults.
 **Audit a public website (no server access needed):**
 
 ```bash
-python3 netaudit.py run ssl security_headers web_security_external dns_audit --url https://example.com
+python3 netaudit.py run ssl security_headers web_security_external dns_audit \
+    --url https://example.com --domain example.com
 ```
 
 **Quick default bundle** — same idea, without picking check IDs by hand:
 
 ```bash
-python3 netaudit.py run --quick --url https://example.com          # site bundle
-python3 netaudit.py run --quick --host 1.2.3.4 --user root         # server bundle
+python3 netaudit.py run --quick --url https://example.com --domain example.com   # site bundle
+python3 netaudit.py run --quick --host 1.2.3.4 --user root                       # server bundle
 ```
+
+The site bundle is `ssl security_headers web_security_external dns_audit`. `dns_audit` needs
+`--domain`: without it the DNS check is skipped with a hint (the domain is not guessed from
+the URL). The server bundle is `server_audit ssh_audit lynis_audit cve_audit`, all run on the
+given host over SSH.
 
 **Audit a server you have SSH access to** (key-based, the common case):
 
