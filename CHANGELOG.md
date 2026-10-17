@@ -13,7 +13,8 @@
   "all fine": see README, "Scheduled audits and Telegram notifications".
 - `~/.netaudit` is now `0700` and its database `0600`, also on existing
   installs; the database holds the AI key, the Telegram token and the
-  MikroTik password.
+  MikroTik password. When the mode cannot be fixed (another owner),
+  NetAudit stops with an error naming the file.
 
 - CLI `--quick` now audits only the target you name. The server bundle
   (`--quick --host`) ran `ports` and `firewall` on the machine NetAudit runs

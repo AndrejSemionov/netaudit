@@ -554,7 +554,9 @@ to the current directory and prints the `sudo` commands that install them. It ne
 anything itself. A path in a unit may only contain letters, digits and `. _ / @ + -`: `%`, `$`,
 spaces and quotes are refused, not escaped. `--timeout` (default `1h`) limits one run, and
 `--notify-min-severity` (default `medium`) sets the threshold. `--notify` also works on any `run`,
-e.g. `run ssh_hardening --host 1.2.3.4 --notify --job manual`.
+e.g. `run ssh_hardening --host 1.2.3.4 --notify --job manual`. A `key_path` in the hosts file
+must be absolute (or `~/…`): the unit runs in the NetAudit directory, so a relative path would
+point to another file there.
 
 A message is sent when:
 - a check failed or a host could not be reached;
@@ -592,6 +594,8 @@ so an hourly job pushes everything else out of that window within about eight da
 
 `~/.netaudit` is `0700` and the database `0600`, because the database holds the AI key, the
 Telegram token and the MikroTik password. An existing install is tightened on its next start.
+If that is not possible (the files belong to another account), NetAudit stops with an error that
+names the file, instead of keeping secrets in it.
 
 ## SSH and sudo
 
