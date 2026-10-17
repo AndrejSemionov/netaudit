@@ -9,6 +9,10 @@
 
 [🇷🇺 Русский](README.ru.md) · 🇬🇧 English
 
+**New here? Start with the [step-by-step guide](docs/guide.md)**: installation, opening the Web
+interface from another computer, SSH access to servers, Telegram, scheduled audits, backups and
+common errors. This README is the reference for every check.
+
 A diagnostics tool for networks, websites and servers. Works from the **console** and via a
 **web interface**. Modular architecture: every check is a plugin, registered with a decorator
 and automatically appearing both in the CLI and the web. AI analysis of the report gives

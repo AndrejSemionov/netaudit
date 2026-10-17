@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Docs: a step-by-step guide in English and Russian (`docs/guide.md`,
+  `docs/guide.ru.md`), linked from the top of both READMEs: installation,
+  opening the Web interface locally, through an SSH tunnel, behind nginx or
+  directly with the one-time generated password, SSH access to audited
+  servers, several servers, AI and Telegram settings, scheduled audits,
+  updating, backups and common errors.
 - `/api/settings` no longer returns the MikroTik password or the Web login
   hash and salt; it returns only the settings page's values, with each key
   and token as a set/not-set flag. Saving through it accepts only those keys:
