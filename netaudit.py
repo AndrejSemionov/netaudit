@@ -134,6 +134,12 @@ def _quick_bundle(bundle: list[str], extra: dict) -> list[str]:
     return picked
 
 
+def _flag_names(keys) -> str:
+    """Flags for a message: the name only, cut before "=" - in `--password=VALUE`
+    the parser keeps the whole text as the name (review #46)."""
+    return ", ".join(dict.fromkeys("--" + key.split("=", 1)[0] for key in sorted(keys)))
+
+
 def _refuse_unused_flags(check_ids: list[str], extra: dict, avail: dict) -> None:
     """A flag that no selected check takes is refused before anything runs.
     It used to be dropped without a word, so the check ran on another target:
@@ -154,7 +160,7 @@ def _refuse_unused_flags(check_ids: list[str], extra: dict, avail: dict) -> None
             hint = f' {", ".join(local)} always check this computer.'
         else:
             hint = ' None of the selected checks takes a target.'
-    _refuse(f'{", ".join("--" + name for name in unused)}: not used by any of the selected checks '
+    _refuse(f'{_flag_names(unused)}: not used by any of the selected checks '
             f'({", ".join(check_ids)}).{hint} Drop the flag or pick checks that take it')
 
 
@@ -276,7 +282,7 @@ def _run_selected(args, extra: dict, repeated: set) -> dict:
     max_parallel = extra.pop('max-parallel', None)
     if hosts_file is not None:
         if repeated:
-            _refuse(f'{", ".join("--" + k for k in sorted(repeated))} given more than once')
+            _refuse(f'{_flag_names(repeated)} given more than once')
         parallel = _max_parallel(max_parallel)
         return run_checks_multi(_group_selection(args, extra, hosts_file, parallel), max_parallel=parallel)
     if max_parallel is not None:
