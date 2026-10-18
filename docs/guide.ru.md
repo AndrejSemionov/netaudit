@@ -868,4 +868,5 @@ sudo systemctl start netaudit-audit-daily.timer
 | `Telegram: HTTP 401 (the bot token was rejected)` / `HTTP 400 (check the chat ID)` / `HTTP 403 …` | Неверный токен, неверный chat ID, бот не может писать в этот чат | Проверьте токен у BotFather и chat ID через `getUpdates`, напишите боту первым |
 | «Set ANTHROPIC_API_KEY on the server running netaudit.» | Нет ключа AI | Раздел 10.1 |
 | `--…: not used by any of the selected checks (…)` | Этот флаг не принимает ни одна из выбранных проверок: опечатка или не та проверка | Посмотрите подсказку в сообщении: какой флаг нужен проверке. Уберите лишний флаг или выберите проверки, которые его принимают (`python3 netaudit.py list`) |
+| `No target given: … needs --url` / `needs --domain` | Не указан сайт для проверки; без него проверка пошла бы по примеру `example.com` | Добавьте флаг из сообщения со своим сайтом, например `--url https://ваш-сайт` или `--domain ваш-сайт` |
 | `uvicorn not installed` | Не установлены зависимости Web | `pip install -r requirements.txt --break-system-packages` |

@@ -245,6 +245,12 @@ names and a hint: for example `run ports --host 1.2.3.4` (`ports` always checks 
 `run dns_audit --url …` (it takes `--domain`), or a typo such as `--hots`. Before, such a flag
 was dropped silently and the check ran on another target.
 
+Site checks whose default target is the placeholder `example.com` (`ssl`, `http`,
+`security_headers`, `web_security_external` take `--url`; `dns_audit`, `cert_transparency`
+take `--domain`) do not run without their target: `run dns_audit` alone is refused with
+`dns_audit needs --domain`. Before, it checked `example.com`. `netaudit list` marks these
+parameters as `required`.
+
 `trend` reads saved reports from `~/.netaudit/netaudit.db`. For state checks it
 compares stable finding IDs; a finding that disappeared from an area the latest
 run could not verify is shown as **not evaluated**, rather than resolved.

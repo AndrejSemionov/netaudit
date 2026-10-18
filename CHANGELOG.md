@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- CLI `run` refuses a site check whose target was not given, when its default
+  target is the placeholder `example.com`: `ssl`, `http`, `security_headers`,
+  `web_security_external` (`--url`), `dns_audit`, `cert_transparency`
+  (`--domain`). Before, `run dns_audit` alone audited `example.com` and the
+  report looked like one about your site. The message names each check and
+  its flag; nothing runs and no password is asked for. `netaudit list` shows
+  these parameters as `required`. `--quick --url` is unchanged. Network
+  diagnostics keep their defaults (`ping` → `8.8.8.8`), and the Web form is
+  unchanged: it shows the address in the field.
 - CLI `run` refuses a flag that none of the selected checks takes, before
   anything runs or asks for a password. Before, it was dropped silently, so
   `run ports firewall --host X` checked this computer, `run dns_audit --url U`
