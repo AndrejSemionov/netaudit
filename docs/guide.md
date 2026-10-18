@@ -12,7 +12,7 @@ does, see the [README](../README.md) and the "Help" tab in the interface.
 1. [How it fits together](#1-how-it-fits-together)
 2. [Installation](#2-installation)
 3. [First run in the console](#3-first-run-in-the-console)
-4. [Web interface: start it and open it in a browser](#4-web-interface-start-it-and-open-it-in-a-browser)
+4. [Web interface: how to open it in a browser](#4-web-interface-how-to-open-it-in-a-browser)
 5. [What is where in the interface](#5-what-is-where-in-the-interface)
 6. [Audit a website](#6-audit-a-website)
 7. [Prepare SSH access to a server](#7-prepare-ssh-access-to-a-server)
@@ -159,7 +159,7 @@ sudo systemctl status netaudit
 
 The output should say `active (running)`. The service listens on `127.0.0.1:8000` only, so it is
 not visible from outside. To open it in a browser on your own computer, see
-[section 4.2](#42-netaudit-on-a-server-browser-on-your-computer).
+[section 4](#4-web-interface-how-to-open-it-in-a-browser).
 
 ## 3. First run in the console
 
@@ -188,40 +188,86 @@ The ready-made website bundle (DNS is checked only with `--domain`):
 python3 netaudit.py run --quick --url https://example.com --domain example.com
 ```
 
-## 4. Web interface: start it and open it in a browser
+## 4. Web interface: how to open it in a browser
 
-### 4.1 NetAudit and the browser on the same computer
+### 4.1 Which address to open
+
+One rule: **NetAudit opens at the address of the computer it is installed on.**
+
+- NetAudit and the browser on the **same** computer — open `http://127.0.0.1:8000`.
+- NetAudit on a **server**, the browser on **your** computer — open the server's address, e.g.
+  `http://192.168.88.20` or `http://192.168.88.20:8000`. Which of the two is yours, the command
+  in section 4.2 shows.
+
+`example.com` in this guide is only an **example of a site NetAudit checks**. You don't open it in
+the browser. In the check commands you put your own site's address in its place.
+
+### 4.2 How to find your server's address
+
+Run this on the server where NetAudit is installed:
+
+```bash
+systemctl cat netaudit | grep ExecStart; ls /etc/nginx/sites-enabled/ 2>/dev/null
+```
+
+Find what the output shows in this table:
+
+| What the output shows | What to open in the browser |
+|---|---|
+| The `ExecStart` line has `--host 0.0.0.0` | `http://<server-IP>:8000`. If another number follows `--port`, use it instead of `8000` |
+| The `ExecStart` line has `--host 127.0.0.1` (or no `--host` at all), and a line `netaudit` follows | `http://<server-IP>` |
+| The `ExecStart` line has `--host 127.0.0.1` (or no `--host` at all), and no line `netaudit` follows | It does not open from another computer this way. Pick a way from section 4.4; way A is the simplest |
+| `No files found for netaudit.service.` | NetAudit is not installed as a service on this computer. Start it by hand as in section 4.3 |
+
+`<server-IP>` is the server's address in your network. This command on the server shows it (take
+the first number):
+
+```bash
+hostname -I
+```
+
+If the browser asks for a login and password, that is fine: where they come from is in ways B and
+C of section 4.4.
+
+### 4.3 NetAudit and the browser on the same computer
+
+Start the Web interface:
 
 ```bash
 python3 netaudit.py web
 ```
 
-Open `http://127.0.0.1:8000` in the browser. Stop the server with `Ctrl+C` in the terminal. No
-password is needed: the server listens to this computer only.
+The terminal shows a line `Web UI: http://127.0.0.1:8000`. That is the address: open it in the
+browser. No password is needed, because the server listens to this computer only. Stop the server
+with `Ctrl+C` in the terminal.
 
-If port 8000 is taken, use another port and open `http://127.0.0.1:8080`:
+If port 8000 is taken, start it on another port and open `http://127.0.0.1:8080`:
 
 ```bash
 python3 netaudit.py web --port 8080
 ```
 
-### 4.2 NetAudit on a server, browser on your computer
+### 4.4 How to open NetAudit from another computer: ways A, B, C
 
-Pick one of three ways.
+You need this only if the table in section 4.2 said "it does not open from another computer", or
+if you want to set up access differently. One way is enough.
 
-**Way A — an SSH tunnel (the simplest; opens nothing to the network).** On **your own** computer
-(Linux, macOS, or Windows 10+ in PowerShell), with the server's address:
+**Way A — an SSH tunnel.** In the browser: `http://127.0.0.1:8000` on your computer. The simplest:
+nothing changes on the server and nothing opens to the network.
+
+On **your own** computer (Linux, macOS, or Windows 10+ in PowerShell), with the server's address:
 
 ```bash
 ssh -L 8000:127.0.0.1:8000 netaudit@<server-IP>
 ```
 
-While this window stays open, open `http://127.0.0.1:8000` on your computer. You see the
-server's Web interface, carried over SSH. Close the window and the access is gone. If port 8000
-is taken on your computer, use `-L 8080:127.0.0.1:8000` and open `http://127.0.0.1:8080`.
+While this window stays open, open `http://127.0.0.1:8000` on your computer: you see the server's
+Web interface, carried over SSH. Close the window and the access is gone. If port 8000 is taken on
+your computer, use `-L 8080:127.0.0.1:8000` and open `http://127.0.0.1:8080`.
 
-**Way B — nginx with a password (permanent access at the server's address).** On the server, as
-`netaudit`, from `~/netaudit`:
+**Way B — nginx with a password.** In the browser: `http://<server-IP>`. Good for permanent access.
+
+On the server, as `netaudit`, from `~/netaudit`:
 
 ```bash
 sudo apt install -y nginx apache2-utils
@@ -260,25 +306,43 @@ sudo htpasswd /etc/nginx/.netaudit_htpasswd admin
 ```
 
 The connection is plain HTTP, without encryption. For access from the internet get a certificate
-(certbot): `netaudit.nginx.conf` already has commented-out lines for HTTPS.
+(certbot): `netaudit.nginx.conf` already has commented-out lines for HTTPS. The address then starts
+with `https://`.
 
-**Way C — directly, in your own local network (no nginx).** Start the server on all addresses:
+**Way C — directly, in your own local network only.** In the browser: `http://<server-IP>:8000`.
+
+If NetAudit runs as a service, switch it to all addresses and restart it:
+
+```bash
+sudo sed -i 's/--host 127.0.0.1/--host 0.0.0.0/' /etc/systemd/system/netaudit.service
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl restart netaudit
+```
+
+Check with the command from section 4.2: the `ExecStart` line must now have `--host 0.0.0.0`.
+
+If you start it by hand, do it like this:
 
 ```bash
 python3 netaudit.py web --host 0.0.0.0 --port 8000
 ```
 
 On the first such start NetAudit creates the login `admin` and a password and prints the password
-to the log **once**, inside a frame of `=`. The line looks like `password: <password>`. If NetAudit
-runs as a service and you changed its `--host` to `0.0.0.0`, find the password in the journal:
+to the log **once**, inside a frame of `=`. The line looks like `password: <password>`. For the
+service, the password is in the journal:
 
 ```bash
 sudo journalctl -u netaudit | grep -A1 "user:"
 ```
 
+If a login was set before, there is no new password: the log shows only the user name, and the
+password stays as it was. Forgot it? See the reset in section 10.3.
+
 Open `http://<server-IP>:8000` and log in. You can change the password in the "Settings" tab →
-"Web UI access". The password travels over the network unencrypted, so use this way only in your
-own local network; otherwise use A or B.
+"Web UI access". The password travels over the network unencrypted, so this way is only for your
+own local network. Otherwise use A or B.
 
 ## 5. What is where in the interface
 
@@ -490,7 +554,7 @@ Like the AI key, the token is never sent back to the browser.
 
 ### 10.3 The Web interface password
 
-It is needed only for way C in section 4.2; with way B, `htpasswd` in nginx sets the password.
+It is needed only for way C in section 4.4; with way B, `htpasswd` in nginx sets the password.
 "Settings" → "Web UI access": login and a new password (8 characters or more) → "Save access".
 
 If you forgot it, reset it as the NetAudit user:
@@ -499,7 +563,7 @@ If you forgot it, reset it as the NetAudit user:
 python3 -c "import sqlite3, pathlib; c = sqlite3.connect(pathlib.Path.home() / '.netaudit' / 'netaudit.db'); c.execute(\"DELETE FROM settings WHERE key IN ('web_auth_user', 'web_auth_password_hash')\"); c.commit()"
 ```
 
-Then restart NetAudit: a new password appears in the log, as in section 4.2.
+Then restart NetAudit: a new password appears in the log, as in way C of section 4.4.
 
 ## 11. Scheduled audits with notifications
 
@@ -748,7 +812,7 @@ sudo systemctl start netaudit-audit-daily.timer
 
 | What you see | Why | What to do |
 |---|---|---|
-| The page does not open from another computer | The service listens on `127.0.0.1` only | An SSH tunnel or nginx (section 4.2) |
+| The page does not open from another computer | The service listens on `127.0.0.1` only | Find your address (section 4.2); if it does not open that way, an SSH tunnel or nginx (section 4.4) |
 | The browser asks for a login and password you don't know | With nginx, `htpasswd` sets it; with `--host 0.0.0.0`, NetAudit does | `sudo htpasswd /etc/nginx/.netaudit_htpasswd admin`, or the reset in section 10.3 |
 | `Auth not configured. Restart the server to generate credentials.` | The Web login was removed from the database while the server ran | Restart NetAudit; a new password appears in the log |
 | `[Errno 98] … address already in use` | The port is taken (for example, a second instance runs) | Stop the old one, or start with `--port 8080` |
