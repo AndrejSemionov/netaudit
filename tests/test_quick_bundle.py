@@ -113,11 +113,14 @@ def test_explicit_checks_with_quick_run_exactly_those(selected, caplog):
     assert 'skipping' not in caplog.text
 
 
-def test_url_still_picks_the_site_bundle_when_host_is_also_given(selected):
-    netaudit.cmd_run(_ns([], ['--url', 'https://example.org', '--host', '10.0.0.5']))
+def test_url_and_host_together_are_refused(selected, caplog):
+    # --url picks the site bundle, which takes no --host: before, --host was
+    # dropped silently (docs/research/cli_unused_flags.md)
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit):
+        netaudit.cmd_run(_ns([], ['--url', 'https://example.org', '--host', '10.0.0.5']))
 
-    [selection] = selected
-    assert [item['id'] for item in selection] == ['ssl', 'security_headers', 'web_security_external']
+    assert '--host' in caplog.text
+    assert selected == []
 
 
 def test_quick_without_url_or_host_is_refused(selected, caplog):

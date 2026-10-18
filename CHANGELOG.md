@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- CLI `run` refuses a flag that none of the selected checks takes, before
+  anything runs or asks for a password. Before, it was dropped silently, so
+  `run ports firewall --host X` checked this computer, `run dns_audit --url U`
+  checked `example.com`, and a typo vanished. The message names the flags (not
+  their values) and hints at the right target flag. This also refuses
+  `--quick` with both `--url` and `--host` (the site bundle takes no `--host`).
 - Docs: a step-by-step guide in English and Russian (`docs/guide.md`,
   `docs/guide.ru.md`), linked from the top of both READMEs: installation,
   opening the Web interface locally, through an SSH tunnel, behind nginx or

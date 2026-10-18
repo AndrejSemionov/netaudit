@@ -865,4 +865,5 @@ sudo systemctl start netaudit-audit-daily.timer
 | `--notify: Telegram is not configured …` | The token or the chat ID is missing | Section 10.2 |
 | `Telegram: HTTP 401 (the bot token was rejected)` / `HTTP 400 (check the chat ID)` / `HTTP 403 …` | Wrong token, wrong chat ID, or the bot cannot write to that chat | Check the token with BotFather and the chat ID via `getUpdates`, and write to the bot first |
 | "Set ANTHROPIC_API_KEY on the server running netaudit." | No AI key | Section 10.1 |
+| `--…: not used by any of the selected checks (…)` | None of the selected checks takes that flag: a typo, or the wrong check | Read the hint in the message: which flag the checks take. Drop the extra flag or pick checks that take it (`python3 netaudit.py list`) |
 | `uvicorn not installed` | The Web dependencies are not installed | `pip install -r requirements.txt --break-system-packages` |
