@@ -55,6 +55,8 @@ QUICK_BUNDLE_SITE = ['ssl', 'security_headers', 'web_security_external', 'dns_au
 QUICK_BUNDLE_SERVER = ['server_audit', 'ssh_audit', 'lynis_audit', 'cve_audit']
 # what a bundle check audits: the first of these params it declares
 QUICK_TARGET_PARAMS = ('url', 'domain', 'host')
+# checks that run on the NetAudit machine itself (checks/system.py)
+LOCAL_CHECKS = frozenset({'ports', 'firewall', 'performance'})
 
 # setup-timer (C2): values that go into a systemd unit are validated, not
 # escaped - systemd expands % specifiers and $VARIABLES in ExecStart= and
@@ -132,6 +134,30 @@ def _quick_bundle(bundle: list[str], extra: dict) -> list[str]:
     return picked
 
 
+def _refuse_unused_flags(check_ids: list[str], extra: dict, avail: dict) -> None:
+    """A flag that no selected check takes is refused before anything runs.
+    It used to be dropped without a word, so the check ran on another target:
+    this computer (`ports --host X`) or its default (`dns_audit --url U`
+    audited example.com) - docs/research/cli_unused_flags.md. Only flag names
+    are printed, never their values."""
+    taken = {p['name'] for check_id in check_ids if check_id in avail for p in avail[check_id]['params']}
+    unused = sorted(set(extra) - taken)
+    if not unused:
+        return
+    hint = ''
+    if set(unused) & storage.IDENTITY_PARAM_KEYS:
+        targets = sorted(taken & storage.IDENTITY_PARAM_KEYS)
+        local = [c for c in check_ids if c in LOCAL_CHECKS]
+        if targets:
+            hint = f' The selected checks take their target as {", ".join("--" + t for t in targets)}.'
+        elif local:
+            hint = f' {", ".join(local)} always check this computer.'
+        else:
+            hint = ' None of the selected checks takes a target.'
+    _refuse(f'{", ".join("--" + name for name in unused)}: not used by any of the selected checks '
+            f'({", ".join(check_ids)}).{hint} Drop the flag or pick checks that take it')
+
+
 def _single_selection(args, extra: dict) -> list[dict]:
     check_ids = args.checks or []
     if args.quick:
@@ -149,6 +175,9 @@ def _single_selection(args, extra: dict) -> list[dict]:
         log.error("No checks given. Use 'netaudit run <check_id> ...' or 'netaudit run --quick --url/--host ...'.")
         sys.exit(1)
 
+    avail = {c['id']: c for c in list_available()}
+    _refuse_unused_flags(check_ids, extra, avail)
+
     selected = []
     # a password-type param given as "-" is asked for (no echo) instead of
     # being typed on the command line, where ps and shell history see it;
@@ -156,7 +185,6 @@ def _single_selection(args, extra: dict) -> list[dict]:
     asked: dict[str, str] = {}
     for check_id in check_ids:
         spec_params = {}
-        avail = {c['id']: c for c in list_available()}
         if check_id in avail:
             for p in avail[check_id]['params']:
                 if p['name'] in extra:
@@ -208,6 +236,7 @@ def _group_selection(args, extra: dict, hosts_file: str, max_parallel: int = DEF
                if c not in avail or not any(p['name'] == 'host' for p in avail[c]['params'])]
     if no_host:
         refuse(f'{", ".join(no_host)}: no host parameter; run without --hosts-file')
+    _refuse_unused_flags(check_ids, extra, avail)
     # B2.1 limits (max_parallel, 64 hosts per check, 256 per run), checked
     # here so an oversized run is refused before any password prompt
     try:
@@ -215,17 +244,13 @@ def _group_selection(args, extra: dict, hosts_file: str, max_parallel: int = DEF
     except ValueError as e:
         refuse(f'{e} (--max-parallel / hosts file)')
 
-    # every secret flag, used or not: a value typed on the command line is
-    # visible in ps and shell history, and a flag no selected check takes
-    # would be silently ignored (review #35)
+    # a secret typed on the command line is visible in ps and shell history
+    # (review #35); a secret flag no selected check takes was refused above
     secret_names = SECRET_PARAM_NAMES | {p['name'] for c in avail.values()
                                          for p in c['params'] if p['type'] == 'password'}
-    used = {p['name'] for check_id in check_ids for p in avail[check_id]['params']}
     for name in sorted(secret_names & extra.keys()):
         if extra[name] != '-':
             refuse(f'--{name}: in a group run give it as "--{name} -" to be asked without echo')
-        if name not in used:
-            refuse(f'--{name} is not used by any of the selected checks; drop it')
 
     selected = []
     asked: dict[str, str] = {}
