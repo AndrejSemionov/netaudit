@@ -207,24 +207,40 @@ the browser. In the check commands you put your own site's address in its place.
 Run this on the server where NetAudit is installed:
 
 ```bash
-systemctl cat netaudit | grep ExecStart; ls /etc/nginx/sites-enabled/ 2>/dev/null
+systemctl cat netaudit | grep ExecStart; grep -rE '^\s*(listen|proxy_pass)' /etc/nginx/sites-enabled/ 2>/dev/null
 ```
 
-Find what the output shows in this table:
+The first line of the output (`ExecStart=…`) shows how NetAudit is started. The other lines, if any,
+are nginx settings. Each shows a file name and one setting:
+- `listen` — the port where nginx waits for the browser;
+- `proxy_pass` — where nginx passes the requests on.
+
+Find your case:
 
 | What the output shows | What to open in the browser |
 |---|---|
-| The `ExecStart` line has `--host 0.0.0.0` | `http://<server-IP>:8000`. If another number follows `--port`, use it instead of `8000` |
-| The `ExecStart` line has `--host 127.0.0.1` (or no `--host` at all), and a line `netaudit` follows | `http://<server-IP>` |
-| The `ExecStart` line has `--host 127.0.0.1` (or no `--host` at all), and no line `netaudit` follows | It does not open from another computer this way. Pick a way from section 4.4; way A is the simplest |
+| `ExecStart` has `--host 0.0.0.0` | `http://<server-IP>:8000`. If another number follows `--port`, use it instead of `8000` |
+| `ExecStart` has `--host 127.0.0.1` or no `--host` at all, and one nginx file has `proxy_pass http://127.0.0.1:8000;` and `listen 80;` | `http://<server-IP>` |
+| The same, but that file has `listen` with another number, e.g. `listen 8081;` | `http://<server-IP>:8081`, i.e. with that number |
+| The same, but that file has `listen 443 ssl;` | `https://` and the server name the certificate was issued for |
+| `ExecStart` has `--host 127.0.0.1` or no `--host` at all, and there is no line `proxy_pass http://127.0.0.1:8000;` | It does not open from another computer this way. Pick a way from section 4.4; way A is the simplest |
 | `No files found for netaudit.service.` | NetAudit is not installed as a service on this computer. Start it by hand as in section 4.3 |
 
-`<server-IP>` is the server's address in your network. This command on the server shows it (take
-the first number):
+The number in `proxy_pass` must match the number after `--port` in `ExecStart` (usually `8000`).
+
+`<server-IP>` is the same address you use to log in to the server over SSH, e.g. `192.168.88.20`.
+If you don't know it, run this on the server:
 
 ```bash
 hostname -I
 ```
+
+There can be several addresses. You need the one in the same network as your computer: it usually
+starts the same way, e.g. `192.168.88.`.
+
+If the table gave you an address but the page does not open, check that nginx is running:
+`systemctl is-active nginx` must answer `active`. Also check that the server's firewall lets that
+port through.
 
 If the browser asks for a login and password, that is fine: where they come from is in ways B and
 C of section 4.4.
@@ -311,17 +327,28 @@ with `https://`.
 
 **Way C — directly, in your own local network only.** In the browser: `http://<server-IP>:8000`.
 
-If NetAudit runs as a service, switch it to all addresses and restart it:
+If NetAudit runs as a service, open its settings:
 
 ```bash
-sudo sed -i 's/--host 127.0.0.1/--host 0.0.0.0/' /etc/systemd/system/netaudit.service
+sudo systemctl edit --full netaudit
 ```
+
+An editor opens. In the line that starts with `ExecStart=`:
+- if it has `--host 127.0.0.1`, change it to `--host 0.0.0.0`;
+- if it has no `--host`, add `--host 0.0.0.0` right after the word `web`.
+
+Save and close the editor (in nano: `Ctrl+O`, `Enter`, `Ctrl+X`). Check the result:
 
 ```bash
-sudo systemctl daemon-reload && sudo systemctl restart netaudit
+systemctl cat netaudit | grep ExecStart
 ```
 
-Check with the command from section 4.2: the `ExecStart` line must now have `--host 0.0.0.0`.
+The line must have `--host 0.0.0.0`. If it does, restart the service. If not, open the settings
+again.
+
+```bash
+sudo systemctl restart netaudit
+```
 
 If you start it by hand, do it like this:
 
