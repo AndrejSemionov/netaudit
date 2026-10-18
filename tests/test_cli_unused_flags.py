@@ -117,3 +117,45 @@ def test_the_runs_own_flags_are_not_reported_as_unused(ran, tmp_path, monkeypatc
     hosts.write_text(json.dumps([{'host': '10.0.0.5'}]), encoding='utf-8')
     netaudit.cmd_run(_ns(['ssh_hardening'], ['--hosts-file', str(hosts), '--max-parallel', '2']))
     assert len(ran) == 2
+
+
+# --- review #46 pass 1: a --name=value flag never echoes its value -----------
+
+SECRET = 'VALUE-NEVER-ECHOED'
+
+
+@pytest.mark.parametrize('rest', [
+    [f'--password={SECRET}'],
+    [f'--sudo_password={SECRET}'],
+    [f'--hots={SECRET}'],
+    [f'--password={SECRET}', '--host', '10.0.0.5'],
+], ids=['password', 'sudo_password', 'unknown', 'before-another-flag'])
+def test_single_run_never_echoes_an_equals_value(ran, caplog, capsys, rest, monkeypatch):
+    monkeypatch.setattr(netaudit.getpass, 'getpass', lambda prompt: pytest.fail('asked for a password'))
+    text = _refused(_ns(['ports'], rest), caplog, capsys, '--' + rest[0][2:].split('=')[0])
+    assert SECRET not in text
+    assert ran == []
+
+
+@pytest.mark.parametrize('rest', [
+    [f'--password={SECRET}'],
+    [f'--hots={SECRET}', f'--hots={SECRET}'],
+], ids=['unused', 'repeated'])
+def test_group_run_never_echoes_an_equals_value(ran, caplog, capsys, rest, tmp_path, monkeypatch):
+    monkeypatch.setattr(netaudit.getpass, 'getpass', lambda prompt: pytest.fail('asked for a password'))
+    hosts = tmp_path / 'hosts.json'
+    hosts.write_text(json.dumps([{'host': '10.0.0.5'}]), encoding='utf-8')
+    text = _refused(_ns(['ssh_hardening'], ['--hosts-file', str(hosts), *rest]), caplog, capsys,
+                    '--' + rest[0][2:].split('=')[0])
+    assert SECRET not in text
+    assert ran == []
+
+
+def test_main_never_echoes_an_equals_password(ran, caplog, capsys, monkeypatch):
+    import sys
+    monkeypatch.setattr(sys, 'argv', ['netaudit.py', 'run', 'ports', f'--password={SECRET}'])
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit):
+        netaudit.main()
+    out = capsys.readouterr()
+    assert SECRET not in caplog.text + out.out + out.err
+    assert '--password' in caplog.text
