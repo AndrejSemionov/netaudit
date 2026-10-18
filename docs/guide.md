@@ -12,7 +12,7 @@ does, see the [README](../README.md) and the "Help" tab in the interface.
 1. [How it fits together](#1-how-it-fits-together)
 2. [Installation](#2-installation)
 3. [First run in the console](#3-first-run-in-the-console)
-4. [Web interface: start it and open it in a browser](#4-web-interface-start-it-and-open-it-in-a-browser)
+4. [Web interface: how to open it in a browser](#4-web-interface-how-to-open-it-in-a-browser)
 5. [What is where in the interface](#5-what-is-where-in-the-interface)
 6. [Audit a website](#6-audit-a-website)
 7. [Prepare SSH access to a server](#7-prepare-ssh-access-to-a-server)
@@ -27,15 +27,15 @@ does, see the [README](../README.md) and the "Help" tab in the interface.
 
 ## 1. How it fits together
 
-- **The NetAudit machine** is the computer or server NetAudit is installed on. It keeps the
-  reports, the settings, the SSH keys used to log in to audited servers, and their host keys.
-- **Audited targets** are websites (checked from outside, no access needed) and servers (checked
-  over SSH, read-only).
-- You can work **in the console** (`python3 netaudit.py …`) and **in a browser** (the Web
-  interface). Both are the same tool and write reports to the same database.
+- **The NetAudit computer** is the computer or server NetAudit is installed on. It keeps the
+  reports, the settings and the SSH keys used to log in to the servers you audit.
+- **What you can audit:** websites, from outside, with no access needed; servers, over SSH, where
+  NetAudit only reads and changes nothing.
+- You can work **in a terminal** (`python3 netaudit.py …`) or **in a browser**. The results are
+  shared: a report made in the terminal shows up in the browser, and the other way round.
 
-Every SSH key path you type, in the console or in the browser, is a path **on the NetAudit
-machine**, not on the computer your browser runs on.
+Every SSH key path you type is a path **on the NetAudit computer**, not on the computer your
+browser runs on.
 
 ## 2. Installation
 
@@ -56,14 +56,15 @@ cd netaudit
 ./install.sh
 ```
 
-`install.sh` installs the system tools (mtr, tcptraceroute, dig, arping, iperf3, curl, openssl,
-Speedtest CLI) and the Python dependencies. Check that everything imports:
+`install.sh` installs the programs NetAudit needs (mtr, dig, iperf3 and others) and the Python
+libraries. Check that everything is in place:
 
 ```bash
 python3 -c "import fastapi, uvicorn, psutil, paramiko, httpx; print('OK')"
 ```
 
-It should print `OK`. If `pip` put programs into `~/.local/bin`, add that directory to `PATH`:
+It should print `OK`. `pip` puts some programs into `~/.local/bin`. So that the terminal finds
+them, run:
 
 ```bash
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
@@ -115,13 +116,13 @@ cd ~/netaudit && ./install.sh
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
 ```
 
-**Step 3. ICMP permission for mtr** (without it mtr hangs inside the service):
+**Step 3. A permission for mtr** (without it the mtr check hangs when NetAudit runs as a service):
 
 ```bash
 sudo setcap cap_net_raw+ep $(which mtr)
 ```
 
-**Step 4. Start on boot with systemd.** Create `/etc/systemd/system/netaudit.service`:
+**Step 4. Start when the server boots.** Create `/etc/systemd/system/netaudit.service`:
 
 ```bash
 sudo nano /etc/systemd/system/netaudit.service
@@ -157,9 +158,9 @@ sudo systemctl daemon-reload && sudo systemctl enable --now netaudit
 sudo systemctl status netaudit
 ```
 
-The output should say `active (running)`. The service listens on `127.0.0.1:8000` only, so it is
-not visible from outside. To open it in a browser on your own computer, see
-[section 4.2](#42-netaudit-on-a-server-browser-on-your-computer).
+The output should say `active (running)`. For now NetAudit opens only on the server itself. To
+open it in a browser on your own computer, see
+[section 4](#4-web-interface-how-to-open-it-in-a-browser).
 
 ## 3. First run in the console
 
@@ -175,53 +176,125 @@ The first website audit (use your own site's address):
 python3 netaudit.py run ssl web_security_external --url https://example.com
 ```
 
-At the end you see a line like `Report saved: 1`, and the report as JSON. The report number
-(`1`) is how you open it again later. All saved reports:
+At the end you see a line like `Report saved: 1`, and the report itself (a long text in JSON
+format). The report number (`1`) is how you open it again later. All saved reports:
 
 ```bash
 python3 netaudit.py history
 ```
 
-The ready-made website bundle (DNS is checked only with `--domain`):
+The ready-made set of checks for a website. The DNS check runs only if you add `--domain`:
 
 ```bash
 python3 netaudit.py run --quick --url https://example.com --domain example.com
 ```
 
-## 4. Web interface: start it and open it in a browser
+## 4. Web interface: how to open it in a browser
 
-### 4.1 NetAudit and the browser on the same computer
+### 4.1 Which address to open
+
+One rule: **NetAudit opens at the address of the computer it is installed on.**
+
+- NetAudit and the browser on the **same** computer — open `http://127.0.0.1:8000`.
+- NetAudit on a **server**, the browser on **your** computer — open the server's address, e.g.
+  `http://192.168.88.20` or `http://192.168.88.20:8000`. Section 4.2 explains which of the two.
+
+`example.com` in this guide is only an **example of a site NetAudit checks**. You don't open it in
+the browser. In the check commands you put your own site's address in its place.
+
+### 4.2 If NetAudit is on a server
+
+You know the server's address: it is the one you use to log in to the server over SSH, e.g.
+`192.168.88.20`. Open these in the browser, one after the other:
+
+1. `http://server-address`, e.g. `http://192.168.88.20`.
+2. Did not open? `http://server-address:8000`, e.g. `http://192.168.88.20:8000`.
+3. Did not open either? Then NetAudit is closed to other computers. That is how it is after the
+   installation in section 2.2. Use way A from section 4.4 (an SSH tunnel): it works even when the server is closed to
+   other computers.
+
+If the browser asks for a login and password, that is fine: where they come from is in ways B and
+C of section 4.4.
+
+<details>
+<summary>How to check exactly which address NetAudit has on the server</summary>
+
+Run this on the server:
+
+```bash
+systemctl cat netaudit | grep ExecStart; grep -rE '^\s*(listen|proxy_pass)' /etc/nginx/sites-enabled/ 2>/dev/null
+```
+
+The first line of the output (`ExecStart=…`) shows how NetAudit is started. The other lines, if any,
+are nginx settings. Each shows a file name and one setting:
+- `listen` — the port where nginx waits for the browser;
+- `proxy_pass` — where nginx passes the requests on.
+
+| What the output shows | What to open in the browser |
+|---|---|
+| `ExecStart` has `--host 0.0.0.0` | `http://<server-IP>:8000`. If another number follows `--port`, use it instead of `8000` |
+| `ExecStart` has `--host 127.0.0.1` or no `--host` at all, and one nginx file has `proxy_pass http://127.0.0.1:8000;` and `listen 80;` | `http://<server-IP>` |
+| The same, but that file has `listen` with another number, e.g. `listen 8081;` | `http://<server-IP>:8081`, i.e. with that number |
+| The same, but that file has `listen 443 ssl;` | `https://` and the server name the certificate was issued for |
+| `ExecStart` has `--host 127.0.0.1` or no `--host` at all, and there is no line `proxy_pass http://127.0.0.1:8000;` | It does not open from another computer this way. Pick a way from section 4.4; way A is the simplest |
+| `No files found for netaudit.service.` | NetAudit is not installed as a service on this computer. Start it by hand as in section 4.3 |
+
+The number in `proxy_pass` must match the number after `--port` in `ExecStart` (usually `8000`).
+
+If you don't know the server's address, run this on the server:
+
+```bash
+hostname -I
+```
+
+There can be several addresses. You need the one in the same network as your computer: it usually
+starts the same way, e.g. `192.168.88.`.
+
+If the table gave you an address but the page does not open, check that nginx is running:
+`systemctl is-active nginx` must answer `active`. Also check that the server's firewall lets that
+port through.
+
+</details>
+
+### 4.3 NetAudit and the browser on the same computer
+
+Start the Web interface:
 
 ```bash
 python3 netaudit.py web
 ```
 
-Open `http://127.0.0.1:8000` in the browser. Stop the server with `Ctrl+C` in the terminal. No
-password is needed: the server listens to this computer only.
+The terminal shows a line `Web UI: http://127.0.0.1:8000`. That is the address: open it in the
+browser. No password is needed, because the server listens to this computer only. Stop the server
+with `Ctrl+C` in the terminal.
 
-If port 8000 is taken, use another port and open `http://127.0.0.1:8080`:
+If port 8000 is taken, start it on another port and open `http://127.0.0.1:8080`:
 
 ```bash
 python3 netaudit.py web --port 8080
 ```
 
-### 4.2 NetAudit on a server, browser on your computer
+### 4.4 How to open NetAudit from another computer: ways A, B, C
 
-Pick one of three ways.
+You need this if none of the addresses in section 4.2 opened, or if you want to set up access
+differently. One way is enough.
 
-**Way A — an SSH tunnel (the simplest; opens nothing to the network).** On **your own** computer
-(Linux, macOS, or Windows 10+ in PowerShell), with the server's address:
+**Way A — an SSH tunnel.** In the browser: `http://127.0.0.1:8000` on your computer. The simplest:
+nothing changes on the server and nothing opens to the network.
+
+On **your own** computer (Linux, macOS, or Windows 10+ in PowerShell), with the server's address:
 
 ```bash
 ssh -L 8000:127.0.0.1:8000 netaudit@<server-IP>
 ```
 
-While this window stays open, open `http://127.0.0.1:8000` on your computer. You see the
-server's Web interface, carried over SSH. Close the window and the access is gone. If port 8000
-is taken on your computer, use `-L 8080:127.0.0.1:8000` and open `http://127.0.0.1:8080`.
+While this window stays open, open `http://127.0.0.1:8000` on your computer: you see the server's
+Web interface, carried over SSH. Close the window and the access is gone. If port 8000 is taken on
+your computer, use `-L 8080:127.0.0.1:8000` and open `http://127.0.0.1:8080`.
 
-**Way B — nginx with a password (permanent access at the server's address).** On the server, as
-`netaudit`, from `~/netaudit`:
+**Way B — nginx with a password.** In the browser: `http://<server-IP>`. Good for permanent access.
+
+On the server, as `netaudit`, from `~/netaudit`:
 
 ```bash
 sudo apt install -y nginx apache2-utils
@@ -260,25 +333,54 @@ sudo htpasswd /etc/nginx/.netaudit_htpasswd admin
 ```
 
 The connection is plain HTTP, without encryption. For access from the internet get a certificate
-(certbot): `netaudit.nginx.conf` already has commented-out lines for HTTPS.
+(certbot): `netaudit.nginx.conf` already has commented-out lines for HTTPS. The address then starts
+with `https://`.
 
-**Way C — directly, in your own local network (no nginx).** Start the server on all addresses:
+**Way C — directly, in your own local network only.** In the browser: `http://<server-IP>:8000`.
+
+If NetAudit runs as a service, open its settings:
+
+```bash
+sudo systemctl edit --full netaudit
+```
+
+An editor opens. In the line that starts with `ExecStart=`:
+- if it has `--host 127.0.0.1`, change it to `--host 0.0.0.0`;
+- if it has no `--host`, add `--host 0.0.0.0` right after the word `web`.
+
+Save and close the editor (in nano: `Ctrl+O`, `Enter`, `Ctrl+X`). Check the result:
+
+```bash
+systemctl cat netaudit | grep ExecStart
+```
+
+The line must have `--host 0.0.0.0`. If it does, restart the service. If not, open the settings
+again.
+
+```bash
+sudo systemctl restart netaudit
+```
+
+If you start it by hand, do it like this:
 
 ```bash
 python3 netaudit.py web --host 0.0.0.0 --port 8000
 ```
 
 On the first such start NetAudit creates the login `admin` and a password and prints the password
-to the log **once**, inside a frame of `=`. The line looks like `password: <password>`. If NetAudit
-runs as a service and you changed its `--host` to `0.0.0.0`, find the password in the journal:
+to the log **once**, inside a frame of `=`. The line looks like `password: <password>`. For the
+service, the password is in the journal:
 
 ```bash
 sudo journalctl -u netaudit | grep -A1 "user:"
 ```
 
+If a login was set before, there is no new password: the log shows only the user name, and the
+password stays as it was. Forgot it? See the reset in section 10.3.
+
 Open `http://<server-IP>:8000` and log in. You can change the password in the "Settings" tab →
-"Web UI access". The password travels over the network unencrypted, so use this way only in your
-own local network; otherwise use A or B.
+"Web UI access". The password travels over the network unencrypted, so this way is only for your
+own local network. Otherwise use A or B.
 
 ## 5. What is where in the interface
 
@@ -295,8 +397,8 @@ language switch.
   link) and **"AI analysis: what to do"** (needs an AI key, section 10.1).
 - "Save as preset" remembers the ticked checks and their parameters, without passwords.
 
-**"Trends".** How each object's findings and score changed between runs, plus a chart of mtr
-loss per target.
+**"Trends".** What changed between audits of the same site or server: which problems appeared
+and which went away. Also a chart of connection loss (mtr).
 
 **"Settings".**
 - Anthropic API, HaveIBeenPwned API;
@@ -335,24 +437,23 @@ No access to the site's server is needed.
 python3 netaudit.py run --quick --url https://example.com --domain example.com
 ```
 
-Every finding has a severity: `critical`, `high`, `medium`, `low`, `info` or `ok`. A
-`requires_manual_verification` mark means the check could not confirm it on its own, so look at
-it yourself.
+Every problem found has a level: `critical`, `high`, `medium`, `low`, `info` or `ok` (from the
+most serious to "all good"). A `requires_manual_verification` mark means the check could not
+confirm it on its own: look at that spot yourself.
 
 ## 7. Prepare SSH access to a server
 
 To audit a server, NetAudit logs in over SSH and only reads. You prepare this once per server.
 
-**Step 1. A key on the NetAudit machine.** Run this as the user NetAudit runs as: `netaudit` for
-the service.
+**Step 1. A key on the NetAudit computer.** Run this as the user NetAudit runs as: `netaudit`
+for the service.
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/netaudit_audit -N '' -C netaudit-audit
 ```
 
-The key has no passphrase (`-N ''`). The service and scheduled audits need that: they have no
-ssh-agent and nobody to type a passphrase. What protects the key is that only this user can read
-the file (`-rw-------`).
+The key has no passphrase (`-N ''`): the service and scheduled audits run without a person, so
+nobody could type one. The key is protected by the fact that only this user can read the file.
 
 **Step 2. A user on the audited server.** Logging in as `root` is the simplest. Safer is a
 separate `audit` user with limited sudo rights; which commands to allow is in the
@@ -362,7 +463,7 @@ separate `audit` user with limited sudo rights; which commands to allow is in th
 sudo adduser audit
 ```
 
-**Step 3. Put the key on the server** — back on the NetAudit machine. The command asks for the
+**Step 3. Put the key on the server** — back on the NetAudit computer. The command asks for the
 `audit` user's password once. If password login is disabled on the server, append the content of
 `~/.ssh/netaudit_audit.pub` to `~audit/.ssh/authorized_keys` on the server by hand.
 
@@ -376,10 +477,10 @@ ssh-copy-id -i ~/.ssh/netaudit_audit.pub audit@<server-IP>
 ssh -i ~/.ssh/netaudit_audit audit@<server-IP> true
 ```
 
-**About the host key.** On the first connection NetAudit remembers the server's key in
-`~/.netaudit/known_hosts` and checks every later connection against it. If the key changes, the
-connection is refused (see [section 15](#15-common-errors)). This is how NetAudit protects you
-from a substituted server.
+**About the server's "fingerprint".** On the first connection NetAudit remembers the server's
+fingerprint (its SSH key) in `~/.netaudit/known_hosts` and checks every later connection against
+it. If the fingerprint changes, NetAudit refuses to connect (see [section 15](#15-common-errors)).
+This protects you from a substituted server.
 
 **sudo.** Some checks read what only root can: `nginx -T`, `sshd -T`, `sysctl -a`, firewall rules.
 If sudo on the server asks for a password, you have two options:
@@ -399,7 +500,7 @@ Passwords are never saved: not in reports, not in presets, not in data sent to A
 2. In each check's block enter:
    - `host` — the server's address;
    - `user` — e.g. `audit`;
-   - `key_path` — the key's path on the NetAudit machine, e.g. `/home/netaudit/.ssh/netaudit_audit`;
+   - `key_path` — the key's path on the NetAudit computer, e.g. `/home/netaudit/.ssh/netaudit_audit`;
    - "Sudo password", if sudo asks for one.
 3. Click "Run". You can see which check is running.
 
@@ -426,8 +527,8 @@ not "all clean".
    passwords there.
 2. "Audit": tick the SSH checks. In the "Saved hosts" block tick the servers and click "Apply to
    selected checks": every check gets one block per server.
-3. Click "Run". The report has a per-host summary, where errors and incomplete collection stay
-   separate from finding counts.
+3. Click "Run". The report has a summary for each server. If a server could not be audited
+   completely, that is shown separately: such a server is not counted as "clean".
 
 **In the console.** Create `~/hosts.json` (no passwords go into it):
 
@@ -461,8 +562,8 @@ python3 netaudit.py summary <report-number>
 python3 netaudit.py run ssl web_security_external --url https://example.com --ai
 ```
 
-The report goes to Anthropic (without passwords). The key is stored in the database on the
-NetAudit machine and is never sent back to the browser.
+For the analysis the report is sent to Anthropic (without passwords). The key is stored on the
+NetAudit computer and is never sent back to the browser.
 
 ### 10.2 Telegram
 
@@ -479,8 +580,8 @@ https://api.telegram.org/bot<TOKEN>/getUpdates
 ```
 
 4. "Settings" → "Telegram alerts" → token and chat ID → "Save settings".
-5. Test it. An audit of a port that is certainly closed always gives an error, so a message is
-   sent:
+5. Test it. This command deliberately checks a closed port: the check ends with an error, and
+   NetAudit sends you a message about it:
 
 ```bash
 python3 netaudit.py run ssh_hardening --host 127.0.0.1 --port 1 --notify --job test
@@ -490,7 +591,7 @@ Like the AI key, the token is never sent back to the browser.
 
 ### 10.3 The Web interface password
 
-It is needed only for way C in section 4.2; with way B, `htpasswd` in nginx sets the password.
+It is needed only for way C in section 4.4; with way B, `htpasswd` in nginx sets the password.
 "Settings" → "Web UI access": login and a new password (8 characters or more) → "Save access".
 
 If you forgot it, reset it as the NetAudit user:
@@ -499,7 +600,7 @@ If you forgot it, reset it as the NetAudit user:
 python3 -c "import sqlite3, pathlib; c = sqlite3.connect(pathlib.Path.home() / '.netaudit' / 'netaudit.db'); c.execute(\"DELETE FROM settings WHERE key IN ('web_auth_user', 'web_auth_password_hash')\"); c.commit()"
 ```
 
-Then restart NetAudit: a new password appears in the log, as in section 4.2.
+Then restart NetAudit: a new password appears in the log, as in way C of section 4.4.
 
 ## 11. Scheduled audits with notifications
 
@@ -557,7 +658,8 @@ journalctl -u netaudit-audit-daily.service -n 50
   `systemctl list-timers` now and then.
 - The message goes to Telegram's servers. It contains host names, finding ids and titles, without
   passwords or details.
-- Daily is a good cadence: trends read the latest 200 reports of the whole database.
+- Daily is a good cadence. If you audit more often, older reports drop out of "Trends" sooner:
+  it only looks at the latest 200 reports.
 
 The detailed rules are in the
 [README, "Scheduled audits and Telegram notifications"](../README.md#scheduled-audits-and-telegram-notifications).
@@ -582,7 +684,7 @@ python3 netaudit.py trend ssh_hardening <server-IP>
 
 - `history` lists the reports.
 - `summary` is the per-host summary of one report.
-- `trend` shows which objects have been run several times.
+- `trend` lists the sites and servers that were audited several times.
 - `trend <check> <object>` shows what changed. "not evaluated" means it could not be checked this
   time, not that the problem was fixed.
 
@@ -610,9 +712,10 @@ Only the owner can open the directory (`700`) and the database (`600`).
 
 ### 14.1 Backup
 
-Run this as the NetAudit user. You do not need to stop the service: SQLite makes the copy, and it
-stays consistent. Each run creates a **new** file `~/netaudit-backup-YYYYMMDD-HHMMSS.db` with mode
-`600`. The mode is set before any secret goes into the file, and existing files are never touched.
+Run this as the NetAudit user. You do not need to stop the service: the copy comes out whole even
+while NetAudit is working. Each run creates a **new** file `~/netaudit-backup-YYYYMMDD-HHMMSS.db`.
+The file is closed to other users from the start (mode `600`), and older copies are never
+overwritten.
 
 ```bash
 python3 - <<'EOF'
@@ -748,12 +851,12 @@ sudo systemctl start netaudit-audit-daily.timer
 
 | What you see | Why | What to do |
 |---|---|---|
-| The page does not open from another computer | The service listens on `127.0.0.1` only | An SSH tunnel or nginx (section 4.2) |
+| The page does not open from another computer | NetAudit is open only on the server itself | Find your address (section 4.2); if it does not open that way, an SSH tunnel or nginx (section 4.4) |
 | The browser asks for a login and password you don't know | With nginx, `htpasswd` sets it; with `--host 0.0.0.0`, NetAudit does | `sudo htpasswd /etc/nginx/.netaudit_htpasswd admin`, or the reset in section 10.3 |
 | `Auth not configured. Restart the server to generate credentials.` | The Web login was removed from the database while the server ran | Restart NetAudit; a new password appears in the log |
 | `[Errno 98] … address already in use` | The port is taken (for example, a second instance runs) | Stop the old one, or start with `--port 8080` |
 | The old interface after an update | The browser used a cached page | `Ctrl+Shift+R` |
-| `could not connect: timed out` / `Unable to connect to port …` | Wrong address or port, the server is off, or a firewall blocks it | Try `ssh -i ~/.ssh/netaudit_audit audit@<server-IP> true` from the NetAudit machine |
+| `could not connect: timed out` / `Unable to connect to port …` | Wrong address or port, the server is off, or a firewall blocks it | Try `ssh -i ~/.ssh/netaudit_audit audit@<server-IP> true` from the NetAudit computer |
 | `… presented a different SSH host key than the one NetAudit has on file …` | The server was reinstalled, or substituted | Make sure it is your server and the key changed legitimately, then `ssh-keygen -R <server-IP> -f ~/.netaudit/known_hosts` (for a port other than 22: `ssh-keygen -R '[<server-IP>]:2222' -f ~/.netaudit/known_hosts`) |
 | `the private key … is encrypted` | The key has a passphrase and ssh-agent does not hold it | In the console, `ssh-add`; for the service and schedules, a key without a passphrase (section 7) |
 | `sudo: a password is required` | sudo on the server wants a password | Enter "Sudo password" / `--sudo_password -`, or set up NOPASSWD (section 7) |
