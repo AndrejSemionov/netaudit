@@ -57,6 +57,9 @@ QUICK_BUNDLE_SERVER = ['server_audit', 'ssh_audit', 'lynis_audit', 'cve_audit']
 QUICK_TARGET_PARAMS = ('url', 'domain', 'host')
 # checks that run on the NetAudit machine itself (checks/system.py)
 LOCAL_CHECKS = frozenset({'ports', 'firewall', 'performance'})
+# a target default that is only a documentation example (RFC 2606): such a
+# target must be named on the command line (docs/research/cli_example_targets.md)
+EXAMPLE_TARGETS = frozenset({'example.com', 'https://example.com'})
 
 # setup-timer (C2): values that go into a systemd unit are validated, not
 # escaped - systemd expands % specifiers and $VARIABLES in ExecStart= and
@@ -89,7 +92,8 @@ def cmd_list(args):
         print(f"[{c['category']:12}] {c['id']:18} {c['label']}{miss}")
         if c['params']:
             for p in c['params']:
-                print(f"                 └─ --{p['name']} ({p['type']}, default={p['default']})")
+                default = 'required' if _example_target(p) else f"default={p['default']}"
+                print(f"                 └─ --{p['name']} ({p['type']}, {default})")
 
 
 def _parse_run_params(tokens: list[str]) -> tuple[dict, set[str]]:
@@ -164,6 +168,24 @@ def _refuse_unused_flags(check_ids: list[str], extra: dict, avail: dict) -> None
             f'({", ".join(check_ids)}).{hint} Drop the flag or pick checks that take it')
 
 
+def _example_target(param: dict) -> bool:
+    """A target parameter whose default is only the example.com placeholder."""
+    return param['name'] in storage.IDENTITY_PARAM_KEYS and param['default'] in EXAMPLE_TARGETS
+
+
+def _refuse_example_targets(check_ids: list[str], extra: dict, avail: dict) -> None:
+    """A check whose target was not given would audit example.com, its
+    default, and the report would look like one about the user's site
+    (docs/research/cli_example_targets.md). Refused before anything runs."""
+    missing = [(check_id, p) for check_id in check_ids if check_id in avail
+               for p in avail[check_id]['params'] if _example_target(p) and p['name'] not in extra]
+    if not missing:
+        return
+    needs = ", ".join(f"{check_id} needs --{p['name']} (otherwise it checks the example {p['default']})"
+                      for check_id, p in missing)
+    _refuse(f'No target given: {needs}. Add the flag with your own site or domain')
+
+
 def _single_selection(args, extra: dict) -> list[dict]:
     check_ids = args.checks or []
     if args.quick:
@@ -183,6 +205,7 @@ def _single_selection(args, extra: dict) -> list[dict]:
 
     avail = {c['id']: c for c in list_available()}
     _refuse_unused_flags(check_ids, extra, avail)
+    _refuse_example_targets(check_ids, extra, avail)
 
     selected = []
     # a password-type param given as "-" is asked for (no echo) instead of
