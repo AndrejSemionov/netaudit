@@ -27,11 +27,14 @@ unused flag in the same way.
    parameter names of all selected checks. A flag outside that set is
    refused:
 
-   `--host: not used by any of the selected checks (ports, firewall). Checks without --host audit this computer; drop the flag or pick checks that take it.`
+   `--host: not used by any of the selected checks (ports, firewall). ports, firewall always check this computer. Drop the flag or pick checks that take it`
 
    - The message names the flags only, never their values.
-   - The extra sentence about this computer appears only for `--host` when
-     none of the selected checks takes it.
+   - When an unused flag is a target flag (`storage.IDENTITY_PARAM_KEYS`),
+     a hint follows: the target flags the selected checks do take
+     ("… take their target as --domain"), or, when they take none, that
+     `ports`/`firewall`/`performance` always check this computer, or that
+     none of them takes a target.
    - Several unused flags are refused in one message, sorted.
 2. A flag is fine if **at least one** selected check takes it. Mixed runs
    keep working as before, e.g. `run ssl server_audit --url U --host H`.

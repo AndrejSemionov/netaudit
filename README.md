@@ -240,6 +240,11 @@ python3 netaudit.py trend ssh_hardening 10.0.0.1   # how one object changed over
 python3 netaudit.py install <tool>       # install a missing tool (nmap, tshark, ...)
 ```
 
+A flag that none of the selected checks takes is refused before anything runs, with the flag
+names and a hint: for example `run ports --host 1.2.3.4` (`ports` always checks this computer),
+`run dns_audit --url …` (it takes `--domain`), or a typo such as `--hots`. Before, such a flag
+was dropped silently and the check ran on another target.
+
 `trend` reads saved reports from `~/.netaudit/netaudit.db`. For state checks it
 compares stable finding IDs; a finding that disappeared from an area the latest
 run could not verify is shown as **not evaluated**, rather than resolved.
