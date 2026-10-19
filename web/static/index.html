@@ -1821,6 +1821,7 @@ function renderTrendUnit(tr) {
       const signed = v => v > 0 ? '+' + v : String(v);
       html += `<h4 style="margin:14px 0 6px">${t('trends.change.title')} (${ch.from} → ${ch.to})</h4>
         <div>${t('trends.change.observed')}: ${signed(ch.total_delta)}${ch.score_delta != null ? ` · ${t('trends.col.score')}: ${signed(ch.score_delta)}` : ''}</div>
+        ${ch.params_changed && ch.params_changed.length ? `<div>${t('trends.change.params_changed')}: ${ids(ch.params_changed)}</div>` : ''}
         <div>${t('trends.change.new')}: ${ids(ch.new)}</div>
         <div>${t('trends.change.resolved')}: ${ids(ch.resolved)}</div>
         <div>${t('trends.change.not_evaluated')}: ${ids(ch.not_evaluated)}</div>

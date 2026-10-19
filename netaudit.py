@@ -516,6 +516,8 @@ def _print_trend(trend: dict) -> None:
     if ch['score_delta'] is not None:
         print(f"  hardening score: {prev['hardening_score']} -> {cur['hardening_score']} "
               f"({_signed(ch['score_delta'])})")
+    if ch['params_changed']:
+        print(f"  check settings changed: {', '.join(ch['params_changed'])} - missing findings are not evaluated")
     for field, label in (('new', 'new'), ('resolved', 'resolved'),
                          ('not_evaluated', 'not evaluated'), ('persisting', 'persisting')):
         print(f"  {label}: {', '.join(ch[field]) or '-'}")

@@ -14,11 +14,23 @@ Finding-level diff (new / resolved / persisting) is by explicit finding `id`
 only. Many checks build titles with volatile values ("files changed: 5"),
 so title matching would report "resolved + new" every time a number moves -
 findings without an `id` count toward severity totals and nothing else.
+
+A gone id is never "resolved" when the two compared runs had different check
+settings (docs/research/trend_coverage_params.md): the run looked at
+something else, so the id was not evaluated.
 """
 
 from __future__ import annotations
 
-from . import storage
+import math
+
+# importing registers the checks: their parameter types and defaults
+from . import (
+    checks,  # noqa: F401
+    storage,
+)
+from .redaction import SECRET_PARAM_NAMES
+from .registry import registry
 
 # 'ok' (checked, no issue) and 'info' (neutral observation) are not problems -
 # counting them would make a run where more checks passed look worse.
@@ -27,6 +39,11 @@ EVENT_CHECK_IDS = frozenset({
     'ssh_auth_audit', 'nginx_logs_audit', 'kern_log_audit', 'fail2ban_logs_audit',
 })
 _USABLE_COVERAGE = frozenset({'complete', 'partial', 'empty'})
+# parameters that are not check settings: the identity is the unit itself,
+# the rest say how to connect or allow changes, not what is checked
+_NOT_SETTINGS = storage.IDENTITY_PARAM_KEYS | SECRET_PARAM_NAMES | frozenset({
+    'user', 'port', 'key_path', 'auto_install', 'confirm_modify',
+})
 
 
 def _kind(check_id: str) -> str:
@@ -114,6 +131,34 @@ def _result_param_pairs(check_id: str, ctx: dict, results: dict) -> list[tuple[d
     return [(ctx, result)]
 
 
+def _setting(param_type: str | None, value):
+    """A value as the check uses it, so a CLI run (text, only the flags
+    given) and a Web run (every field, numbers as numbers) compare equal."""
+    if param_type == 'checkbox':
+        return bool(value)
+    if param_type == 'number':
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            pass
+        else:
+            if not math.isnan(number):  # NaN is not equal to itself: keep it as text
+                return number
+    return None if value is None else str(value)
+
+
+def _settings(check_id: str, params: dict) -> dict:
+    """What decides what this instance checked and by which rule: every
+    parameter but _NOT_SETTINGS, a missing one at its registry default. A
+    parameter the registry does not know (an old report) counts as saved."""
+    spec = registry.get(check_id)
+    declared = {p['name']: p for p in spec.params} if spec else {}
+    names = (set(declared) | set(params)) - _NOT_SETTINGS
+    return {name: _setting(declared.get(name, {}).get('type'),
+                           params[name] if name in params else declared[name].get('default'))
+            for name in names}
+
+
 def _section_findings(section) -> list | None:
     """A section's findings: a dict section keeps them under 'findings'
     (server_audit), a list section is the findings (dns_audit). None for
@@ -142,7 +187,8 @@ def _scoped_findings(result: dict) -> dict[str, list] | None:
 
 def _snapshot(check_id: str, key: str, value, timestamp: str, result: dict,
               params: dict | None = None) -> dict | None:
-    base = {'check_id': check_id, 'key': key, 'value': value, 'timestamp': timestamp}
+    base = {'check_id': check_id, 'key': key, 'value': value, 'timestamp': timestamp,
+            'settings': _settings(check_id, params or {})}
     event = check_id in EVENT_CHECK_IDS
     observation, usable = _observation(check_id, result, params or {}) if event else (None, True)
     if result.get('error'):
@@ -185,7 +231,8 @@ def _snapshot(check_id: str, key: str, value, timestamp: str, result: dict,
             'observation': observation}
 
 
-_COMPARED_FIELDS = ('error', 'counts', 'hardening_score', 'finding_ids', 'scopes', 'unverified', 'observation')
+_COMPARED_FIELDS = ('error', 'counts', 'hardening_score', 'finding_ids', 'scopes', 'unverified', 'observation',
+                    'settings')
 
 
 def _one_per_unit(instances: list[dict]) -> dict:
@@ -252,6 +299,15 @@ def _was_evaluated(fid: str, prev: dict, cur: dict) -> bool:
     return scope is not None and scope['unverified'] == 0 and scope.get('gaps', 0) == 0
 
 
+def _params_changed(prev: dict, cur: dict) -> list[str]:
+    """Names of the check settings that differ between two snapshots. A
+    hand-built snapshot without settings (pre-change shape) changes none."""
+    before, after = prev.get('settings'), cur.get('settings')
+    if before is None or after is None:
+        return []
+    return sorted(name for name in set(before) | set(after) if before.get(name) != after.get(name))
+
+
 def _change(prev: dict, cur: dict) -> dict:
     prev_ids, cur_ids = set(prev['finding_ids']), set(cur['finding_ids'])
     counts_delta = {s: cur['counts'][s] - prev['counts'][s] for s in PROBLEM_SEVERITIES}
@@ -260,8 +316,10 @@ def _change(prev: dict, cur: dict) -> dict:
         score_delta = cur['hardening_score'] - prev['hardening_score']
     gone = prev_ids - cur_ids
     # a missing id is "resolved" only where the latest run could actually
-    # look; otherwise it was not evaluated (Contract v1.2, tri-state)
-    not_evaluated = {fid for fid in gone if not _was_evaluated(fid, prev, cur)}
+    # look; otherwise it was not evaluated (Contract v1.2, tri-state). With
+    # other settings it looked at something else: nothing gone is resolved.
+    params_changed = _params_changed(prev, cur)
+    not_evaluated = gone if params_changed else {fid for fid in gone if not _was_evaluated(fid, prev, cur)}
     return {
         'from': prev['timestamp'],
         'to': cur['timestamp'],
@@ -272,6 +330,7 @@ def _change(prev: dict, cur: dict) -> dict:
         'resolved': sorted(gone - not_evaluated),
         'persisting': sorted(prev_ids & cur_ids),
         'not_evaluated': sorted(not_evaluated),
+        'params_changed': params_changed,
     }
 
 

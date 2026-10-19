@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Trends no longer call a finding "resolved" when the check settings changed
+  between the two compared runs: for example a subdomain dropped from the
+  `dns_audit` list, a directory dropped from `backup_check`, a relaxed
+  threshold, or another `systemd_hardening` unit. Such a run looked at
+  something else, so every finding that disappeared is "not evaluated", and
+  the change lists the settings (`params_changed`, names only). This applies
+  to CLI and Web trends, the AI context and the Telegram notification.
+  A missing setting counts at its default, so CLI and Web runs with the same
+  values compare equal; how NetAudit connects (`user`, `port`, `key_path`)
+  and `auto_install` are not settings. Reports are not changed.
 - CLI `run` refuses a site check whose target was not given, when its default
   target is the placeholder `example.com`: `ssl`, `http`, `security_headers`,
   `web_security_external` (`--url`), `dns_audit`, `cert_transparency`

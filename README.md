@@ -254,6 +254,11 @@ parameters as `required`.
 `trend` reads saved reports from `~/.netaudit/netaudit.db`. For state checks it
 compares stable finding IDs; a finding that disappeared from an area the latest
 run could not verify is shown as **not evaluated**, rather than resolved.
+The same holds when the check settings changed between the two runs (for example the
+`dns_audit` subdomain list, the `backup_check` directories or a threshold, or the
+`systemd_hardening` unit): the run looked at something else, so every finding that
+disappeared is **not evaluated**, and the change names the settings. How NetAudit connects
+(`user`, `port`, `key_path`) and `auto_install` do not count as settings.
 `ssh_auth_audit`, `nginx_logs_audit`, `kern_log_audit`, and
 `fail2ban_logs_audit` show bounded log observations only. Their counts can
 change when the collected slice changes, so no remediation is inferred from a
