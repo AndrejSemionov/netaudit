@@ -122,8 +122,9 @@ def test_check_without_unverified_findings_keeps_v1_1_values():
     assert ch['score_delta'] == 10
     assert (ch['new'], ch['resolved'], ch['persisting']) == (['D'], ['A'], ['B', 'C'])
     assert ch['not_evaluated'] == []
+    assert ch['params_changed'] == []  # docs/research/trend_coverage_params.md
     assert set(ch) == {'from', 'to', 'counts_delta', 'total_delta', 'score_delta',
-                       'new', 'resolved', 'persisting', 'not_evaluated'}
+                       'new', 'resolved', 'persisting', 'not_evaluated', 'params_changed'}
 
 
 def test_points_carry_unverified_and_error_points_have_none():

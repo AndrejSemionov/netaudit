@@ -129,6 +129,14 @@ def test_a_checkbox_left_at_its_default_compares_equal():
     assert (ch['resolved'], ch['params_changed']) == (['DOCKER-001'], [])
 
 
+def test_a_nan_number_setting_still_equals_itself():
+    ch = _change(
+        _report('t1', 'backup_check', {'host': '10.0.0.5', 'max_age_hours': 'nan'},
+                {'findings': [_f('high', 'BAK-AGE-001')]}),
+        _report('t2', 'backup_check', {'host': '10.0.0.5', 'max_age_hours': 'nan'}, {'findings': []}))
+    assert (ch['resolved'], ch['params_changed']) == (['BAK-AGE-001'], [])
+
+
 def test_how_to_connect_is_not_a_check_setting():
     ch = _change(
         _report('t1', 'lynis_audit', {'host': '10.0.0.5', 'user': 'root', 'port': 22},

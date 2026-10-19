@@ -687,6 +687,9 @@ python3 netaudit.py trend ssh_hardening <server-IP>
 - `trend` lists the sites and servers that were audited several times.
 - `trend <check> <object>` shows what changed. "not evaluated" means it could not be checked this
   time, not that the problem was fixed.
+- If you changed the check's settings between the runs (for example the list of subdomains or
+  backup folders), the line `check settings changed: …` appears, and the problems that
+  disappeared are "not evaluated": this time the check looked at something else.
 
 In the browser, the same is under "History" on the "Audit" tab and in the "Trends" tab.
 

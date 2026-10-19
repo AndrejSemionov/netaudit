@@ -155,7 +155,10 @@ def ai_analyze(report: dict, api_key: str | None = None, language: str | None = 
             'from saved reports, not by you - do not recompute them). '
             '"resolved": the finding id is no longer reported and its area was fully '
             'evaluated. "not_evaluated": no longer reported, but the latest run could not '
-            'evaluate that area - do not treat these as fixed. "counts_delta"/"total_delta": '
+            'evaluate that area - do not treat these as fixed. "params_changed": check '
+            'settings (for example the subdomain list or the backup directories) that differ '
+            'from the previous run; when it is not empty, the run looked at something else, so '
+            'every finding no longer reported is "not_evaluated". "counts_delta"/"total_delta": '
             'change in observed problem counts, not proof of improvement.\n' + trends_json
         )
 
