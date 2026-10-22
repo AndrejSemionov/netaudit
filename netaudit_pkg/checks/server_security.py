@@ -427,6 +427,12 @@ _NFT_TOKEN_RE = re.compile(r'"[^"]*"|[{},]|[^\s{},]+')
 _NFT_IPV4_FAMILIES = ('ip', 'inet')
 _NFT_MAX_DEPTH = 16
 _NFT_VERDICTS = ('accept', 'drop', 'reject', 'return', 'continue', 'queue', 'jump', 'goto')
+# NAT statements: a destination NAT can give a new connection `ct status
+# dnat` and another port before the input hook (review #51 R2)
+_NFT_DNAT = frozenset({'dnat', 'redirect', 'tproxy'})
+_NFT_SNAT = frozenset({'snat', 'masquerade'})
+# `ct status` flags a new connection without NAT never has at the input hook
+_NFT_CT_STATUS_UNSET = frozenset({'expected', 'seen-reply', 'assured', 'confirmed', 'dying'})
 _NFT_LOG_OPTIONS = ('prefix', 'level', 'flags', 'group', 'snaplen', 'queue-threshold')
 # expressions a witness (IPv4 TCP) never matches
 _NFT_NOT_IPV4_TCP = frozenset({'udp', 'icmp', 'icmpv6', 'sctp', 'ip6', 'dccp', 'udplite', 'igmp',
@@ -555,6 +561,11 @@ def _nft_matches(key: str, values: list[str], w: dict) -> bool | None:
     if key == 'ct state':
         return 'new' in plain
     if key == 'ct status':
+        flags = set(plain)
+        if not flags <= _NFT_CT_STATUS_UNSET | {'dnat', 'snat'}:
+            return None  # a flag not reasoned about here
+        if ('dnat' in flags and w.get('dnat')) or ('snat' in flags and w.get('snat')):
+            return None  # a NAT rule may have set it
         return False
     if key == 'meta nfproto':
         return 'ipv4' in plain
@@ -583,6 +594,8 @@ def _nft_matches(key: str, values: list[str], w: dict) -> bool | None:
             return False
         return None  # the host's own address is not known
     if key == 'tcp dport':
+        if w.get('dnat'):
+            return None  # a DNAT or redirect may have changed the port
         specs = [_nft_port_spec(v) for v in plain]
         return None if None in specs else any(low <= w['port'] <= high for low, high in specs)
     return None
@@ -646,7 +659,7 @@ def _nft_rule(line: str, w: dict) -> tuple[str, list[str] | None]:
                 i += 2
             start = True
             continue
-        if tok in _NFT_VERDICTS:
+        if tok in _NFT_VERDICTS or tok in _NFT_DNAT or tok in _NFT_SNAT:
             verdict = tokens[i:i + 2] if tok in ('jump', 'goto') else [tok]
             break
         if tok == 'vmap':
@@ -714,6 +727,20 @@ def _nft_fate(chains: dict, key: tuple[str, str, str], w: dict, depth: int = 0) 
     return ends | {'return'}
 
 
+def _nft_may_nat(chains: dict, w: dict, statements: frozenset) -> bool:
+    """Whether a rule with one of the NAT `statements` (in an ip/inet table)
+    may match the witness; its conditions are read before any NAT."""
+    original = {**w, 'dnat': False, 'snat': False}
+    for (family, _table, _chain), lines in chains.items():
+        if family not in _NFT_IPV4_FAMILIES:
+            continue
+        for line in lines:
+            match, verdict = _nft_rule(line, original)
+            if match != 'no' and verdict and verdict[0] in statements:
+                return True
+    return False
+
+
 def _nft_input_filters(ruleset: str) -> tuple[list[str], list[str]]:
     """IPv4 input base chains ('family table chain') that surely drop the
     witness, and those whose result for it is not certain. A packet passes
@@ -728,6 +755,9 @@ def _nft_input_filters(ruleset: str) -> tuple[list[str], list[str]]:
     witness = _nft_witness(chains) if bases else None
     if bases and witness is None:
         return [], [' '.join(key) for key, _ in bases]
+    if witness is not None:
+        witness['dnat'] = _nft_may_nat(chains, witness, _NFT_DNAT)
+        witness['snat'] = _nft_may_nat(chains, witness, _NFT_SNAT)
     filtering, uncertain = [], []
     for key, policy in bases:
         ends = {policy if end == 'return' else end for end in _nft_fate(chains, key, witness)}
