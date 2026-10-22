@@ -87,6 +87,14 @@ namespace; which stream it goes to is UNKNOWN, so both are read.
    accept`) therefore never gives a false "filtered" (review #51 R1).
    When the evaluation is not certain, the iptables verdict stays as it
    was (HIGH), which is no worse than before.
+   **NAT** (review #51 R2): a DNAT or redirect in prerouting can give a new
+   connection `ct status dnat` and another destination port before the input
+   hook. So when any rule with `dnat`, `snat`, `masquerade`, `redirect` or
+   `tproxy` (in an `ip`/`inet` table) may match the witness - its own
+   conditions are read the same way -, `ct status` and `tcp dport` are
+   unknown for it. Without such a rule a new connection has none of the
+   `ct status` flags `dnat`, `snat`, `expected`, `seen-reply`, `assured`,
+   `confirmed`, `dying`; any other flag is unknown.
 3. **`_iptables_verdict()`**, when the iptables view is open (policy ACCEPT
    and no rules, or an unconditional ACCEPT):
    - the output (stdout or stderr) carries the iptables-legacy warning →

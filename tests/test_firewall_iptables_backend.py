@@ -446,3 +446,59 @@ def test_a_rule_that_surely_accepts_the_witness_is_not_uncertain():
     finding = _iptables_finding(audit_firewall(_fake(NOT_FILTERING['new connections accepted'])))
     assert finding['severity'] == 'high'
     assert 'not fully evaluated' not in finding['detail']
+
+
+# --- conntrack status and NAT (review #51 R2) ---------------------------------
+
+def _with_nat(input_rules, nat_rules, policy='drop'):
+    body = '\n'.join('\t\t' + r for r in input_rules)
+    nat = '\n'.join('\t\t' + r for r in nat_rules)
+    return f"""table inet filter {{
+	chain input {{
+		type filter hook input priority filter; policy {policy};
+{body}
+	}}
+}}
+table ip nat {{
+	chain prerouting {{
+		type nat hook prerouting priority dstnat; policy accept;
+{nat}
+	}}
+}}"""
+
+
+def _filters(ruleset):
+    verdict, _ = _iptables_verdict(_evidence(nft=_cr(stdout=ruleset)))
+    return verdict == 'FILTERED_BY_NFTABLES'
+
+
+def test_dnat_status_after_a_dnat_that_may_apply_is_not_proven():
+    assert not _filters(_with_nat(['ct status dnat accept'], ['ip protocol tcp dnat to 192.0.2.1']))
+
+
+def test_redirect_of_every_port_to_an_allowed_one_is_not_proven():
+    assert not _filters(_with_nat(['tcp dport 22 accept'], ['tcp dport != 22 redirect to :22']))
+
+
+def test_snat_status_after_a_masquerade_that_may_apply_is_not_proven():
+    assert not _filters(_with_nat(['ct status snat accept'], ['masquerade']))
+
+
+def test_ct_status_vmap_after_a_dnat_that_may_apply_is_not_proven():
+    assert not _filters(_with_nat(['ct status vmap { dnat : accept }'], ['dnat to 192.0.2.1']))
+
+
+def test_unknown_ct_status_flag_is_not_proven():
+    assert not _filters(_with_nat(['ct status some-new-flag accept'], []))
+
+
+def test_dnat_status_without_any_nat_rule_filters():
+    """firewalld's filter_INPUT has `ct status dnat accept`: with no NAT rule
+    a new connection carries no dnat status."""
+    assert _filters(_with_nat(['ct status dnat accept', 'iifname "lo" accept'], []))
+
+
+def test_nat_rules_that_cannot_apply_to_the_witness_keep_filtering():
+    docker_like = ['iifname != "docker0" tcp dport 8080 dnat to 172.17.0.2:80',
+                   'ip saddr 172.17.0.0/16 masquerade']
+    assert _filters(_with_nat(['ct status dnat accept', 'tcp dport 22 accept'], docker_like))
