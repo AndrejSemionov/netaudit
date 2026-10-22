@@ -8,6 +8,8 @@ Nothing else needs to change — not the CLI, not the web, not the UI.
 
 from __future__ import annotations
 
+import math
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -51,6 +53,60 @@ def confirm_param(label: str = 'Confirm system modification', default: str = 'no
         'name': 'confirm_modify', 'type': 'select', 'label': label,
         'options': ['no', CONFIRM_MODIFY], 'default': default,
     }
+
+
+# what a checkbox may be given as on the command line or in an API request;
+# anything else is refused (docs/research/param_value_types.md)
+CHECKBOX_WORDS = {'true': True, 'yes': True, '1': True, 'on': True,
+                  'false': False, 'no': False, '0': False, 'off': False}
+WHOLE_NUMBER = re.compile(r'[+-]?[0-9]+')
+
+
+def param_value(param: dict, value):
+    """`value` as the check expects it for the type of `param`, so a word
+    from the command line or a string from an API request never reaches a
+    check as truthy text ('false') or as a shell fragment ('5; id').
+
+    checkbox -> bool, number -> int (whole) or float within the float
+    range (trends compare numbers as floats), select -> one of
+    `options` (a name from `aliases` becomes its option). Other types are
+    returned unchanged; the range of a number is the check's business.
+    Raises ValueError saying what the parameter takes - never with the value
+    in it, a mistyped secret must not end up in a log."""
+    kind = param.get('type')
+    if kind == 'checkbox':
+        if isinstance(value, bool):
+            return value
+        if type(value) is int and value in (0, 1):
+            return bool(value)
+        if isinstance(value, str) and value.strip().lower() in CHECKBOX_WORDS:
+            return CHECKBOX_WORDS[value.strip().lower()]
+        raise ValueError('takes true or false (also yes/no, 1/0, on/off)')
+    if kind == 'number':
+        number = None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            number = value
+        elif isinstance(value, str):
+            text = value.strip()
+            try:
+                number = int(text) if WHOLE_NUMBER.fullmatch(text) else float(text)
+            except ValueError:
+                number = None
+        try:
+            finite = number is not None and math.isfinite(number)
+        except OverflowError:  # an int beyond the float range (review #49 R1)
+            finite = False
+        if not finite:
+            raise ValueError('takes a number')
+        return int(number) if number == int(number) else number
+    if kind == 'select' and param.get('options'):
+        if isinstance(value, str):
+            if value in param['options']:
+                return value
+            if value in param.get('aliases', {}):
+                return param['aliases'][value]
+        raise ValueError('takes one of: ' + ', '.join(f'"{o}"' for o in param['options']))
+    return value
 
 
 @dataclass

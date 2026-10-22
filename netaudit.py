@@ -47,6 +47,7 @@ from netaudit_pkg.engine import (
 )
 from netaudit_pkg.history import ai_analyze, list_reports, load_report, save_report
 from netaudit_pkg.redaction import SECRET_PARAM_NAMES
+from netaudit_pkg.registry import param_value
 from netaudit_pkg.utils import log, run_cmd
 
 QUICK_BUNDLE_SITE = ['ssl', 'security_headers', 'web_security_external', 'dns_audit']
@@ -93,7 +94,10 @@ def cmd_list(args):
         if c['params']:
             for p in c['params']:
                 default = 'required' if _example_target(p) else f"default={p['default']}"
-                print(f"                 └─ --{p['name']} ({p['type']}, {default})")
+                kind = p['type']
+                if kind == 'select' and p.get('options'):
+                    kind = f"select: {' | '.join(p['options'])}"
+                print(f"                 └─ --{p['name']} ({kind}, {default})")
 
 
 def _parse_run_params(tokens: list[str]) -> tuple[dict, set[str]]:
@@ -117,10 +121,6 @@ def _parse_run_params(tokens: list[str]) -> tuple[dict, set[str]]:
 def _refuse(message: str):
     log.error(message)
     sys.exit(1)
-
-
-def _typed(param: dict, value):
-    return int(value) if param['type'] == 'number' and str(value).isdigit() else value
 
 
 def _quick_bundle(bundle: list[str], extra: dict) -> list[str]:
@@ -186,6 +186,25 @@ def _refuse_example_targets(check_ids: list[str], extra: dict, avail: dict) -> N
     _refuse(f'No target given: {needs}. Add the flag with your own site or domain')
 
 
+def _refuse_wrong_values(check_ids: list[str], extra: dict, avail: dict) -> None:
+    """A checkbox, number or select value the check would misread is refused
+    before the first password prompt and before anything runs: `false` used
+    to reach the check as the true string 'false', and `--lines '5; id'` a
+    remote shell as a second command (docs/research/param_value_types.md).
+    Each (check, flag) pair is checked - `--mode` takes other values in
+    another check. Values are never printed."""
+    wrong = []
+    for check_id in check_ids:
+        for p in avail[check_id]['params'] if check_id in avail else []:
+            if p['name'] in extra:
+                try:
+                    param_value(p, extra[p['name']])
+                except ValueError as e:
+                    wrong.append(f'--{p["name"]} ({check_id}) {e}')
+    if wrong:
+        _refuse(f'Wrong value: {"; ".join(wrong)}. Nothing was run')
+
+
 def _single_selection(args, extra: dict) -> list[dict]:
     check_ids = args.checks or []
     if args.quick:
@@ -206,6 +225,7 @@ def _single_selection(args, extra: dict) -> list[dict]:
     avail = {c['id']: c for c in list_available()}
     _refuse_unused_flags(check_ids, extra, avail)
     _refuse_example_targets(check_ids, extra, avail)
+    _refuse_wrong_values(check_ids, extra, avail)
 
     selected = []
     # a password-type param given as "-" is asked for (no echo) instead of
@@ -222,7 +242,7 @@ def _single_selection(args, extra: dict) -> list[dict]:
                         if p['name'] not in asked:
                             asked[p['name']] = getpass.getpass(f'{p["name"]} for {check_id}: ')
                         v = asked[p['name']]
-                    spec_params[p['name']] = _typed(p, v)
+                    spec_params[p['name']] = param_value(p, v)
         selected.append({'id': check_id, 'params': spec_params})
     return selected
 
@@ -266,6 +286,7 @@ def _group_selection(args, extra: dict, hosts_file: str, max_parallel: int = DEF
     if no_host:
         refuse(f'{", ".join(no_host)}: no host parameter; run without --hosts-file')
     _refuse_unused_flags(check_ids, extra, avail)
+    _refuse_wrong_values(check_ids, extra, avail)
     # B2.1 limits (max_parallel, 64 hosts per check, 256 per run), checked
     # here so an oversized run is refused before any password prompt
     try:
@@ -294,7 +315,7 @@ def _group_selection(args, extra: dict, hosts_file: str, max_parallel: int = DEF
                 if p['name'] not in asked:
                     asked[p['name']] = getpass.getpass(f'{p["name"]} (all hosts): ')
                 v = asked[p['name']]
-            common[p['name']] = _typed(p, v)
+            common[p['name']] = param_value(p, v)
         instances = [{**common, **{k: v for k, v in record.items() if k in names}} for record in records]
         selected.append({'id': check_id, 'instances': instances})
     return selected
