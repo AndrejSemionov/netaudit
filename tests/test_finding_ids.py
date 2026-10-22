@@ -1,6 +1,8 @@
 """
 Stable finding IDs - contract docs/research/stable_finding_ids_research.md
-(rev.3, approved 2026-09-27), catalogue docs/checks/finding_ids.md.
+(rev.3, approved 2026-09-27) and its second migration
+docs/research/finding_ids_second_migration.md, catalogue
+docs/checks/finding_ids.md.
 
 Two layers:
   * a static guard over the AST of every in-scope function: each
@@ -23,10 +25,17 @@ from urllib.parse import unquote
 import pytest
 
 from netaudit_pkg.checks import (
+    aide_check,
     backup_check,
+    cert_transparency,
+    cve_audit,
     dns_audit,
     docker_audit,
+    log_discovery_audit,
+    lynis_audit,
+    rootkit_check,
     server_security,
+    sqli,
     systemd_hardening,
 )
 from netaudit_pkg.findings import subject_id
@@ -45,7 +54,19 @@ IN_SCOPE = {
     systemd_hardening: None,
     backup_check: None,
     dns_audit: None,
+    # second migration (docs/research/finding_ids_second_migration.md)
+    aide_check: None,
+    cert_transparency: None,
+    cve_audit: None,
+    log_discovery_audit: None,
+    lynis_audit: None,
+    rootkit_check: None,
+    sqli: None,
 }
+# severities a finding may have without being a problem the trend counts
+NOT_PROBLEMS = ('ok', 'info', 'not_supported', 'third_party_repo')
+NEW_PREFIXES = {'F2B', 'FW', 'SQL', 'WEB', 'DCK', 'SYS', 'BKP', 'DNS',
+                'AIDE', 'CT', 'CVE', 'LOG', 'LYN', 'RKT', 'SQLI'}
 
 
 def _catalogue() -> dict[str, set[str]]:
@@ -74,6 +95,17 @@ def _finding_calls():
                 yield module_name, fn.name, node
 
 
+def _finding_dicts():
+    """Finding dict literals ({'severity': ..., 'title': ...}) of the
+    in-scope functions: cve_audit and sqli build findings this way."""
+    for module_name, fn in _in_scope_functions():
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Dict):
+                keys = {k.value: v for k, v in zip(node.keys, node.values) if isinstance(k, ast.Constant)}
+                if 'severity' in keys and 'title' in keys:
+                    yield module_name, fn.name, node, keys
+
+
 def _literal_severity(call: ast.Call):
     if call.args and isinstance(call.args[0], ast.Constant):
         return call.args[0].value
@@ -98,6 +130,8 @@ def _control_of(expr) -> str | None:
     'KRN-001', 'NGX-TLS-002', 'SSH-AUTH-005', 'F2B-INST-001', 'FW-UFW-001', 'SQL-BIND-001',
     'WEB-COOKIE-001', 'DCK-PRIV-001', 'SYS-SBX-001', 'BKP-AGE-001', 'DNS-SPF-001',
     'BKP-AGE-001:%2Fvar%2Fbackups%2Fdb', 'WEB-COOKIE-002:', 'DCK-MNT-001:web:%2Fetc',
+    'AIDE-FILE-003', 'CT-ISS-001', 'CVE-VULN-001:nginx:CVE-2023-44487', 'LOG-SRC-001:auth_log',
+    'LYN-WARN-001:SSH-7408', 'RKT-CHK-001:bindshell', 'SQLI-INJ-001:id%20%28GET%29',
 ])
 def test_id_regex_accepts(good):
     assert ID_RE.match(good)
@@ -142,10 +176,37 @@ def test_every_problem_finding_call_has_an_id():
     missing = [
         f'{mod}.{fn}:{call.lineno}'
         for mod, fn, call in _finding_calls()
-        if _literal_severity(call) not in ('ok', 'info')
+        if _literal_severity(call) not in NOT_PROBLEMS
         and not any(kw.arg == 'id' for kw in call.keywords)
     ]
     assert missing == []
+
+
+def test_every_problem_finding_dict_has_an_id():
+    missing = []
+    for mod, fn, node, keys in _finding_dicts():
+        sev = keys['severity']
+        if isinstance(sev, ast.Constant) and sev.value in NOT_PROBLEMS:
+            continue
+        if 'id' not in keys:
+            missing.append(f'{mod}.{fn}:{node.lineno}')
+    assert missing == []
+
+
+def test_literal_dict_ids_are_catalogued_with_compatible_severity():
+    controls = _catalogue()
+    problems = []
+    for mod, fn, node, keys in _finding_dicts():
+        control = _control_of(keys['id']) if 'id' in keys else None
+        if control is None:
+            continue
+        if control not in controls:
+            problems.append(f'{mod}.{fn}:{node.lineno} {control} not catalogued')
+            continue
+        sev = keys['severity']
+        if isinstance(sev, ast.Constant) and sev.value not in controls[control]:
+            problems.append(f'{mod}.{fn}:{node.lineno} {control} severity {sev.value} not in {controls[control]}')
+    assert problems == []
 
 
 def test_literal_ids_are_catalogued_with_compatible_severity():
@@ -179,8 +240,7 @@ def test_catalogue_and_code_name_the_same_controls():
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and CONTROL_RE.match(node.value) \
                     and node.value.split('-')[0] in {c.split('-')[0] for c in controls}:
                 used.add(node.value)
-    new_prefixes = {'F2B', 'FW', 'SQL', 'WEB', 'DCK', 'SYS', 'BKP', 'DNS'}
-    used_new = {u for u in used if u.split('-')[0] in new_prefixes}
+    used_new = {u for u in used if u.split('-')[0] in NEW_PREFIXES}
     assert used_new - set(controls) == set()
     assert set(controls) - used_new == set()
 
