@@ -65,6 +65,33 @@ FILTERING = {
 		log prefix "drop: " drop
 	}
 }''',
+    'ct state vmap without new': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ct state vmap { established : accept, related : accept, invalid : drop }
+	}
+}''',
+    'LAN source, loopback and listed ports': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ip saddr 192.168.0.0/16 accept
+		iifname "lo" accept
+		tcp dport { 22, 443 } accept
+	}
+}''',
+    'port vmap': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		tcp dport vmap { 22 : accept, 80 : accept }
+	}
+}''',
+    'udp and icmp accepted, other tcp not': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		udp dport 53 accept
+		meta l4proto icmp accept
+	}
+}''',
     'firewalld with a trusted docker zone': '''table inet firewalld {
 	chain filter_INPUT {
 		type filter hook input priority filter + 10; policy accept;
@@ -171,6 +198,78 @@ NOT_FILTERING = {
 	}
 	chain b {
 		jump a
+	}
+}''',
+    'match-all source accept (review #51 R1)': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ip saddr 0.0.0.0/0 accept
+	}
+}''',
+    'match-all destination accept': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ip daddr 0.0.0.0/0 accept
+	}
+}''',
+    'source halves cover every address': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ip saddr { 0.0.0.0/1, 128.0.0.0/1 } accept
+	}
+}''',
+    'every tcp port accepted': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		tcp dport 0-65535 accept
+	}
+}''',
+    'new connections accepted': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ct state new accept
+	}
+}''',
+    'all tcp accepted': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		meta l4proto tcp accept
+	}
+}''',
+    'any interface by wildcard': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iifname "*" accept
+	}
+}''',
+    'an interface that may be the external one': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iifname "eth0" accept
+	}
+}''',
+    'named set of sources': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ip saddr @allowed accept
+	}
+}''',
+    'rate limit before accept': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		limit rate 10/second accept
+	}
+}''',
+    'vmap that accepts new': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ct state vmap { new : accept, invalid : drop }
+	}
+}''',
+    'a destination that may be this host': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ip daddr 192.0.2.10 accept
 	}
 }''',
     'nat only (docker)': '''table ip nat {

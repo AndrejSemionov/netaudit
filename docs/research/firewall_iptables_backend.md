@@ -61,23 +61,32 @@ namespace; which stream it goes to is UNKNOWN, so both are read.
    - `FirewallEvidence` gets `iptables_version: CommandResult | None = None`:
      `iptables -V` without sudo (it needs none and changes nothing).
 2. **Which nftables chains filter input** (`server_security.py`, pure
-   function on the `nft list ruleset` text). A base chain of family `ip` or
-   `inet` with `hook input` filters when **an IPv4 packet that matches none
-   of its conditions is dropped**: the rules are walked in order, a rule
-   with any match is skipped (that packet does not match it), and a rule
-   that is only a verdict decides - `accept` (open), `drop`/`reject`
-   (filtered), `jump X` (walk X, go on if X ends without a verdict),
-   `goto X` (walk X, then this chain ends), `return`. `counter` and `log`
-   are statements, not matches; `meta nfproto ipv4` / `meta protocol ip`
-   match every IPv4 packet. At the end of the chain its policy decides.
-   Quoted strings (`comment "..."`, `iifname "drop0"`) are never read as
-   keywords. A missing chain or a jump loop proves nothing.
-   So a conditional drop (`ct state invalid drop`, `meta nfproto ipv6
-   drop`, `ip6 saddr ::1 drop`) does not make input filtered, and a drop
-   after an unconditional `accept` is never reached (review before GREEN,
-   GPT/Codex). Known limit: a match that every packet satisfies but that is
-   not written as one of the above (`ip saddr 0.0.0.0/0 accept`) is read as
-   a condition.
+   function on the `nft list ruleset` text). The question is narrow: is
+   there an IPv4 packet that the chain surely drops? If so, "everything is
+   allowed" is false. The packet is a **witness**: a new TCP connection
+   (`ct state new`), arriving on an external interface, from a public
+   address that no `ip saddr` in the ruleset names, to a TCP port that no
+   `tcp dport`/`th dport` in the ruleset names. When no such address or port
+   is left (`tcp dport 0-65535`), nothing is proven.
+   Every expression of a rule is read as true, false or unknown for the
+   witness: `ct state`, `ct status`, `meta nfproto`/`protocol`/`l4proto`/
+   `pkttype`, `ip protocol`/`version`/`saddr`, `ip daddr` (only `0.0.0.0/0`
+   (true) and multicast/broadcast (false) are known; the host's own address
+   is not), `tcp dport`/`th dport`, `udp`/`icmp`/`icmpv6`/`sctp`/`ip6`
+   (false: the witness is IPv4 TCP), `iifname`/`iif` (false only for `lo`
+   and container/bridge names such as `docker0`, `br-*`, `veth*`; any other
+   name may be the external interface), `fib daddr type`, `!=` forms, sets
+   `{ ... }` and verdict maps keyed by `ct state`, `tcp dport`,
+   `meta l4proto`. Anything else (`limit`, named sets `@name`, marks, ...)
+   is unknown. A rule with a false expression does not match; one with only
+   true expressions matches; otherwise both outcomes are followed. `jump`,
+   `goto`, `return` are followed the same way; a missing chain or a loop is
+   unknown. The chain **filters** only when every path ends in `drop`/
+   `reject` (its policy at the end). A rule that may accept everything
+   (`ip saddr 0.0.0.0/0 accept`, `ct state new accept`, `iifname "eth0"
+   accept`) therefore never gives a false "filtered" (review #51 R1).
+   When the evaluation is not certain, the iptables verdict stays as it
+   was (HIGH), which is no worse than before.
 3. **`_iptables_verdict()`**, when the iptables view is open (policy ACCEPT
    and no rules, or an unconditional ACCEPT):
    - the output (stdout or stderr) carries the iptables-legacy warning →
@@ -117,6 +126,14 @@ namespace; which stream it goes to is UNKNOWN, so both are read.
   whose chain is a bare `accept`; an unconditional `reject` in a chain
   reached by `jump`; a final `counter ... drop` or `log prefix "..." drop`
   in a policy-accept chain; `policy drop` with conditional accepts.
+- Not proven (HIGH as before): `policy drop` with `ip saddr 0.0.0.0/0
+  accept`, `ip daddr 0.0.0.0/0 accept`, `ip saddr { 0.0.0.0/1, 128.0.0.0/1 }
+  accept`, `tcp dport 0-65535 accept`, `ct state new accept`,
+  `meta l4proto tcp accept`, `iifname "*" accept`, `iifname "eth0" accept`,
+  `ip saddr @allowed accept`, `limit rate ... accept`, a vmap that accepts
+  `new`, `ip daddr <an address> accept`. Filtering: `ct state vmap` without
+  `new`, LAN-only sources plus loopback plus listed ports, a port vmap, only
+  udp/icmp accepted.
 - Not filtering (HIGH as before): policy accept with only conditional rules,
   including `ct state invalid drop`, `meta nfproto ipv6 drop`,
   `ip6 saddr ::1 drop`; `drop` only in a comment or a quoted name;
