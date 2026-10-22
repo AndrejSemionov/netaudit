@@ -502,3 +502,62 @@ def test_nat_rules_that_cannot_apply_to_the_witness_keep_filtering():
     docker_like = ['iifname != "docker0" tcp dport 8080 dnat to 172.17.0.2:80',
                    'ip saddr 172.17.0.0/16 masquerade']
     assert _filters(_with_nat(['ct status dnat accept', 'tcp dport 22 accept'], docker_like))
+
+
+# --- named sets and source NAT (review #51 FINAL pass 3, USER: pass 4) ---------
+
+def _with_set(rule, set_type, elements):
+    return f"""table inet filter {{
+	set allowed {{
+		type {set_type}
+		elements = {{ {elements} }}
+	}}
+	chain input {{
+		type filter hook input priority filter; policy drop;
+		{rule}
+	}}
+}}"""
+
+
+def test_a_named_set_is_never_read_as_its_name():
+    cases = [('meta l4proto @allowed accept', 'inet_proto', 'tcp'),
+             ('ip protocol @allowed accept', 'inet_proto', 'tcp'),
+             ('ct state @allowed accept', 'ct_state', 'new'),
+             ('meta nfproto @allowed accept', 'nf_proto', 'ipv4'),
+             ('iifname @allowed accept', 'ifname', '"eth0"'),
+             ('tcp dport @allowed accept', 'inet_service', '54321'),
+             ('meta pkttype @allowed accept', 'pkt_type', 'host')]
+    for rule, set_type, elements in cases:
+        assert not _filters(_with_set(rule, set_type, elements)), rule
+
+
+def test_source_nat_before_the_filter_makes_the_source_unknown():
+    ruleset = """table ip nat {
+	chain input_nat {
+		type nat hook input priority -10; policy accept;
+		snat to 192.0.2.5
+	}
+}
+table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ip saddr 192.0.2.5 accept
+	}
+}"""
+    assert not _filters(ruleset)
+
+
+def test_a_masquerade_that_cannot_apply_keeps_the_source():
+    ruleset = """table ip nat {
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		ip saddr 172.17.0.0/16 masquerade
+	}
+}
+table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ip saddr 192.168.0.0/16 accept
+	}
+}"""
+    assert _filters(ruleset)
