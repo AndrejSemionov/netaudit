@@ -37,6 +37,7 @@ from netaudit_pkg.engine import (
     PROCESS_MAX_PARALLEL,
     list_available,
     run_checks_multi,
+    typed_params,
     validate_multi_request,
 )
 from netaudit_pkg.history import (
@@ -204,6 +205,9 @@ def api_estimate(req: RunRequest) -> dict:
     selected = [_to_selected_item(c) for c in req.checks]
     try:
         validate_multi_request(selected, req.max_parallel)
+        # 'false' or '5; id' from a direct API call is refused, not run
+        # (docs/research/param_value_types.md)
+        selected = typed_params(selected)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     effective_parallel = min(req.max_parallel, PROCESS_MAX_PARALLEL)
@@ -220,6 +224,9 @@ def api_run(req: RunRequest) -> dict:
     selected = [_to_selected_item(c) for c in req.checks]
     try:
         validate_multi_request(selected, req.max_parallel)
+        # 'false' or '5; id' from a direct API call is refused, not run
+        # (docs/research/param_value_types.md)
+        selected = typed_params(selected)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     mode, est = timing.decide_mode(selected, force_async=req.force_async,
@@ -550,6 +557,9 @@ def api_stream_start(req: RunRequest) -> dict:
     selected = [_to_selected_item(c) for c in req.checks]
     try:
         validate_multi_request(selected, req.max_parallel)
+        # 'false' or '5; id' from a direct API call is refused, not run
+        # (docs/research/param_value_types.md)
+        selected = typed_params(selected)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     task_id = _uuid.uuid4().hex

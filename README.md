@@ -251,6 +251,15 @@ take `--domain`) do not run without their target: `run dns_audit` alone is refus
 `dns_audit needs --domain`. Before, it checked `example.com`. `netaudit list` marks these
 parameters as `required`.
 
+Option values are checked against their type before anything runs. A yes/no option takes
+`true` or `false` (also `yes`/`no`, `1`/`0`, `on`/`off`): `--auto_install true`,
+`--use_rkhunter false`. A number takes a number (`--lines 500`). A choice takes one of the
+values `netaudit list` shows, e.g. `--fail2ban_mode status-wrapper` (`aide_check` also takes
+`--mode check` and `--mode init`). Anything else is refused with `Wrong value: …`, which names
+the flag, the check and what it takes, but not the value. Before, the text was passed on as
+typed: `--auto_install false` worked as "yes", and a number could carry a shell command. The
+Web API refuses such values with 400; the Web form is unchanged.
+
 `trend` reads saved reports from `~/.netaudit/netaudit.db`. For state checks it
 compares stable finding IDs; a finding that disappeared from an area the latest
 run could not verify is shown as **not evaluated**, rather than resolved.

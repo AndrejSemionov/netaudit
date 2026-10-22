@@ -516,6 +516,10 @@ The ready-made server bundle:
 python3 netaudit.py run --quick --host <server-IP> --user audit --key_path ~/.ssh/netaudit_audit
 ```
 
+Yes/no options take `true` or `false` (`yes`/`no`, `1`/`0`, `on`/`off` work too), for example
+`--include_stopped true` for `docker_audit`. A choice takes one of the values that
+`python3 netaudit.py list` shows next to it.
+
 If a check could not connect or lacked rights, the report shows an error with the reason, such
 as `could not connect: …` or `sudo: a password is required`. Such a check means "not checked",
 not "all clean".
@@ -870,4 +874,5 @@ sudo systemctl start netaudit-audit-daily.timer
 | "Set ANTHROPIC_API_KEY on the server running netaudit." | No AI key | Section 10.1 |
 | `--…: not used by any of the selected checks (…)` | None of the selected checks takes that flag: a typo, or the wrong check | Read the hint in the message: which flag the checks take. Drop the extra flag or pick checks that take it (`python3 netaudit.py list`) |
 | `No target given: … needs --url` / `needs --domain` | You did not name the site to check; without it the check would audit the example `example.com` | Add the flag from the message with your site, e.g. `--url https://your-site` or `--domain your-site` |
+| `Wrong value: --… (…) takes …` | The value does not fit the option: a yes/no option takes `true` or `false`, a number takes a number, a choice takes one of its values | Write the value as the message says. `python3 netaudit.py list` shows each option's type and choices |
 | `uvicorn not installed` | The Web dependencies are not installed | `pip install -r requirements.txt --break-system-packages` |
