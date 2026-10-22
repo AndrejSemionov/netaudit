@@ -189,7 +189,7 @@ def collect_journal(ssh: SSHExecutor, unit_name: str, mode: CollectionMode = Col
     if mode != CollectionMode.TAIL:
         raise NotImplementedError(f'CollectionMode.{mode.name} is reserved, not implemented in Iteration 2')  # deploy-guard: intentional
 
-    cmd = f'journalctl -u {shlex.quote(unit_name)} -n {lines} --no-pager'
+    cmd = shlex.join(['journalctl', '-u', unit_name, '-n', str(lines), '--no-pager'])
     stdout, exit_code = run_command_with_exit_code(ssh, cmd, timeout=timeout)
     result = _to_command_result(stdout, exit_code, cmd)
 

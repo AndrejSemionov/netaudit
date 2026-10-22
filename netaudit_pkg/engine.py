@@ -13,7 +13,7 @@ from . import (
     timing,
 )
 from .redaction import redact_params
-from .registry import registry
+from .registry import param_value, registry
 from .utils import log, missing_tools
 
 DEFAULT_MAX_PARALLEL = 4
@@ -40,6 +40,35 @@ def validate_multi_request(selected: list[dict], max_parallel: int = DEFAULT_MAX
         total += len(instances)
         if total > MAX_INSTANCES_PER_REQUEST:
             raise ValueError(f'too many instances in request: limit {MAX_INSTANCES_PER_REQUEST}')
+
+
+def _typed_instance(check_id: str, declared: dict, params: dict) -> dict:
+    typed = {}
+    for name, value in params.items():
+        try:
+            typed[name] = param_value(declared[name], value) if name in declared else value
+        except ValueError as e:
+            raise ValueError(f'{check_id}: {name} {e}') from None
+    return typed
+
+
+def typed_params(selected: list[dict]) -> list[dict]:
+    """A copy of `selected` with every checkbox, number and select value as
+    the check expects it (registry.param_value): an API request can carry
+    'false' or '5; id' where the Web form sends false or a number
+    (docs/research/param_value_types.md). A wrong value raises ValueError
+    '<check>: <param> takes ...' before anything runs. A check or a
+    parameter the registry does not know is left as it is."""
+    out = []
+    for item in selected:
+        spec = registry.get(item['id'])
+        declared = {p['name']: p for p in spec.params} if spec else {}
+        if 'instances' in item:
+            out.append({**item, 'instances': [_typed_instance(item['id'], declared, params)
+                                              for params in item['instances']]})
+        else:
+            out.append({**item, 'params': _typed_instance(item['id'], declared, item.get('params', {}))})
+    return out
 
 
 class _ProcessSlots:
