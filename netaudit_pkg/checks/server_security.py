@@ -558,6 +558,8 @@ def _nft_iface_internal(value: str) -> bool:
 def _nft_matches(key: str, values: list[str], w: dict) -> bool | None:
     """Whether the witness has one of `values` for `key` (None: unknown)."""
     plain = [v.strip('"') for v in values]
+    if any(v.startswith(('@', '$')) for v in plain):
+        return None  # a named set or a variable: its content is not read (review #51)
     if key == 'ct state':
         return 'new' in plain
     if key == 'ct status':
@@ -582,6 +584,8 @@ def _nft_matches(key: str, values: list[str], w: dict) -> bool | None:
     if key == 'iifname':
         return False if all(_nft_iface_internal(v) for v in values) else None
     if key == 'ip saddr':
+        if w.get('snat'):
+            return None  # a SNAT before the filter may have changed the source (review #51)
         specs = [_nft_address_spec(v) for v in plain]
         return None if None in specs else any(_nft_in_address(w['source'], spec) for spec in specs)
     if key == 'ip daddr':
@@ -622,6 +626,8 @@ def _nft_vmap_verdict(key: str, entries: list[str], w: dict) -> tuple[bool | Non
             i += 2 + len(verdict)
         else:
             i += 1
+    if not pairs:
+        return None, None  # a named map (`vmap @ports`) or entries not understood
     for value, verdict in pairs:
         hit = _nft_matches(key, [value], w)
         if hit is None:

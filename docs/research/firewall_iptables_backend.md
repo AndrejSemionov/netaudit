@@ -94,7 +94,12 @@ namespace; which stream it goes to is UNKNOWN, so both are read.
    conditions are read the same way -, `ct status` and `tcp dport` are
    unknown for it. Without such a rule a new connection has none of the
    `ct status` flags `dnat`, `snat`, `expected`, `seen-reply`, `assured`,
-   `confirmed`, `dying`; any other flag is unknown.
+   `confirmed`, `dying`; any other flag is unknown. A SNAT that may match
+   makes `ip saddr` unknown as well: a `type nat hook input` chain with a
+   priority before the filter changes the source first.
+   **Named sets and maps** (`@name`) and variables are never read as values:
+   their content is not parsed, so any expression or verdict map using one
+   is unknown (review #51, USER-approved pass 4).
 3. **`_iptables_verdict()`**, when the iptables view is open (policy ACCEPT
    and no rules, or an unconditional ACCEPT):
    - the output (stdout or stderr) carries the iptables-legacy warning →
