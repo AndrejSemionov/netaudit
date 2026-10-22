@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Web: every check reads in Russian in the Russian interface. 15 checks
+  (`aide_check`, `backup_check`, `breach_check`, `cert_transparency`,
+  `docker_audit`, the log audits, `kernel_hardening`, `nginx_hardening`,
+  `rootkit_check`, `speedtest`, `ssh_hardening` and others) had their name,
+  description and options in English, and the `sql_injection` choices were
+  shown in English because their translations were keyed by old values. A
+  test now keeps every check, parameter and choice translated. The English
+  interface is unchanged.
+- Web: the Telegram hint in Settings says what uses the token and chat ID
+  (scheduled audits: `run --notify`, `setup-timer`) instead of "for future
+  background monitoring".
 - Security: a number option could carry a shell command to the audited
   server. `ssh_auth_audit --lines '5; id'` (CLI, or `"lines": "5; id"` in a Web
   API request) ran `journalctl -n 5; id` there, when the check fell back to
@@ -18,7 +29,6 @@
   form sends the right types and is unchanged. Old CLI reports saved a yes/no
   option as text: trends read them as the check did, so the first run with a
   real "no" shows the setting as changed.
-
 - Trends no longer call a finding "resolved" when the check settings changed
   between the two compared runs: for example a subdomain dropped from the
   `dns_audit` list, a directory dropped from `backup_check`, a relaxed

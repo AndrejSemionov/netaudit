@@ -55,7 +55,7 @@ const I18N = {
     'settings.sync': 'Порог синхронности, сек',
     'settings.ema': 'EMA alpha',
     'settings.telegram': 'Telegram-алерты',
-    'settings.tg.hint': 'Для будущих фоновых мониторингов: токен бота и chat_id.',
+    'settings.tg.hint': 'Токен бота и chat_id нужны плановым аудитам с уведомлениями (netaudit run --notify, netaudit setup-timer). Сам Web-интерфейс сообщений не отправляет.',
     'settings.save': 'Сохранить настройки',
     'settings.targets': 'Цели по умолчанию',
     'settings.targets.hint': 'Часто используемые IP/URL — подставляются в параметры проверок.',
@@ -395,7 +395,7 @@ const I18N = {
     'settings.sync': 'Sync threshold, sec',
     'settings.ema': 'EMA alpha',
     'settings.telegram': 'Telegram alerts',
-    'settings.tg.hint': 'For future background monitoring: bot token and chat_id.',
+    'settings.tg.hint': 'The bot token and chat_id are used by scheduled audits with notifications (netaudit run --notify, netaudit setup-timer). The Web interface itself sends no messages.',
     'settings.save': 'Save settings',
     'settings.targets': 'Default targets',
     'settings.targets.hint': 'Frequently used IPs/URLs — auto-filled into check parameters.',
@@ -719,13 +719,15 @@ const I18N_CHECKS = {
   },
   ssl: {
     label: { ru: 'SSL/TLS сертификат' },
-    desc: { ru: 'Протокол, шифр, цепочка сертификатов, срок действия. auto = openssl, если доступен, иначе python.' },
+    desc: { ru: 'Протокол, шифр, цепочка сертификатов, срок действия. авто = openssl, если доступен, иначе python.' },
     params: { url: { ru: 'URL' }, method: { ru: 'Инструмент' } },
+    options: { 'auto': { ru: 'авто' } },
   },
   http: {
     label: { ru: 'HTTP-тайминги' },
-    desc: { ru: 'Тайминги по фазам: DNS / TCP-подключение / TLS / TTFB. auto = curl, если доступен, иначе python.' },
+    desc: { ru: 'Тайминги по фазам: DNS / TCP-подключение / TLS / TTFB. авто = curl, если доступен, иначе python.' },
     params: { url: { ru: 'URL' }, method: { ru: 'Инструмент' } },
+    options: { 'auto': { ru: 'авто' } },
   },
   security_headers: {
     label: { ru: 'Security-заголовки' },
@@ -772,7 +774,7 @@ const I18N_CHECKS = {
   server_audit: {
     label: { ru: 'Аудит безопасности сервера (SSH)' },
     desc: { ru: 'Полный аудит безопасности сервера по SSH: nginx, fail2ban, файрвол, MySQL, хардненинг SSH. Read-only.' },
-    params: { host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' }, key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль SSH (если без ключа)' }, sudo_password: { ru: 'Пароль sudo (если sudo его спрашивает)' } },
+    params: { host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' }, key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль SSH (если без ключа)' }, sudo_password: { ru: 'Пароль sudo (если sudo его спрашивает)' }, fail2ban_mode: { ru: 'Команда статуса fail2ban' } },
   },
   cve_audit: {
     label: { ru: 'Аудит CVE установленного ПО (SSH)' },
@@ -791,11 +793,11 @@ const I18N_CHECKS = {
     desc: { ru: 'Пассивный поиск точек ввода — всегда; активное тестирование через sqlmap только при подтверждённой авторизации.' },
     params: { url: { ru: 'URL (с параметрами, напр. ?id=1)' }, authorization: { ru: 'Авторизация на тест' }, mode: { ru: 'Режим' }, crawl: { ru: 'Обход ссылок (sqlmap crawl)' } },
     options: {
-      'нет': { en: 'no' },
-      'да — я владелец / есть письменное разрешение': { en: 'yes — I am the owner / have written permission' },
-      'пассив (только точки ввода)': { en: 'passive (input points only)' },
-      'пассив + sqlmap': { en: 'passive + sqlmap' },
-      'да': { en: 'yes' },
+      'no': { ru: 'нет' },
+      "yes — I'm the owner / I have written permission": { ru: 'да — я владелец / есть письменное разрешение' },
+      'passive (input points only)': { ru: 'пассив (только точки ввода)' },
+      'passive + sqlmap': { ru: 'пассив + sqlmap' },
+      'yes': { ru: 'да' },
     },
   },
   lynis_audit: {
@@ -805,7 +807,9 @@ const I18N_CHECKS = {
       host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' },
       key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль SSH (если без ключа)' }, sudo_password: { ru: 'Пароль sudo (если sudo его спрашивает)' },
       auto_install: { ru: 'Установить lynis, если отсутствует' },
+      confirm_modify: { ru: 'Подтверждение: может установить пакеты на цель' },
     },
+    options: { 'no': { ru: 'нет' }, 'yes — modify the target system': { ru: 'да — изменить целевую систему' } },
   },
   dns_audit: {
     label: { ru: 'Аудит DNS домена' },
@@ -823,6 +827,107 @@ const I18N_CHECKS = {
       key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль SSH (если без ключа)' }, sudo_password: { ru: 'Пароль sudo (если sudo его спрашивает)' },
       unit: { ru: 'systemd-юнит' },
     },
+  },
+  aide_check: {
+    label: { ru: 'Контроль целостности файлов (AIDE, SSH)' },
+    desc: { ru: 'Контроль целостности файлов через AIDE по SSH: изменения системных файлов вне обычных обновлений (тревога, если бинарники изменились не через unattended-upgrades). Режим «проверить изменения» сравнивает с существующей базой (только чтение); «переинициализировать базу» перезаписывает эталонную базу и требует подтверждения, как и установка aide.' },
+    params: {
+      host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' },
+      key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль SSH (если без ключа)' }, sudo_password: { ru: 'Пароль sudo (если sudo его спрашивает)' },
+      mode: { ru: 'Режим' }, auto_install: { ru: 'Установить aide, если отсутствует' },
+      confirm_modify: { ru: 'Подтверждение: может установить пакеты / переинициализировать базу AIDE' },
+    },
+    options: {
+      'check for changes': { ru: 'проверить изменения' },
+      'reinitialize the database': { ru: 'переинициализировать базу' },
+      'no': { ru: 'нет' },
+      'yes — modify the target system': { ru: 'да — изменить целевую систему' },
+    },
+  },
+  backup_check: {
+    label: { ru: 'Проверка бэкапов (SSH)' },
+    desc: { ru: 'Проверка резервных копий по SSH: свежесть последнего файла, подозрительно маленький размер (неудачный дамп), целостность архивов (gz/tar.gz/zip/sql), число локальных копий, заполненность раздела. Только чтение — читаются лишь файлы и их метаданные. Проверяется только локальное хранение, а не всё правило 3-2-1 (3 копии, 2 типа носителей, 1 копия вне площадки): нормальное число копий здесь само по себе не подтверждает, что есть копия на другом носителе или вне площадки.' },
+    params: {
+      host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' },
+      key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль SSH (если без ключа)' }, sudo_password: { ru: 'Пароль sudo (если sudo его спрашивает)' },
+      directories: { ru: 'Каталоги с бэкапами (через запятую)' },
+      max_age_hours: { ru: 'Ожидаемая свежесть, ч' }, min_copies: { ru: 'Минимум копий (локальное хранение)' },
+    },
+  },
+  breach_check: {
+    label: { ru: 'Проверка утечек данных (email)' },
+    desc: { ru: 'OSINT-проверка: встречались ли указанные адреса в известных утечках данных (XposedOrNot — бесплатно, HaveIBeenPwned — платно). Сервер не проверяется — проверяется публичная история утечек для адреса.' },
+    params: {
+      emails: { ru: 'Адреса email (через запятую)' },
+      use_xposedornot: { ru: 'Проверить через XposedOrNot (бесплатно)' },
+      use_hibp: { ru: 'Проверить через HaveIBeenPwned (нужен платный ключ в настройках)' },
+    },
+  },
+  cert_transparency: {
+    label: { ru: 'Мониторинг Certificate Transparency' },
+    desc: { ru: 'Ищет сертификаты и поддомены домена в публичных журналах Certificate Transparency (crt.sh): находит забытые поддомены (staging/dev/old-admin) и сертификаты, выпущенные неожиданным центром сертификации. Доступ к серверу не нужен.' },
+    params: {
+      domain: { ru: 'Домен' },
+      expected_issuer_contains: { ru: 'Ожидаемый издатель содержит (необязательно, напр. «Let’s Encrypt»)' },
+      include_expired: { ru: 'Включать истёкшие сертификаты' },
+    },
+  },
+  docker_audit: {
+    label: { ru: 'Аудит контейнеров Docker (SSH)' },
+    desc: { ru: 'Проверяет, КАК запущены контейнеры Docker (а не что внутри): процессы от root, --privileged, опасные capabilities, публичные порты, docker.sock и другие чувствительные тома, образы без фиксированной версии. Только чтение — только `docker ps`/`docker inspect`, ничего не меняет.' },
+    params: {
+      host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' },
+      key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль SSH (если без ключа)' }, sudo_password: { ru: 'Пароль sudo (если sudo его спрашивает)' },
+      include_stopped: { ru: 'Включать остановленные контейнеры' },
+    },
+  },
+  log_discovery: {
+    label: { ru: 'Аудит логов: обнаружение (SSH)' },
+    desc: { ru: 'Находит, какие источники логов есть на хосте и в каком они состоянии (есть / читается / ротируется / активен), — не читает содержимое логов и не ищет события безопасности. Намеренно без повышения прав (без sudo): показывает, что видит и чего не видит SSH-доступ самого NetAudit, и отмечает источники, для чтения которых нужны повышенные права.' },
+  },
+  fail2ban_logs_audit: {
+    label: { ru: 'Аудит логов Fail2Ban (SSH)' },
+    desc: { ru: 'Анализирует fail2ban.log: какие IP действительно были заблокированы и в каком jail. Только чтение — собирает ограниченный хвост свежих строк, никогда не весь файл. Не путать с проверкой статуса jail (текущая конфигурация и состояние): здесь — что fail2ban на самом деле сделал, по его собственному логу.' },
+  },
+  kern_log_audit: {
+    label: { ru: 'Аудит журнала ядра (SSH)' },
+    desc: { ru: 'Анализирует kern.log: пакеты, отброшенные nftables (высокая частота отбрасывания или сканирование портов с одного IP). Только чтение — собирает ограниченный хвост свежих строк, никогда не весь файл.' },
+  },
+  kernel_hardening: {
+    label: { ru: 'Харденинг ядра Linux (sysctl, SSH)' },
+    desc: { ru: 'Оценивает харденинг ядра Linux через sysctl — ASLR, раскрытие указателей ядра и dmesg, IP forwarding, обработку ICMP и redirect, фильтрацию по обратному пути, защиту от SYN flood и безопасность дампов процессов — по docs/checks/kernel_hardening.md (16 контролей, оценка 0–100). Только чтение.' },
+  },
+  speedtest: {
+    label: { ru: 'Тест скорости (Ookla)' },
+    desc: { ru: 'Реальная скорость загрузки и отдачи и задержка до ближайшего сервера Ookla. Занимает ~25–30 с.' },
+  },
+  nginx_hardening: {
+    label: { ru: 'Харденинг конфигурации nginx (SSH)' },
+    desc: { ru: 'Оценивает TLS, security-заголовки, конфигурацию и открытость nginx по docs/checks/nginx_hardening.md (16 контролей: 9 первого уровня + 7 второго, оценка 0–100). Только чтение.' },
+  },
+  nginx_logs_audit: {
+    label: { ru: 'Аудит логов nginx (SSH)' },
+    desc: { ru: 'Анализирует access.log и error.log nginx (всплески частоты, сканирование путей, пачки запросов, доля нераспознанных строк, высокая доля ошибок, критические и повторяющиеся ошибки) по журналам всех server-блоков, без дублей. Только чтение — собирает ограниченный хвост свежих строк по каждому источнику, никогда не целые файлы.' },
+  },
+  rootkit_check: {
+    label: { ru: 'Поиск руткитов (rkhunter/chkrootkit, SSH)' },
+    desc: { ru: 'Ищет известные руткиты и подменённые системные команды через rkhunter и/или chkrootkit по SSH. Только чтение системы, если не включена и не подтверждена «Установка недостающих инструментов». Оба инструмента дают ложные срабатывания — находки нужно проверять вручную, это не готовый вердикт.' },
+    params: {
+      host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' },
+      key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль SSH (если без ключа)' }, sudo_password: { ru: 'Пароль sudo (если sudo его спрашивает)' },
+      use_rkhunter: { ru: 'Запустить rkhunter' }, use_chkrootkit: { ru: 'Запустить chkrootkit' },
+      auto_install: { ru: 'Установка недостающих инструментов' },
+      confirm_modify: { ru: 'Подтверждение: может установить пакеты на цель' },
+    },
+    options: { 'no': { ru: 'нет' }, 'yes — modify the target system': { ru: 'да — изменить целевую систему' } },
+  },
+  ssh_auth_audit: {
+    label: { ru: 'Аудит SSH-входов (SSH)' },
+    desc: { ru: 'Анализирует SSH-аутентификацию (auth.log, а если он недоступен — журнал systemd): повторные неудачи, перебор несуществующих пользователей, попытки с многих адресов и успешный вход после неудач. Только чтение — собирает ограниченный хвост свежих строк, никогда не весь файл. Источники — альтернативы, они не объединяются.' },
+  },
+  ssh_hardening: {
+    label: { ru: 'Харденинг SSH-сервера (SSH)' },
+    desc: { ru: 'Оценивает аутентификацию sshd, её ограничения, проброс и криптографию по docs/checks/ssh_hardening.md (14 контролей, оценка 0–100). Только чтение.' },
   },
 };
 
@@ -858,12 +963,13 @@ function t(key) {
 //    was translated to English in an earlier session), so I18N_CHECKS holds
 //    the 'ru' translation on top - en locale uses the Python original as-is,
 //    ru locale looks up the ru translation (falling back to the original).
-//  - options (select param values, e.g. sql_injection's 'да'/'нет'): the
-//    option VALUE sent to the backend must stay Russian (it's a lookup key
-//    matched against storage.py's preset seed data - see PRESET_NAME_TR
-//    comment), only the DISPLAYED label changes. So options are keyed by
-//    Russian value with an 'en' translation on top - ru locale shows the
-//    key as-is, en locale looks up the en translation.
+//  - options (select param values): keyed by the exact VALUE the backend
+//    sends and expects, with the translation for the other language on top.
+//    Most values are English now (sql_injection's 'no'/'yes', the
+//    confirm_modify choices) and get a 'ru' translation; tshark_capture /
+//    mikrotik_sniffer keep Russian values ('да'/'нет' - storage.py's preset
+//    seed data matches them) with an 'en' translation. Only the DISPLAYED
+//    label changes, never the value (docs/research/web_ru_texts.md).
 // Russian labels for params many SSH checks share; a check's own
 // translation (I18N_CHECKS[id].params) still wins over these.
 const COMMON_PARAM_RU = {
