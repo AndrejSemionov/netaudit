@@ -139,7 +139,9 @@ def _setting(param_type: str | None, value):
     if param_type == 'number':
         try:
             number = float(value)
-        except (TypeError, ValueError):
+        # OverflowError: an int beyond the float range, which an old CLI
+        # report can hold (`--lines` with 311 digits)
+        except (TypeError, ValueError, OverflowError):
             pass
         else:
             if not math.isnan(number):  # NaN is not equal to itself: keep it as text

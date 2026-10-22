@@ -517,6 +517,10 @@ python3 netaudit.py run server_audit ssh_hardening kernel_hardening --host <IP-�
 python3 netaudit.py run --quick --host <IP-сервера> --user audit --key_path ~/.ssh/netaudit_audit
 ```
 
+Параметры «да/нет» принимают `true` или `false` (подходят и `yes`/`no`, `1`/`0`, `on`/`off`),
+например `--include_stopped true` для `docker_audit`. Параметр-выбор принимает одно из
+значений, которые `python3 netaudit.py list` показывает рядом с ним.
+
 Если проверка не смогла подключиться или ей не хватило прав, в отчёте будет ошибка с причиной,
 например `could not connect: …` или `sudo: a password is required`. Такая проверка — не «всё
 чисто», а «не проверено».
@@ -872,4 +876,5 @@ sudo systemctl start netaudit-audit-daily.timer
 | «Set ANTHROPIC_API_KEY on the server running netaudit.» | Нет ключа AI | Раздел 10.1 |
 | `--…: not used by any of the selected checks (…)` | Этот флаг не принимает ни одна из выбранных проверок: опечатка или не та проверка | Посмотрите подсказку в сообщении: какой флаг нужен проверке. Уберите лишний флаг или выберите проверки, которые его принимают (`python3 netaudit.py list`) |
 | `No target given: … needs --url` / `needs --domain` | Не указан сайт для проверки; без него проверка пошла бы по примеру `example.com` | Добавьте флаг из сообщения со своим сайтом, например `--url https://ваш-сайт` или `--domain ваш-сайт` |
+| `Wrong value: --… (…) takes …` | Значение не подходит параметру: «да/нет» — это `true` или `false`, число — число, выбор — одно из его значений | Напишите значение так, как сказано в сообщении. Тип и варианты каждого параметра показывает `python3 netaudit.py list` |
 | `uvicorn not installed` | Не установлены зависимости Web | `pip install -r requirements.txt --break-system-packages` |
