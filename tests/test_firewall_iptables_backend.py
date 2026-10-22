@@ -561,3 +561,17 @@ table inet filter {
 	}
 }"""
     assert _filters(ruleset)
+
+
+def test_a_named_verdict_map_is_unknown():
+    ruleset = """table inet filter {
+	map ports {
+		type inet_service : verdict
+		elements = { 54321 : accept }
+	}
+	chain input {
+		type filter hook input priority filter; policy drop;
+		tcp dport vmap @ports
+	}
+}"""
+    assert not _filters(ruleset)
