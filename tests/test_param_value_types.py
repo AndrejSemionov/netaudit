@@ -411,3 +411,45 @@ def test_collect_journal_command_is_unchanged_for_a_number():
     log_collection.collect_journal(ssh, 'ssh', lines=200)
     [cmd] = ssh.commands
     assert 'journalctl -u ssh -n 200 --no-pager;' in cmd
+
+
+# --- a number beyond the float range (review #49 R1) --------------------------
+
+HUGE = 10 ** 310  # an int that float() cannot hold
+
+
+@pytest.mark.parametrize('value', [HUGE, -HUGE, '1' * 311, '1' * 5000],
+                         ids=['int', 'negative-int', 'text-311-digits', 'text-5000-digits'])
+def test_number_beyond_the_float_range_is_refused(value):
+    with pytest.raises(ValueError) as exc:
+        _param_value(NUMBER, value)
+    assert str(exc.value) == 'takes a number'
+
+
+def test_large_number_within_the_float_range_is_kept():
+    assert _param_value(NUMBER, 10 ** 300) == 10 ** 300
+    assert _param_value(NUMBER, '1' * 300) == int('1' * 300)
+
+
+def test_cli_number_beyond_the_float_range_is_refused(ran, caplog, capsys):
+    text = _refused(_ns(['ssh_auth_audit'], ['--host', '192.0.2.10', '--lines', '1' * 311]),
+                    caplog, capsys, '--lines (ssh_auth_audit) takes a number')
+    assert '1' * 311 not in text
+    assert ran == []
+
+
+@pytest.mark.parametrize('endpoint', ['/api/run', '/api/estimate', '/api/stream/start'])
+def test_api_number_beyond_the_float_range_is_400(client, typed_check, isolated_db, endpoint):
+    check_id, calls = typed_check
+    resp = client.post(endpoint, json={'checks': [{'id': check_id, 'params': {'host': 'h', 'lines': HUGE}}]})
+    assert resp.status_code == 400
+    assert 'lines takes a number' in resp.text
+    assert calls == []
+
+
+def test_trends_read_a_saved_number_beyond_the_float_range():
+    """A CLI report saved before this check could hold such a number
+    (`--lines` with 311 digits became an int): trends must not crash on it."""
+    from netaudit_pkg import trends
+
+    assert trends._setting('number', HUGE) == str(HUGE)
