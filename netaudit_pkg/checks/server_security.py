@@ -421,26 +421,45 @@ _NFT_CHAIN_RE = re.compile(r'^chain\s+(\S+)\s*\{')
 _NFT_INPUT_HOOK_RE = re.compile(r'^type\s+filter\s+hook\s+input\b')
 _NFT_POLICY_DROP_RE = re.compile(r'\bpolicy\s+drop\b')
 _NFT_STRING_RE = re.compile(r'"[^"]*"')
-_NFT_COMMENT_RE = re.compile(r'\bcomment\s+""')
-# statements that do not decide whether a packet matches
-_NFT_STATEMENT_RE = re.compile(
-    r'\bcounter(?:\s+packets\s+\d+\s+bytes\s+\d+)?'
-    r'|\blog(?:\s+(?:prefix|level|flags|group|snaplen|queue-threshold)\s+\S+)*')
-# a match every IPv4 packet satisfies
-_NFT_IPV4_ALL_RE = re.compile(r'^(?:meta\s+nfproto\s+ipv4|meta\s+protocol\s+ip|ip\s+version\s+4)\s+')
-_NFT_VERDICT_RE = re.compile(r'(accept|drop|return|continue|reject(?:\s+with\s+.+)?|(?:jump|goto)\s+(\S+))')
+_NFT_COMMENT_RE = re.compile(r'\bcomment\s+"[^"]*"')
+_NFT_TOKEN_RE = re.compile(r'"[^"]*"|[{},]|[^\s{},]+')
 # families whose input hook sees IPv4, the traffic `iptables -S` is about
 _NFT_IPV4_FAMILIES = ('ip', 'inet')
 _NFT_MAX_DEPTH = 16
+_NFT_VERDICTS = ('accept', 'drop', 'reject', 'return', 'continue', 'queue', 'jump', 'goto')
+_NFT_LOG_OPTIONS = ('prefix', 'level', 'flags', 'group', 'snaplen', 'queue-threshold')
+# expressions a witness (IPv4 TCP) never matches
+_NFT_NOT_IPV4_TCP = frozenset({'udp', 'icmp', 'icmpv6', 'sctp', 'ip6', 'dccp', 'udplite', 'igmp',
+                               'ah', 'esp', 'comp'})
+# interfaces external traffic does not arrive on
+_NFT_INTERNAL_IFACES = frozenset({'lo', 'docker0', 'docker_gwbridge'})
+_NFT_INTERNAL_PREFIXES = ('br-', 'veth', 'virbr', 'cni', 'cali', 'flannel', 'cilium', 'lxc', 'lxdbr')
+_NFT_SERVICES = {'ftp': 21, 'ssh': 22, 'telnet': 23, 'smtp': 25, 'domain': 53, 'http': 80,
+                 'pop3': 110, 'ntp': 123, 'imap': 143, 'snmp': 161, 'ldap': 389, 'https': 443,
+                 'smtps': 465, 'submission': 587, 'imaps': 993, 'pop3s': 995, 'mysql': 3306,
+                 'postgresql': 5432}
+_NFT_WITNESS_PORTS = (54321, 31337, 4444, 1023, 7, 9)
+_NFT_WITNESS_SOURCES = ('198.51.100.23', '203.0.113.77', '192.0.2.99', '100.64.7.7', '9.9.9.9',
+                        '45.33.32.156', '151.101.1.1', '1.1.1.1')
+_NFT_NOT_UNICAST = (ipaddress.ip_network('224.0.0.0/4'), ipaddress.ip_network('255.255.255.255/32'))
+
+
+def _nft_clean(raw: str) -> str:
+    """The line without its comment (`comment "..."`, or `# ...` outside a
+    quoted string)."""
+    line = _NFT_COMMENT_RE.sub('', raw)
+    blank = _NFT_STRING_RE.sub(lambda m: '"' + 'x' * (len(m.group()) - 2) + '"', line)
+    cut = blank.find('#')
+    return (line[:cut] if cut >= 0 else line).strip()
 
 
 def _nft_chains(ruleset: str) -> dict[tuple[str, str, str], list[str]]:
-    """(family, table, chain) -> the chain's lines, quoted strings replaced
-    by "" so that a comment or a name is never read as a keyword."""
+    """(family, table, chain) -> the chain's lines, comments removed.
+    Braces inside quoted strings do not count."""
     chains: dict[tuple[str, str, str], list[str]] = {}
     depth, table, chain = 0, None, None
     for raw in ruleset.splitlines():
-        line = _NFT_STRING_RE.sub('""', raw).strip()
+        line = _nft_clean(raw)
         table_m = _NFT_TABLE_RE.match(line) if depth == 0 else None
         chain_m = _NFT_CHAIN_RE.match(line) if depth == 1 and table else None
         if table_m:
@@ -450,7 +469,8 @@ def _nft_chains(ruleset: str) -> dict[tuple[str, str, str], list[str]]:
             chains[chain] = []
         elif chain is not None and depth >= 2 and line not in ('', '}'):
             chains[chain].append(line)
-        depth += line.count('{') - line.count('}')
+        blank = _NFT_STRING_RE.sub('""', line)
+        depth += blank.count('{') - blank.count('}')
         if depth <= 1:
             chain = None
         if depth <= 0:
@@ -458,59 +478,264 @@ def _nft_chains(ruleset: str) -> dict[tuple[str, str, str], list[str]]:
     return chains
 
 
-def _nft_verdict_only(rule: str) -> tuple[str, str | None] | None:
-    """(verdict, jump target) when the rule has no match for an IPv4
-    packet - only statements and a verdict -, else None (a condition)."""
-    rule = _NFT_COMMENT_RE.sub('', rule)
-    rule = _NFT_STATEMENT_RE.sub('', rule)
-    rule = _NFT_IPV4_ALL_RE.sub('', ' '.join(rule.split()) + ' ').strip()
-    found = _NFT_VERDICT_RE.fullmatch(rule)
-    if not found:
+def _nft_port_spec(token: str) -> tuple[int, int] | None:
+    token = token.strip('"')
+    if token in _NFT_SERVICES:
+        return _NFT_SERVICES[token], _NFT_SERVICES[token]
+    low, _, high = token.partition('-')
+    if low.isdigit() and (not high or high.isdigit()):
+        return int(low), int(high or low)
+    return None
+
+
+def _nft_address_spec(token: str):
+    """An IPv4 network or (first, last) range, None when not IPv4."""
+    token = token.strip('"')
+    try:
+        if '-' in token:
+            first, last = (ipaddress.IPv4Address(part) for part in token.split('-', 1))
+            return first, last
+        return ipaddress.IPv4Network(token, strict=False)
+    except ValueError:
         return None
-    word = found.group(1).split()[0]
-    return ('drop' if word == 'reject' else word), found.group(2)
 
 
-def _nft_fate(chains: dict, key: tuple[str, str, str], depth: int = 0) -> str:
-    """What chain `key` does with an IPv4 packet that matches none of its
-    conditions: 'accept', 'drop', 'return' (ends without a verdict) or
-    'unknown' (a missing chain or a jump loop - proves nothing)."""
+def _nft_in_address(address, spec) -> bool:
+    if isinstance(spec, tuple):
+        return spec[0] <= address <= spec[1]
+    return address in spec
+
+
+def _nft_witness(chains: dict) -> dict | None:
+    """A new TCP connection from a public address to a port, both named by
+    no rule of the ruleset, arriving on an external interface. None when
+    every candidate is named somewhere (`tcp dport 0-65535`)."""
+    ports, addresses = [], []
+    for lines in chains.values():
+        for line in lines:
+            for token in _NFT_TOKEN_RE.findall(line):
+                if (port := _nft_port_spec(token)) is not None:
+                    ports.append(port)
+                if (address := _nft_address_spec(token)) is not None:
+                    addresses.append(address)
+    candidates = (*_NFT_WITNESS_PORTS, *range(49152, 65536), *range(1024, 49152))
+    port = next((p for p in candidates if not any(low <= p <= high for low, high in ports)), None)
+    source = next((a for a in map(ipaddress.IPv4Address, _NFT_WITNESS_SOURCES)
+                   if not any(_nft_in_address(a, spec) for spec in addresses)), None)
+    if port is None or source is None:
+        return None
+    return {'port': port, 'source': source}
+
+
+def _nft_values(tokens: list[str], i: int) -> tuple[list[str], int]:
+    """The value(s) at tokens[i]: one token, a comma list, or a `{ ... }` set."""
+    if i < len(tokens) and tokens[i] == '{':
+        end = tokens.index('}', i) if '}' in tokens[i:] else len(tokens)
+        return [t for t in tokens[i + 1:end] if t != ','], end + 1
+    values = []
+    while i < len(tokens):
+        values.append(tokens[i])
+        if i + 1 < len(tokens) and tokens[i + 1] == ',':
+            i += 2
+            continue
+        return values, i + 1
+    return values, i
+
+
+def _nft_iface_internal(value: str) -> bool:
+    name = value.strip('"')
+    if name.endswith('*'):
+        return any(name[:-1].startswith(p) for p in _NFT_INTERNAL_PREFIXES)
+    return name in _NFT_INTERNAL_IFACES or name.startswith(_NFT_INTERNAL_PREFIXES)
+
+
+def _nft_matches(key: str, values: list[str], w: dict) -> bool | None:
+    """Whether the witness has one of `values` for `key` (None: unknown)."""
+    plain = [v.strip('"') for v in values]
+    if key == 'ct state':
+        return 'new' in plain
+    if key == 'ct status':
+        return False
+    if key == 'meta nfproto':
+        return 'ipv4' in plain
+    if key == 'meta protocol':
+        return 'ip' in plain
+    if key in ('meta l4proto', 'ip protocol'):
+        return any(v in ('tcp', '6') for v in plain)
+    if key == 'meta pkttype':
+        return 'host' in plain
+    if key == 'ip version':
+        return '4' in plain
+    if key == 'fib daddr type':
+        return 'local' in plain
+    if key == 'iifname':
+        return False if all(_nft_iface_internal(v) for v in values) else None
+    if key == 'ip saddr':
+        specs = [_nft_address_spec(v) for v in plain]
+        return None if None in specs else any(_nft_in_address(w['source'], spec) for spec in specs)
+    if key == 'ip daddr':
+        specs = [_nft_address_spec(v) for v in plain]
+        if any(isinstance(spec, ipaddress.IPv4Network) and spec.prefixlen == 0 for spec in specs):
+            return True
+        if specs and None not in specs and all(
+                isinstance(spec, ipaddress.IPv4Network) and any(spec.subnet_of(n) for n in _NFT_NOT_UNICAST)
+                for spec in specs):
+            return False
+        return None  # the host's own address is not known
+    if key == 'tcp dport':
+        specs = [_nft_port_spec(v) for v in plain]
+        return None if None in specs else any(low <= w['port'] <= high for low, high in specs)
+    return None
+
+
+# expression -> its key in _nft_matches(); the longest form first
+_NFT_KEYS = (('fib', 'daddr', 'type'), ('ct', 'state'), ('ct', 'status'), ('meta', 'nfproto'),
+             ('meta', 'protocol'), ('meta', 'l4proto'), ('meta', 'pkttype'), ('meta', 'iifname'),
+             ('meta', 'iif'), ('ip', 'protocol'), ('ip', 'version'), ('ip', 'saddr'), ('ip', 'daddr'),
+             ('tcp', 'dport'), ('th', 'dport'), ('iifname',), ('iif',))
+_NFT_KEY_NAMES = {('meta', 'iifname'): 'iifname', ('meta', 'iif'): 'iifname', ('iif',): 'iifname',
+                  ('th', 'dport'): 'tcp dport'}
+
+
+def _nft_vmap_verdict(key: str, entries: list[str], w: dict) -> tuple[bool | None, list[str] | None]:
+    """(matched, verdict) of a verdict map for the witness."""
+    pairs, i = [], 0
+    while i < len(entries):
+        if i + 2 < len(entries) and entries[i + 1] == ':':
+            verdict = [entries[i + 2]]
+            if entries[i + 2] in ('jump', 'goto') and i + 3 < len(entries):
+                verdict.append(entries[i + 3])
+            pairs.append((entries[i], verdict))
+            i += 2 + len(verdict)
+        else:
+            i += 1
+    for value, verdict in pairs:
+        hit = _nft_matches(key, [value], w)
+        if hit is None:
+            return None, None
+        if hit:
+            return True, verdict
+    return False, None
+
+
+def _nft_rule(line: str, w: dict) -> tuple[str, list[str] | None]:
+    """('no' | 'yes' | 'maybe', verdict tokens) of one rule for the witness:
+    'no' when an expression is surely false for it, 'yes' when every one is
+    surely true, 'maybe' otherwise. A rule without a verdict is 'no'."""
+    tokens = _NFT_TOKEN_RE.findall(line)
+    known, verdict, i = [], None, 0
+    # after a token that is not understood, everything up to the verdict is
+    # part of that unknown expression: no value of it is read as a match
+    start, depth = True, 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in ('{', '}'):
+            depth += 1 if tok == '{' else -1
+            i += 1
+            continue
+        if depth:  # inside the set or map of an unknown expression
+            i += 1
+            continue
+        if tok == 'counter':
+            i += 5 if i + 1 < len(tokens) and tokens[i + 1] == 'packets' else 1
+            start = True
+            continue
+        if tok == 'log':
+            i += 1
+            while i < len(tokens) and tokens[i] in _NFT_LOG_OPTIONS:
+                i += 2
+            start = True
+            continue
+        if tok in _NFT_VERDICTS:
+            verdict = tokens[i:i + 2] if tok in ('jump', 'goto') else [tok]
+            break
+        if tok == 'vmap':
+            verdict = ['queue']  # a map keyed by an unknown expression: an unknown verdict
+            break
+        if not start:
+            i += 1
+            continue
+        if tok in _NFT_NOT_IPV4_TCP:
+            return 'no', None
+        form = next((k for k in _NFT_KEYS if tuple(tokens[i:i + len(k)]) == k), None)
+        if form is None:
+            known.append(None)  # limit, marks, named sets, tcp flags, ...: unknown
+            start = False
+            i += 1
+            continue
+        key = _NFT_KEY_NAMES.get(form, ' '.join(form))
+        i += len(form)
+        negated = i < len(tokens) and tokens[i] == '!='
+        if i < len(tokens) and tokens[i] in ('!=', '=='):
+            i += 1
+        if i < len(tokens) and tokens[i] == 'vmap':
+            entries, i = _nft_values(tokens, i + 1)
+            hit, verdict = _nft_vmap_verdict(key, entries, w)
+            if hit is False:
+                return 'no', None
+            if hit is None:
+                verdict = ['queue']  # an unknown verdict
+            break
+        values, i = _nft_values(tokens, i)
+        hit = _nft_matches(key, values, w)
+        known.append(None if hit is None else hit != negated)
+    if verdict is None or False in known:
+        return 'no', None
+    return ('yes' if all(known) else 'maybe'), verdict
+
+
+def _nft_fate(chains: dict, key: tuple[str, str, str], w: dict, depth: int = 0) -> set[str]:
+    """Every way chain `key` can end for the witness: 'accept', 'drop',
+    'return' (no verdict) or 'unknown' (queue, a missing chain, a loop)."""
     if depth > _NFT_MAX_DEPTH or key not in chains:
-        return 'unknown'
-    for rule in chains[key]:
-        if rule.startswith('type '):
-            continue  # a base chain's header: its policy is read by the caller
-        verdict = _nft_verdict_only(rule)
-        if verdict is None or verdict[0] == 'continue':
-            continue  # a condition this packet does not match
-        word, target = verdict
-        if word in ('accept', 'drop', 'return'):
-            return word
-        fate = _nft_fate(chains, (key[0], key[1], target), depth + 1)
-        if fate != 'return':
-            return fate
-        if word == 'goto':
-            return 'return'  # after a goto target, this chain is done too
-    return 'return'
+        return {'unknown'}
+    ends: set[str] = set()
+    for line in chains[key]:
+        if line.startswith('type '):
+            continue  # a base chain's header: the caller applies its policy
+        match, verdict = _nft_rule(line, w)
+        if match == 'no' or verdict[0] == 'continue':
+            continue
+        word = verdict[0]
+        if word in ('accept', 'drop', 'reject', 'return'):
+            outcome = {'drop' if word == 'reject' else word}
+        elif word in ('jump', 'goto') and len(verdict) == 2:
+            sub = _nft_fate(chains, (key[0], key[1], verdict[1]), w, depth + 1)
+            outcome = sub - {'return'}
+            if 'return' in sub:
+                outcome |= {'go on'} if word == 'jump' else {'return'}
+        else:
+            outcome = {'unknown'}
+        if match == 'maybe':
+            outcome |= {'go on'}
+        ends |= outcome - {'go on'}
+        if 'go on' not in outcome:
+            return ends
+    return ends | {'return'}
 
 
-def _nft_input_filters(ruleset: str) -> list[str]:
-    """'family table chain' of every IPv4 input base chain that drops an
-    IPv4 packet matching none of its conditions (default deny). A packet
-    passes every input base chain and drop is final, so one such chain
-    means the input path is not open. A conditional drop is not enough."""
+def _nft_input_filters(ruleset: str) -> tuple[list[str], list[str]]:
+    """IPv4 input base chains ('family table chain') that surely drop the
+    witness, and those whose result for it is not certain. A packet passes
+    every input base chain and drop is final, so one chain that surely
+    drops it means the input path is not open."""
     chains = _nft_chains(ruleset)
-    filtering = []
+    bases = []
     for key, lines in chains.items():
         header = next((line for line in lines if _NFT_INPUT_HOOK_RE.match(line)), None)
-        if key[0] not in _NFT_IPV4_FAMILIES or header is None:
-            continue
-        fate = _nft_fate(chains, key)
-        if fate == 'return':
-            fate = 'drop' if _NFT_POLICY_DROP_RE.search(header) else 'accept'
-        if fate == 'drop':
+        if key[0] in _NFT_IPV4_FAMILIES and header is not None:
+            bases.append((key, 'drop' if _NFT_POLICY_DROP_RE.search(header) else 'accept'))
+    witness = _nft_witness(chains) if bases else None
+    if bases and witness is None:
+        return [], [' '.join(key) for key, _ in bases]
+    filtering, uncertain = [], []
+    for key, policy in bases:
+        ends = {policy if end == 'return' else end for end in _nft_fate(chains, key, witness)}
+        if ends == {'drop'}:
             filtering.append(' '.join(key))
-    return filtering
+        elif ends != {'accept'}:
+            uncertain.append(' '.join(key))
+    return filtering, uncertain
 
 
 def _iptables_backend(evidence) -> str | None:
@@ -659,10 +884,10 @@ def _iptables_verdict(evidence) -> tuple[str, dict]:
                                                    'are present and were not read (read them with iptables-legacy -S)'}
     nft = evidence.nftables_live
     nftables_checked = nft.completed and nft.exit_code == 0
-    chains = _nft_input_filters(nft.stdout) if nftables_checked else []
+    chains, uncertain = _nft_input_filters(nft.stdout) if nftables_checked else ([], [])
     if chains:
         return 'FILTERED_BY_NFTABLES', {**open_ctx, 'chains': chains}
-    return 'OPEN', {**open_ctx, 'nftables_checked': nftables_checked}
+    return 'OPEN', {**open_ctx, 'nftables_checked': nftables_checked, 'nftables_uncertain': uncertain}
 
 
 def audit_firewall(ssh: SSHExecutor) -> dict:
@@ -756,6 +981,9 @@ def audit_firewall(ssh: SSHExecutor) -> dict:
                   else 'no filtering rules')
         unchecked = ('' if ipt_ctx['nftables_checked'] else
                      '; the nftables ruleset could not be read, so its input chains were not checked')
+        if ipt_ctx.get('nftables_uncertain'):
+            unchecked += ('; nftables input chain(s) not fully evaluated: '
+                          + ', '.join(ipt_ctx['nftables_uncertain']))
         findings.append(_finding('high', 'iptables INPUT is effectively open',
                                  f'{view}policy {ipt_ctx["policy"]}, {reason} — everything is allowed{unchecked}',
                                  id='FW-IPT-001'))

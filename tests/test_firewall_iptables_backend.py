@@ -433,3 +433,16 @@ def test_iptables_version_is_collected_without_sudo():
     assert evidence.iptables_version.stdout == 'iptables v1.8.10 (nf_tables)'
     [cmd] = [c for c in fake.calls if 'iptables -V' in c]
     assert 'sudo' not in cmd
+
+
+def test_high_names_the_chains_that_could_not_be_fully_evaluated():
+    named_set = NOT_FILTERING['named set of sources']
+    finding = _iptables_finding(audit_firewall(_fake(named_set)))
+    assert finding['severity'] == 'high'
+    assert 'not fully evaluated: inet filter input' in finding['detail']
+
+
+def test_a_rule_that_surely_accepts_the_witness_is_not_uncertain():
+    finding = _iptables_finding(audit_firewall(_fake(NOT_FILTERING['new connections accepted'])))
+    assert finding['severity'] == 'high'
+    assert 'not fully evaluated' not in finding['detail']
