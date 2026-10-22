@@ -157,6 +157,8 @@ def _init_database(ssh: SSHExecutor, host: str) -> dict:
         {'name': 'sudo_password', 'type': 'password', 'label': 'Sudo password (if sudo asks for one)', 'default': ''},
         {'name': 'mode', 'type': 'select', 'label': 'Mode',
          'options': ['check for changes', 'reinitialize the database'],
+         # the README's `--mode check` / `--mode init` (docs/research/param_value_types.md)
+         'aliases': {'check': 'check for changes', 'init': 'reinitialize the database'},
          'default': 'check for changes'},
         {'name': 'auto_install', 'type': 'checkbox', 'label': 'Install aide if missing',
          'default': False},
