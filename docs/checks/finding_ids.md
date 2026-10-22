@@ -133,3 +133,69 @@ Existing catalogues (`KRN-*`, `NGX-*`, `SSH-*`) live in `kernel_hardening.md`,
 | DNS-TXT-001 | low | service label | third-party service detected via TXT |
 
 `ok` and `info` findings carry no id: the trend layer does not count them.
+
+# Second migration
+
+Contract: `docs/research/finding_ids_second_migration.md` (same format,
+subject and stability rules as above).
+
+## aide_check
+
+| Control id | Severities | Subject | Control |
+|---|---|---|---|
+| AIDE-FILE-001 | medium | — | files were added |
+| AIDE-FILE-002 | medium | — | files were removed |
+| AIDE-FILE-003 | high | — | files were changed |
+
+## cert_transparency
+
+| Control id | Severities | Subject | Control |
+|---|---|---|---|
+| CT-HOST-001 | medium | — | potentially sensitive hostnames in the CT logs |
+| CT-ISS-001 | high | — | certificates from an unexpected issuer |
+| CT-WILD-001 | low | — | wildcard certificates in use |
+
+## cve_audit
+
+| Control id | Severities | Subject | Control |
+|---|---|---|---|
+| CVE-VULN-001 | critical, high, medium, low | package, vulnerability id | a known vulnerability affects an installed package |
+
+## log_discovery
+
+| Control id | Severities | Subject | Control |
+|---|---|---|---|
+| LOG-SRC-001 | medium | source type | a core system log source is missing |
+| LOG-SRC-002 | low | source type | a log source exists but is empty |
+| LOG-ROT-001 | low | source type | a log source has no logrotate configuration |
+| LOG-NGX-001 | medium | — | no active nginx logs and no rotation history |
+| LOG-JRN-001 | medium | — | could not determine the systemd journal state |
+
+## lynis_audit
+
+| Control id | Severities | Subject | Control |
+|---|---|---|---|
+| LYN-WARN-001 | high | Lynis test id | a Lynis warning |
+| LYN-SUGG-001 | low | Lynis test id | a Lynis suggestion |
+
+## rootkit_check
+
+| Control id | Severities | Subject | Control |
+|---|---|---|---|
+| RKT-RKH-001 | medium | — | an rkhunter warning (no subject: the text carries run details such as PIDs) |
+| RKT-CHK-001 | high | chkrootkit test | chkrootkit reports INFECTED |
+| RKT-CHK-002 | low | chkrootkit test | chkrootkit: vulnerable but disabled |
+| RKT-SCAN-001 | low | — | the rootkit scan is incomplete |
+
+## sql_injection
+
+| Control id | Severities | Subject | Control |
+|---|---|---|---|
+| SQLI-PNT-001 | low | — | input points found |
+| SQLI-INJ-001 | high | parameter | a parameter is injectable |
+| SQLI-INJ-002 | high | — | injection types |
+| SQLI-DBMS-001 | medium | — | the DBMS was identified |
+| SQLI-SCAN-001 | medium | — | the active scan was not started (authorization not confirmed) |
+| SQLI-SCAN-002 | low | — | sqlmap found no parameters to test |
+| SQLI-SCAN-003 | low | — | sqlmap finished with no clear verdict |
+| SQLI-SCAN-004 | low | — | sqlmap is unavailable |

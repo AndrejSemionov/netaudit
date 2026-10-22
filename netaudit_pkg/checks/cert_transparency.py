@@ -139,7 +139,7 @@ def check_cert_transparency(domain: str = 'example.com', expected_issuer_contain
             ', '.join(interesting[:20]) + (' …' if len(interesting) > 20 else '') +
             ' — a hostname matching a keyword like staging/dev/admin doesn\'t by itself mean it was '
             'forgotten or is exposed; verify whether it\'s still needed and properly access-controlled',
-            confidence='low'
+            confidence='low', id='CT-HOST-001',
         ))
 
     # ---- unexpected issuer ----
@@ -153,7 +153,8 @@ def check_cert_transparency(domain: str = 'example.com', expected_issuer_contain
             findings.append(_finding(
                 'high',
                 f'certificates from an unexpected issuer ({len(unexpected)} host(s))',
-                detail + (' …' if len(unexpected) > 10 else '')
+                detail + (' …' if len(unexpected) > 10 else ''),
+                id='CT-ISS-001',
             ))
 
     # ---- wildcard certificates - not a finding on its own, but useful to know ----
@@ -162,7 +163,8 @@ def check_cert_transparency(domain: str = 'example.com', expected_issuer_contain
         findings.append(_finding(
             'low',
             f'wildcard certificates in use ({len(wildcard_hosts)})',
-            ', '.join(wildcard_hosts) + ' — a compromised private key affects all subdomains at once'
+            ', '.join(wildcard_hosts) + ' — a compromised private key affects all subdomains at once',
+            id='CT-WILD-001',
         ))
 
     if not findings:

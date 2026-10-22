@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Stable finding ids for the remaining state checks: `aide_check`,
+  `cert_transparency`, `cve_audit` (one id per package and vulnerability,
+  e.g. `CVE-VULN-001:nginx:CVE-2023-44487`), `log_discovery`, `lynis_audit`
+  (by Lynis test id), `rootkit_check` and `sql_injection`. Trends, the AI
+  context and Telegram notifications now say which of their problems was
+  fixed, appeared or persists, not only that the count changed; titles with
+  changing numbers (`files changed: 12`) no longer matter. Only an `id` key
+  is added; titles, severities and order are unchanged. The catalogue is
+  `docs/checks/finding_ids.md`.
 - Trends no longer call a finding "resolved" when the check settings changed
   between the two compared runs: for example a subdomain dropped from the
   `dns_audit` list, a directory dropped from `backup_check`, a relaxed

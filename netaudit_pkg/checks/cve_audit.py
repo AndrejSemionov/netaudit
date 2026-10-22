@@ -57,6 +57,7 @@ from datetime import datetime, timedelta
 import httpx
 
 from .. import storage
+from ..findings import subject_id
 from ..registry import register
 from ..ssh import HostKeyMismatchError, SSHExecutor
 from ..ssh_utils import run_command_with_exit_code
@@ -919,6 +920,9 @@ def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> 
                 'cve': vid, 'title': details.get('summary', ''),
                 'fixed_versions': details.get('fixed_versions', []),
                 'references': details.get('references', []),
+                # the installed version is not part of it: an upgrade that is
+                # still vulnerable keeps the id (docs/research/finding_ids_second_migration.md)
+                'id': subject_id('CVE-VULN-001', p['name'], vid),
             })
 
     return {

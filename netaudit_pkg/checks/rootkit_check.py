@@ -26,6 +26,7 @@ from __future__ import annotations
 import re
 
 from ..findings import finding as _finding
+from ..findings import subject_id
 from ..registry import CONFIRM_MODIFY, confirm_param, register
 from ..ssh import HostKeyMismatchError, SSHExecutor
 from ..ssh_utils import describe_sudo_refusal, run_sudo_with_exit_code
@@ -52,8 +53,10 @@ def _parse_rkhunter(raw: str) -> list[dict]:
         line = line.strip()
         if line.startswith('Warning:'):
             text = line[len('Warning:'):].strip()
+            # one id for every warning: the text carries run details such
+            # as "(PID 1022)" (docs/research/finding_ids_second_migration.md)
             findings.append(_finding('medium', text, confidence='low',
-                                      requires_manual_verification=True))
+                                      requires_manual_verification=True, id='RKT-RKH-001'))
     return findings
 
 def _run_rkhunter(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
@@ -106,10 +109,12 @@ def _parse_chkrootkit(raw: str) -> list[dict]:
             findings.append(_finding('high', f'{name}: {status}',
                                       'verify manually before drawing conclusions — false positives are known '
                                       '(e.g. a legitimate bindshell on non-standard ports)',
-                                      confidence='low', requires_manual_verification=True))
+                                      confidence='low', requires_manual_verification=True,
+                                      id=subject_id('RKT-CHK-001', name)))
         elif status.startswith('Vulnerable but disabled'):
             findings.append(_finding('low', f'{name}: {status}',
-                                      'the command is vulnerable but not in use (not running/not in config)'))
+                                      'the command is vulnerable but not in use (not running/not in config)',
+                                      id=subject_id('RKT-CHK-002', name)))
     return findings
 
 def _run_chkrootkit(ssh: SSHExecutor) -> tuple[list[dict], str | None]:
@@ -243,7 +248,7 @@ def check_rootkit(host='', user='root', port=22, key_path='', password='', sudo_
 
     if not all_findings and errors:
         all_findings.append(_finding('low', 'rootkit scan incomplete', '; '.join(errors),
-                                     requires_manual_verification=True))
+                                     requires_manual_verification=True, id='RKT-SCAN-001'))
     elif not all_findings:
         all_findings.append(_finding('ok', 'no signs of rootkits found'))
 

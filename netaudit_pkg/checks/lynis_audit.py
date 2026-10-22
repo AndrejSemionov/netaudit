@@ -13,6 +13,7 @@ Doesn't change anything on the server - lynis itself is read-only in audit mode.
 from __future__ import annotations
 
 from ..findings import finding as _finding
+from ..findings import subject_id
 from ..registry import CONFIRM_MODIFY, confirm_param, register
 from ..ssh import HostKeyMismatchError, SSHExecutor
 from ..ssh_utils import describe_sudo_refusal, run_sudo_with_exit_code
@@ -80,10 +81,12 @@ def _to_findings(parsed: dict) -> list[dict]:
     findings = []
     # Lynis warnings are real problems - map to high
     for test_id, text in parsed['warnings']:
-        findings.append(_finding('high', text.strip(), f'Lynis [{test_id}]'))
+        findings.append(_finding('high', text.strip(), f'Lynis [{test_id}]',
+                                 id=subject_id('LYN-WARN-001', test_id)))
     # suggestions are improvement recommendations - map to low
     for test_id, text in parsed['suggestions']:
-        findings.append(_finding('low', text.strip(), f'Lynis [{test_id}]'))
+        findings.append(_finding('low', text.strip(), f'Lynis [{test_id}]',
+                                 id=subject_id('LYN-SUGG-001', test_id)))
     if not findings:
         findings.append(_finding('ok', 'Lynis found no issues'))
     return findings

@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from ..findings import finding as _finding
+from ..findings import subject_id
 from ..log_discovery import (
     JournalEvidence,
     LogDiscoveryEvidence,
@@ -363,7 +364,7 @@ def build_findings(report: LogDiscoveryReport) -> list[dict]:
                 findings.append(_finding(
                     'medium', f'{label} not found',
                     'a core system log source is missing — check whether rsyslog is installed and running',
-                    check='log_discovery',
+                    check='log_discovery', id=subject_id('LOG-SRC-001', source.source_type.value),
                 ))
             else:
                 findings.append(_finding(
@@ -384,7 +385,7 @@ def build_findings(report: LogDiscoveryReport) -> list[dict]:
             findings.append(_finding(
                 'low', f'{label} exists but is empty',
                 'no data recorded yet, or the service that writes it is inactive',
-                check='log_discovery',
+                check='log_discovery', id=subject_id('LOG-SRC-002', source.source_type.value),
             ))
         else:
             findings.append(_finding(
@@ -400,7 +401,7 @@ def build_findings(report: LogDiscoveryReport) -> list[dict]:
                 findings.append(_finding(
                     'low', f'{label} has no logrotate configuration',
                     'this file will grow unbounded — add a logrotate.d entry',
-                    check='log_discovery',
+                    check='log_discovery', id=subject_id('LOG-ROT-001', source.source_type.value),
                 ))
 
     active_nginx = [s for s in report.nginx_sources if s.state == LogFileState.ACTIVE]
@@ -446,7 +447,7 @@ def build_findings(report: LogDiscoveryReport) -> list[dict]:
             'medium', 'No active nginx logs and no rotation history found',
             'neither current nor rotated nginx log files show any data — verify nginx logging is configured '
             'and the service is actually writing logs',
-            check='log_discovery',
+            check='log_discovery', id='LOG-NGX-001',
         ))
 
     for decoy in decoy_nginx:
@@ -477,7 +478,7 @@ def build_findings(report: LogDiscoveryReport) -> list[dict]:
         findings.append(_finding(
             'medium', 'could not determine systemd journal state',
             'journalctl --disk-usage did not return a confirmed result',
-            check='log_discovery',
+            check='log_discovery', id='LOG-JRN-001',
         ))
 
     return findings
