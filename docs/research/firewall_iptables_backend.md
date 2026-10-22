@@ -61,11 +61,23 @@ namespace; which stream it goes to is UNKNOWN, so both are read.
    - `FirewallEvidence` gets `iptables_version: CommandResult | None = None`:
      `iptables -V` without sudo (it needs none and changes nothing).
 2. **Which nftables chains filter input** (`server_security.py`, pure
-   function on the `nft list ruleset` text): a base chain of family `ip` or
-   `inet` with `hook input` filters when its policy is `drop`, or when it, or
-   a chain it reaches by `jump`/`goto`, has a `drop` or `reject` statement.
-   A conditional drop counts as filtering, the same way the iptables verdict
-   counts conditional rules. Text in `comment "..."` is ignored.
+   function on the `nft list ruleset` text). A base chain of family `ip` or
+   `inet` with `hook input` filters when **an IPv4 packet that matches none
+   of its conditions is dropped**: the rules are walked in order, a rule
+   with any match is skipped (that packet does not match it), and a rule
+   that is only a verdict decides - `accept` (open), `drop`/`reject`
+   (filtered), `jump X` (walk X, go on if X ends without a verdict),
+   `goto X` (walk X, then this chain ends), `return`. `counter` and `log`
+   are statements, not matches; `meta nfproto ipv4` / `meta protocol ip`
+   match every IPv4 packet. At the end of the chain its policy decides.
+   Quoted strings (`comment "..."`, `iifname "drop0"`) are never read as
+   keywords. A missing chain or a jump loop proves nothing.
+   So a conditional drop (`ct state invalid drop`, `meta nfproto ipv6
+   drop`, `ip6 saddr ::1 drop`) does not make input filtered, and a drop
+   after an unconditional `accept` is never reached (review before GREEN,
+   GPT/Codex). Known limit: a match that every packet satisfies but that is
+   not written as one of the above (`ip saddr 0.0.0.0/0 accept`) is read as
+   a condition.
 3. **`_iptables_verdict()`**, when the iptables view is open (policy ACCEPT
    and no rules, or an unconditional ACCEPT):
    - the output (stdout or stderr) carries the iptables-legacy warning →
@@ -99,13 +111,20 @@ namespace; which stream it goes to is UNKNOWN, so both are read.
 - The live case above: nftables `inet filter input` with `policy drop`, and
   `iptables -S` with the three ACCEPT policies → no HIGH, the iptables
   finding is `ok` and names `inet filter input`.
-- Filtering found through `jump` (firewalld style: base chain policy accept,
-  `jump filter_INPUT_ZONES`, a `reject` in the target chain) and through a
-  `drop` rule in the base chain itself.
-- Not filtering: an input chain with policy accept and only accept rules;
-  a chain hooked on `forward` or `output`; a `drop` only in a `comment`;
-  an `ip6` table; a regular chain nobody jumps to → HIGH as before
-  (including the existing "backends do not suppress each other" test).
+- Filtering: firewalld style (base chain policy accept, `jump
+  filter_INPUT_ZONES`, `goto filter_IN_public`, then the final `reject` of
+  the base chain), also with a trusted zone reached by a conditional `goto`
+  whose chain is a bare `accept`; an unconditional `reject` in a chain
+  reached by `jump`; a final `counter ... drop` or `log prefix "..." drop`
+  in a policy-accept chain; `policy drop` with conditional accepts.
+- Not filtering (HIGH as before): policy accept with only conditional rules,
+  including `ct state invalid drop`, `meta nfproto ipv6 drop`,
+  `ip6 saddr ::1 drop`; `drop` only in a comment or a quoted name;
+  `accept` (or `counter accept`, `meta nfproto ipv4 accept`) before the drop
+  or the drop policy; a conditional reject in a jumped-to chain; chains on
+  `forward`/`output`; an `ip6` table; a regular chain nobody jumps to; a
+  jump to a missing chain or a jump loop; nat-only (docker); the existing
+  "backends do not suppress each other" test.
 - The iptables-legacy warning in stdout, and in stderr → FW-IPT-002 with the
   reason, not HIGH.
 - nftables ruleset not readable → HIGH as before, the detail says the

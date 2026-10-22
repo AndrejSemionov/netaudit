@@ -45,22 +45,86 @@ JUMP_TO_REJECT = '''table ip guard {
 		jump checks
 	}
 	chain checks {
-		ip saddr 192.0.2.0/24 reject
+		tcp dport 22 accept
+		reject
 	}
 }'''
 
-DROP_RULE = '''table ip guard {
+FILTERING = {
+    'final counter drop': '''table ip guard {
 	chain input {
 		type filter hook input priority 0; policy accept;
-		ct state invalid counter packets 0 bytes 0 drop
+		ct state established,related accept
+		counter packets 12 bytes 3400 drop
 	}
-}'''
+}''',
+    'log with a quoted drop prefix, then drop': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy accept;
+		tcp dport 22 accept
+		log prefix "drop: " drop
+	}
+}''',
+    'firewalld with a trusted docker zone': '''table inet firewalld {
+	chain filter_INPUT {
+		type filter hook input priority filter + 10; policy accept;
+		ct state established,related accept
+		jump filter_INPUT_ZONES
+		reject with icmpx admin-prohibited
+	}
+	chain filter_INPUT_ZONES {
+		iifname "docker0" goto filter_IN_docker
+		goto filter_IN_public
+	}
+	chain filter_IN_docker {
+		accept
+	}
+	chain filter_IN_public {
+		tcp dport 22 accept
+	}
+}''',
+}
 
 NOT_FILTERING = {
     'accept only': '''table inet filter {
 	chain input {
 		type filter hook input priority filter; policy accept;
 		tcp dport 22 accept
+	}
+}''',
+    'conditional drop only': '''table ip guard {
+	chain input {
+		type filter hook input priority 0; policy accept;
+		ct state invalid counter packets 0 bytes 0 drop
+	}
+}''',
+    'IPv6-only drops in inet': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy accept;
+		meta nfproto ipv6 drop
+		ip6 saddr ::1 drop
+	}
+}''',
+    'unconditional accept before the drop': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		counter accept
+		drop
+	}
+}''',
+    'IPv4-wide accept before the drop policy': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		meta nfproto ipv4 accept
+	}
+}''',
+    'conditional reject in a jumped-to chain': '''table ip guard {
+	chain input {
+		type filter hook input priority 0; policy accept;
+		jump checks
+	}
+	chain checks {
+		ip saddr 192.0.2.0/24 reject
 	}
 }''',
     'forward and output hooks': '''table inet filter {
@@ -71,10 +135,11 @@ NOT_FILTERING = {
 		type filter hook output priority filter; policy drop;
 	}
 }''',
-    'drop only in a comment': '''table inet filter {
+    'drop only in a comment or a name': '''table inet filter {
 	chain input {
 		type filter hook input priority filter; policy accept;
 		tcp dport 22 accept comment "drop the rest later"
+		iifname "drop0" accept
 	}
 }''',
     'ip6 table': '''table ip6 filter {
@@ -88,6 +153,24 @@ NOT_FILTERING = {
 	}
 	chain unused {
 		drop
+	}
+}''',
+    'jump to a missing chain': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		jump nowhere
+	}
+}''',
+    'jump loop': '''table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		jump a
+	}
+	chain a {
+		jump b
+	}
+	chain b {
+		jump a
 	}
 }''',
     'nat only (docker)': '''table ip nat {
@@ -131,15 +214,16 @@ def test_firewalld_style_reject_in_the_base_chain_filters_input():
     assert ctx['chains'] == ['inet firewalld filter_INPUT']
 
 
-def test_reject_reached_by_jump_filters_input():
+def test_unconditional_reject_reached_by_jump_filters_input():
     verdict, ctx = _iptables_verdict(_evidence(nft=_cr(stdout=JUMP_TO_REJECT)))
     assert verdict == 'FILTERED_BY_NFTABLES'
     assert ctx['chains'] == ['ip guard input']
 
 
-def test_drop_rule_in_the_base_chain_filters_input():
-    verdict, _ = _iptables_verdict(_evidence(nft=_cr(stdout=DROP_RULE)))
-    assert verdict == 'FILTERED_BY_NFTABLES'
+def test_rulesets_that_filter_input():
+    for name, ruleset in FILTERING.items():
+        verdict, _ = _iptables_verdict(_evidence(nft=_cr(stdout=ruleset)))
+        assert verdict == 'FILTERED_BY_NFTABLES', name
 
 
 def test_rulesets_that_do_not_filter_input_keep_open():
