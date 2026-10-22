@@ -67,11 +67,14 @@ affected; only the CLI and direct API calls are.
    | Type | Accepted | Result |
    |---|---|---|
    | `checkbox` | `true`/`false`; text `true/false`, `yes/no`, `1/0`, `on/off` (any case, spaces around ignored); integer `1`/`0` | `True` / `False` |
-   | `number` | an integer or a finite float (not `True`/`False`); text that Python reads as such a number | `int` when the value is whole, otherwise `float` |
+   | `number` | an integer or a float within the float range and finite (not `True`/`False`); text that Python reads as such a number | `int` when the value is whole, otherwise `float` |
    | `select` | one of `options`, exactly; or a name from the parameter's `aliases` | the option (an alias becomes its option) |
    | anything else (`text`, `password`, ...) | anything | unchanged |
 
-   Everything else is refused, including an empty value and `None`. A select
+   Everything else is refused, including an empty value and `None`. An
+   integer beyond the float range (`10 ** 310`, or 311 digits of text) is
+   refused too: `math.isfinite()` and `trends._setting()` convert to float, and
+   no check uses such a number (review #49 R1). A select
    without `options` is not checked. A number's range (port 1-65535, lines
    above 0) stays the check's business, as before.
 
@@ -120,7 +123,9 @@ affected; only the CLI and direct API calls are.
    - `text` and `password` values; unknown parameter names (the CLI refuses
      them since #46; the Web API passes them on and the check reports the
      error, as before); a check id the registry does not know.
-   - Trends: `trends._setting()` keeps `bool(value)` for a checkbox. An old CLI
+   - Trends: `trends._setting()` keeps `bool(value)` for a checkbox, and reads
+     a saved number beyond the float range as text instead of crashing (an old
+     CLI report could hold one: `--lines` with 311 digits became an `int`). An old CLI
      report with `'false'` ran the check as `True`, so `bool('false') ==
      True` is what that run did; the first new run with a real `False`
      shows `params_changed` and moves the gone ids to `not_evaluated`

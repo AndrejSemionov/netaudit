@@ -67,7 +67,8 @@ def param_value(param: dict, value):
     from the command line or a string from an API request never reaches a
     check as truthy text ('false') or as a shell fragment ('5; id').
 
-    checkbox -> bool, number -> int (whole) or float, select -> one of
+    checkbox -> bool, number -> int (whole) or float within the float
+    range (trends compare numbers as floats), select -> one of
     `options` (a name from `aliases` becomes its option). Other types are
     returned unchanged; the range of a number is the check's business.
     Raises ValueError saying what the parameter takes - never with the value
@@ -91,7 +92,11 @@ def param_value(param: dict, value):
                 number = int(text) if WHOLE_NUMBER.fullmatch(text) else float(text)
             except ValueError:
                 number = None
-        if number is None or not math.isfinite(number):
+        try:
+            finite = number is not None and math.isfinite(number)
+        except OverflowError:  # an int beyond the float range (review #49 R1)
+            finite = False
+        if not finite:
             raise ValueError('takes a number')
         return int(number) if number == int(number) else number
     if kind == 'select' and param.get('options'):
