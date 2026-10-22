@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Firewall audit (`server_audit`): "iptables INPUT is effectively open"
+  (FW-IPT-001, high) is no longer reported when the input is filtered by
+  nftables. With the nf_tables backend, the Debian and Ubuntu default,
+  `iptables -S` shows only the iptables-nft tables, so a host with a native
+  nftables or firewalld firewall got a false HIGH. Now it is "ok" and names
+  the nftables chain that drops input by default. Only a default-deny chain
+  counts: a drop for some packets (`ct state invalid drop`) or for IPv6 only
+  does not. When `iptables -S` warns about unread iptables-legacy tables,
+  the result is "could not determine" (FW-IPT-002). The detail names the
+  backend (`iptables -V`). If the nftables ruleset cannot be read, the HIGH
+  stays and the detail says so.
+
 - Trends no longer call a finding "resolved" when the check settings changed
   between the two compared runs: for example a subdomain dropped from the
   `dns_audit` list, a directory dropped from `backup_check`, a relaxed

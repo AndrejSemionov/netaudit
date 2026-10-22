@@ -410,6 +410,116 @@ def audit_fail2ban(ssh: SSHExecutor, fail2ban_mode: str = 'client') -> dict:
 # rule is conditional (e.g. '-p tcp --dport 22 -j ACCEPT' is fine) and
 # does not match this pattern.
 _IPTABLES_UNCONDITIONAL_ACCEPT_RE = re.compile(r'^-A INPUT\s+-j ACCEPT\s*$')
+# iptables-nft's own warning (`strings xtables-nft-multi`): legacy tables
+# exist that `iptables -S` with the nf_tables backend does not show
+_IPTABLES_LEGACY_WARNING = 'tables-legacy tables present'
+_IPTABLES_BACKEND_RE = re.compile(r'\((nf_tables|legacy)\)')
+
+# `nft list ruleset` text (docs/research/firewall_iptables_backend.md)
+_NFT_TABLE_RE = re.compile(r'^table\s+(\S+)\s+(\S+)\s*\{')
+_NFT_CHAIN_RE = re.compile(r'^chain\s+(\S+)\s*\{')
+_NFT_INPUT_HOOK_RE = re.compile(r'^type\s+filter\s+hook\s+input\b')
+_NFT_POLICY_DROP_RE = re.compile(r'\bpolicy\s+drop\b')
+_NFT_STRING_RE = re.compile(r'"[^"]*"')
+_NFT_COMMENT_RE = re.compile(r'\bcomment\s+""')
+# statements that do not decide whether a packet matches
+_NFT_STATEMENT_RE = re.compile(
+    r'\bcounter(?:\s+packets\s+\d+\s+bytes\s+\d+)?'
+    r'|\blog(?:\s+(?:prefix|level|flags|group|snaplen|queue-threshold)\s+\S+)*')
+# a match every IPv4 packet satisfies
+_NFT_IPV4_ALL_RE = re.compile(r'^(?:meta\s+nfproto\s+ipv4|meta\s+protocol\s+ip|ip\s+version\s+4)\s+')
+_NFT_VERDICT_RE = re.compile(r'(accept|drop|return|continue|reject(?:\s+with\s+.+)?|(?:jump|goto)\s+(\S+))')
+# families whose input hook sees IPv4, the traffic `iptables -S` is about
+_NFT_IPV4_FAMILIES = ('ip', 'inet')
+_NFT_MAX_DEPTH = 16
+
+
+def _nft_chains(ruleset: str) -> dict[tuple[str, str, str], list[str]]:
+    """(family, table, chain) -> the chain's lines, quoted strings replaced
+    by "" so that a comment or a name is never read as a keyword."""
+    chains: dict[tuple[str, str, str], list[str]] = {}
+    depth, table, chain = 0, None, None
+    for raw in ruleset.splitlines():
+        line = _NFT_STRING_RE.sub('""', raw).strip()
+        table_m = _NFT_TABLE_RE.match(line) if depth == 0 else None
+        chain_m = _NFT_CHAIN_RE.match(line) if depth == 1 and table else None
+        if table_m:
+            table = (table_m.group(1), table_m.group(2))
+        elif chain_m:
+            chain = (*table, chain_m.group(1))
+            chains[chain] = []
+        elif chain is not None and depth >= 2 and line not in ('', '}'):
+            chains[chain].append(line)
+        depth += line.count('{') - line.count('}')
+        if depth <= 1:
+            chain = None
+        if depth <= 0:
+            table, depth = None, 0
+    return chains
+
+
+def _nft_verdict_only(rule: str) -> tuple[str, str | None] | None:
+    """(verdict, jump target) when the rule has no match for an IPv4
+    packet - only statements and a verdict -, else None (a condition)."""
+    rule = _NFT_COMMENT_RE.sub('', rule)
+    rule = _NFT_STATEMENT_RE.sub('', rule)
+    rule = _NFT_IPV4_ALL_RE.sub('', ' '.join(rule.split()) + ' ').strip()
+    found = _NFT_VERDICT_RE.fullmatch(rule)
+    if not found:
+        return None
+    word = found.group(1).split()[0]
+    return ('drop' if word == 'reject' else word), found.group(2)
+
+
+def _nft_fate(chains: dict, key: tuple[str, str, str], depth: int = 0) -> str:
+    """What chain `key` does with an IPv4 packet that matches none of its
+    conditions: 'accept', 'drop', 'return' (ends without a verdict) or
+    'unknown' (a missing chain or a jump loop - proves nothing)."""
+    if depth > _NFT_MAX_DEPTH or key not in chains:
+        return 'unknown'
+    for rule in chains[key]:
+        if rule.startswith('type '):
+            continue  # a base chain's header: its policy is read by the caller
+        verdict = _nft_verdict_only(rule)
+        if verdict is None or verdict[0] == 'continue':
+            continue  # a condition this packet does not match
+        word, target = verdict
+        if word in ('accept', 'drop', 'return'):
+            return word
+        fate = _nft_fate(chains, (key[0], key[1], target), depth + 1)
+        if fate != 'return':
+            return fate
+        if word == 'goto':
+            return 'return'  # after a goto target, this chain is done too
+    return 'return'
+
+
+def _nft_input_filters(ruleset: str) -> list[str]:
+    """'family table chain' of every IPv4 input base chain that drops an
+    IPv4 packet matching none of its conditions (default deny). A packet
+    passes every input base chain and drop is final, so one such chain
+    means the input path is not open. A conditional drop is not enough."""
+    chains = _nft_chains(ruleset)
+    filtering = []
+    for key, lines in chains.items():
+        header = next((line for line in lines if _NFT_INPUT_HOOK_RE.match(line)), None)
+        if key[0] not in _NFT_IPV4_FAMILIES or header is None:
+            continue
+        fate = _nft_fate(chains, key)
+        if fate == 'return':
+            fate = 'drop' if _NFT_POLICY_DROP_RE.search(header) else 'accept'
+        if fate == 'drop':
+            filtering.append(' '.join(key))
+    return filtering
+
+
+def _iptables_backend(evidence) -> str | None:
+    """'nf_tables' or 'legacy' from `iptables -V`, None when unknown."""
+    version = getattr(evidence, 'iptables_version', None)
+    if version is None or not version.completed or version.exit_code != 0:
+        return None
+    found = _IPTABLES_BACKEND_RE.search(version.stdout)
+    return found.group(1) if found else None
 
 
 def _ufw_verdict(evidence) -> tuple[str, dict]:
@@ -515,8 +625,14 @@ def _iptables_verdict(evidence) -> tuple[str, dict]:
                    checked rule COUNT, not content).
       'FILTERED' - INPUT policy is not ACCEPT, or ACCEPT with only
                    conditional (match-qualified) rules.
-      'UNKNOWN'  - collection did not complete/failed, or no INPUT
-                   policy line was found in otherwise-successful output.
+      'FILTERED_BY_NFTABLES' - the iptables view is open, but a live
+                   nftables input chain filters (context 'chains').
+      'UNKNOWN'  - collection did not complete/failed, no INPUT policy
+                   line was found in otherwise-successful output, or the
+                   view is open while iptables-legacy tables went unread.
+
+    'OPEN' needs the nftables input chains not to filter either; when the
+    nftables ruleset could not be read, context 'nftables_checked' is False.
     """
     live = evidence.iptables_live
     if not live.completed:
@@ -530,10 +646,23 @@ def _iptables_verdict(evidence) -> tuple[str, dict]:
                             'raw_snippet': live.stdout[:200]}
 
     unconditional_accept = any(_IPTABLES_UNCONDITIONAL_ACCEPT_RE.match(r) for r in rules)
-    if policy == 'ACCEPT' and (not rules or unconditional_accept):
-        return 'OPEN', {'policy': policy, 'rule_count': len(rules),
-                         'unconditional_accept': unconditional_accept}
-    return 'FILTERED', {'policy': policy, 'rule_count': len(rules)}
+    if policy != 'ACCEPT' or (rules and not unconditional_accept):
+        return 'FILTERED', {'policy': policy, 'rule_count': len(rules)}
+
+    # The iptables view is open. It is not the whole input path: with the
+    # nf_tables backend it shows only the iptables-nft tables, never native
+    # nftables chains or iptables-legacy tables, and a packet must pass
+    # all of them (docs/research/firewall_iptables_backend.md).
+    open_ctx = {'policy': policy, 'rule_count': len(rules), 'unconditional_accept': unconditional_accept}
+    if _IPTABLES_LEGACY_WARNING in live.stdout + '\n' + live.stderr:
+        return 'UNKNOWN', {**open_ctx, 'reason': 'INPUT looks open in iptables -S, but iptables-legacy tables '
+                                                   'are present and were not read (read them with iptables-legacy -S)'}
+    nft = evidence.nftables_live
+    nftables_checked = nft.completed and nft.exit_code == 0
+    chains = _nft_input_filters(nft.stdout) if nftables_checked else []
+    if chains:
+        return 'FILTERED_BY_NFTABLES', {**open_ctx, 'chains': chains}
+    return 'OPEN', {**open_ctx, 'nftables_checked': nftables_checked}
 
 
 def audit_firewall(ssh: SSHExecutor) -> dict:
@@ -553,6 +682,13 @@ def audit_firewall(ssh: SSHExecutor) -> dict:
     same way the pre-refactor code's single `active` flag did (e.g. an
     active-but-open iptables chain being silently masked by an
     unrelated, correctly-configured nftables ruleset).
+
+    One statement does look at nftables: "iptables INPUT is effectively
+    open". With the nf_tables backend `iptables -S` shows only the
+    iptables-nft tables, so a native nftables chain that drops input was
+    reported as an open INPUT (docs/research/firewall_iptables_backend.md).
+    That claim now needs no default-deny nftables input chain either; the
+    nftables finding itself is unchanged.
 
     UNKNOWN is never reported as 'ok' - see the individual verdict
     functions' docstrings for exactly what UNKNOWN means for each
@@ -613,15 +749,23 @@ def audit_firewall(ssh: SSHExecutor) -> dict:
 
     # --- iptables ---
     ipt_verdict, ipt_ctx = _iptables_verdict(evidence)
+    backend = _iptables_backend(evidence)
+    view = f'iptables -S ({backend} backend): ' if backend else ''
     if ipt_verdict == 'OPEN':
         reason = ('explicit unconditional ACCEPT rule' if ipt_ctx.get('unconditional_accept')
                   else 'no filtering rules')
+        unchecked = ('' if ipt_ctx['nftables_checked'] else
+                     '; the nftables ruleset could not be read, so its input chains were not checked')
         findings.append(_finding('high', 'iptables INPUT is effectively open',
-                                 f'policy {ipt_ctx["policy"]}, {reason} — everything is allowed',
+                                 f'{view}policy {ipt_ctx["policy"]}, {reason} — everything is allowed{unchecked}',
                                  id='FW-IPT-001'))
+    elif ipt_verdict == 'FILTERED_BY_NFTABLES':
+        findings.append(_finding('ok', 'iptables: INPUT has no filtering of its own; input is filtered by nftables',
+                                 f'{view}policy {ipt_ctx["policy"]}, {ipt_ctx["rule_count"]} rule(s); '
+                                 f'nftables input chain(s) that filter: {", ".join(ipt_ctx["chains"])}'))
     elif ipt_verdict == 'FILTERED':
         findings.append(_finding('ok', 'iptables: INPUT chain is filtered',
-                                 f'policy {ipt_ctx["policy"]}, {ipt_ctx["rule_count"]} rule(s)'))
+                                 f'{view}policy {ipt_ctx["policy"]}, {ipt_ctx["rule_count"]} rule(s)'))
     else:  # UNKNOWN
         findings.append(_finding('low', 'could not determine iptables status', ipt_ctx['reason'],
                                   requires_manual_verification=True, id='FW-IPT-002'))
