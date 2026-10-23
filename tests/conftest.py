@@ -51,6 +51,12 @@ def pytest_configure(config):
     from netaudit_pkg import ssh, storage
     storage.DB_PATH = _TEST_HOME / 'netaudit.db'
     ssh.KNOWN_HOSTS_PATH = _TEST_HOME / 'known_hosts'
+    # storage._conn() reuses this thread's open connection without looking at
+    # DB_PATH: one opened before the suite loaded (an IDE, pytest.main from
+    # an application) would keep writing to the real database (review #55 R3)
+    if hasattr(storage._local, 'conn'):
+        storage._local.conn.close()
+        del storage._local.conn
 
 
 def _settle_threads(before: set) -> None:
