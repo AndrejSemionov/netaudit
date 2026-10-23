@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Security: `dig --hostname -f<file>` (CLI, or the same value in a Web API
+  request) made dig read a local file in batch mode, and its lines came back
+  in the check's error, in the report and in the AI request. A check's
+  target is now checked before anything runs: a host name or an IP address
+  that never starts with `-` (`ping`, `mtr`, `tcptraceroute`, `arping`,
+  `dig`, `dns_audit`, `cert_transparency`, `iperf`, MikroTik router), an
+  `http://` or `https://` URL (`file://` was fetched by `curl`), email
+  addresses, a network interface name. `dig` record type is now a list.
+  Numbers have ranges: port 1-65535, count 1-1000, durations 1-3600 s,
+  lines 1-100000, hops 1-64, window up to 720 h. A wrong value is refused
+  (`Wrong value: …`, Web API: 400); the message never shows the value. The
+  Web form's values all pass.
 - Telegram notifications of a timer job (`run --notify --job`, written by
   `setup-timer`) compare with the job's own previous run. Before, a manual
   or Web audit in between became "the previous run": a new problem it found

@@ -113,7 +113,7 @@ AUTH_CONFIRM = 'yes — I\'m the owner / I have written permission'
 @register(
     id='sql_injection', label='SQL injection check', category='site', risk_level='ACTIVE',
     params=[
-        {'name': 'url', 'type': 'text', 'label': 'URL (with params, e.g. ?id=1)', 'default': ''},
+        {'name': 'url', 'type': 'text', 'label': 'URL (with params, e.g. ?id=1)', 'default': '', 'format': 'url'},
         {'name': 'authorization', 'type': 'select', 'label': 'Authorization to test',
          'options': ['no', AUTH_CONFIRM], 'default': 'no'},
         {'name': 'mode', 'type': 'select', 'label': 'Mode',
