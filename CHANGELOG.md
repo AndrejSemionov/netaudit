@@ -14,6 +14,12 @@
   lines 1-100000, hops 1-64, window up to 720 h. A wrong value is refused
   (`Wrong value: …`, Web API: 400); the message never shows the value. The
   Web form's values all pass.
+- Telegram notifications of a timer job (`run --notify --job`, written by
+  `setup-timer`) compare with the job's own previous run. Before, a manual
+  or Web audit in between became "the previous run": a new problem it found
+  was then "persisting" for the job and its alert was never sent. The saved
+  report of a job run has a `job` key; a host the job has never audited
+  falls back to any earlier run, as before.
 - Stable finding ids for the remaining state checks: `aide_check`,
   `cert_transparency`, `cve_audit` (one id per package and vulnerability,
   e.g. `CVE-VULN-001:nginx:CVE-2023-44487`), `log_discovery`, `lynis_audit`

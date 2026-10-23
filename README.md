@@ -603,6 +603,10 @@ A message is sent when:
 - the first run of a check on a host has problems at or above the threshold. Here "first" means no
   earlier run in the last 200 reports, and the message gets one "baseline" line, not a list.
 
+A timer job (`--job`) compares with its own previous run, so a manual or Web audit in between does
+not cancel its alert for what that audit found. A host the job has never audited (just added, or the
+first run after an update) is compared with any earlier run, as before.
+
 Resolved findings and findings that were not checked this time are listed in a message, but never
 send one on their own. Log checks (`ssh_auth_audit`, `nginx_logs_audit`, `kern_log_audit`,
 `fail2ban_logs_audit`) only report collection problems.
