@@ -8,6 +8,7 @@ Nothing else needs to change — not the CLI, not the web, not the UI.
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import re
 from collections.abc import Callable
@@ -66,6 +67,7 @@ WHOLE_NUMBER = re.compile(r'[+-]?[0-9]+')
 # a value a local tool reads as its last argument must never start with "-"
 # (dig -f <file> read a local file), and a URL must be http(s)
 _HOST = re.compile(r'[\w.:-]{1,253}')        # host name (any script), IPv4, IPv6
+_ZONE = re.compile(r'[\w.-]{1,64}')           # an interface name or number (fe80::1%eth0)
 _INTERFACE = re.compile(r'[\w.:-]{1,64}')
 _EMAIL = re.compile(r'[^@\s/?#\\,]+@([^@\s/?#\\,]+)')
 FORMAT_EXPECTS = {
@@ -78,7 +80,17 @@ FORMAT_EXPECTS = {
 
 
 def _is_host(text: str) -> bool:
-    return bool(_HOST.fullmatch(text)) and not text.startswith('-')
+    if text.startswith('-'):
+        return False
+    if '%' in text:
+        # only a link-local IPv6 address takes a zone (review #53 R1)
+        address, _, zone = text.partition('%')
+        try:
+            ipaddress.IPv6Address(address)
+        except ValueError:
+            return False
+        return bool(_ZONE.fullmatch(zone)) and not zone.startswith('-')
+    return bool(_HOST.fullmatch(text))
 
 
 def _is_url(text: str) -> bool:

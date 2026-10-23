@@ -108,7 +108,9 @@ runs, the value never printed):
 - a `format` key on the 15 text parameters' specs:
   - `host` (`target`, `hostname`, `server`, `router`): an IPv4/IPv6 address or a
     host name — letters, digits, `.`, `-`, `:`, `_`, at most 253 characters,
-    **not starting with `-`**;
+    **not starting with `-`**; an IPv6 address may carry a zone
+    (`fe80::1%eth0`, `fe80::1%2`): the part before `%` must be a real IPv6
+    address and the zone an interface name or number (review #53 R1);
   - `domains` (`dns_audit` `domain`, `subdomains_to_check`,
     `cert_transparency` `domain`): comma list of host names, same rule;
   - `url` (`ssl`, `http`, `security_headers`, `sql_injection`,
