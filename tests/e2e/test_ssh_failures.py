@@ -38,9 +38,8 @@ class _Proxy:
         self.mode = mode
         self._cut = threading.Event()
         self._stall = threading.Event()
-        self._cut_after: int | None = None   # server bytes after arming, then cut
-        self._server_bytes = 0
-        self.cut_mid_reply = False
+        self._throttle = threading.Event()   # server replies in small, slow slices
+        self.was_cut = False
         self._closed = threading.Event()
         self._socks: list[socket.socket] = []
         self._lock = threading.Lock()
@@ -87,16 +86,15 @@ class _Proxy:
                 time.sleep(0.05)            # the server's reply is held back
             if self._cut.is_set() or self._closed.is_set():
                 break
-            if from_server and self._cut_after is not None:
-                self._server_bytes += len(data)
-                if self._server_bytes >= self._cut_after:
-                    # part of the reply went through, the rest never will
-                    dst.sendall(data[:len(data) // 2])
-                    self.cut_mid_reply = True
-                    self.cut()
-                    break
             try:
-                dst.sendall(data)
+                if from_server and self._throttle.is_set():
+                    for i in range(0, len(data), 512):
+                        if self._cut.is_set():
+                            break
+                        dst.sendall(data[i:i + 512])
+                        time.sleep(0.02)
+                else:
+                    dst.sendall(data)
             except OSError:
                 break
         self._shut(src, dst)
@@ -111,6 +109,7 @@ class _Proxy:
             s.close()
 
     def cut(self):
+        self.was_cut = True
         self._cut.set()
         with self._lock:
             self._shut(*self._socks)
@@ -118,11 +117,11 @@ class _Proxy:
     def stall(self):
         self._stall.set()
 
-    def cut_after(self, server_bytes: int):
-        """Cut every connection once the server has sent `server_bytes` more:
-        in the middle of a command's output when the output is larger."""
-        self._server_bytes = 0
-        self._cut_after = server_bytes
+    def throttle(self):
+        """From now on the server's replies trickle through (512 bytes every
+        20 ms), so a long output is still on its way when NetAudit reads its
+        first part."""
+        self._throttle.set()
 
     def close(self):
         self._closed.set()
@@ -228,14 +227,79 @@ def test_a_server_that_stops_answering_after_the_login_is_not_a_pass(proxy, monk
     assert time.monotonic() - started < 180      # the command timeouts end it
 
 
+MARKER = '__NETAUDIT_RC_'
+
+
+def _cut_after_first_output(monkeypatch, p, command_part):
+    """While a command containing `command_part` runs, the server's replies
+    trickle through the proxy, and every connection is cut right after
+    NetAudit has read the first part of that command's output. Returns what
+    was seen: bytes NetAudit read before the cut, and the stdout the real
+    SSHExecutor.run() returned (review #58 E3)."""
+    import paramiko
+
+    seen = {'read': 0, 'stdout': None}
+    running = threading.Event()
+    original_run = ssh_mod.SSHExecutor.run
+    original_recv = paramiko.Channel.recv
+
+    def run(self, cmd, timeout=20, stdin_data=None):
+        watched = command_part in cmd
+        if watched:
+            p.throttle()
+            running.set()
+        try:
+            out = original_run(self, cmd, timeout=timeout, stdin_data=stdin_data)
+        finally:
+            running.clear()
+        if watched and seen['stdout'] is None:
+            seen['stdout'] = out[0]
+        return out
+
+    def recv(self, nbytes):
+        data = original_recv(self, nbytes)
+        if data and running.is_set() and not p.was_cut:
+            seen['read'] += len(data)
+            p.cut()
+        return data
+
+    monkeypatch.setattr(ssh_mod.SSHExecutor, 'run', run)
+    monkeypatch.setattr(paramiko.Channel, 'recv', recv)
+    return seen
+
+
 @needs_stand
-def test_a_connection_dropped_in_the_middle_of_a_commands_output_is_not_a_pass(proxy, monkeypatch):
-    """`sysctl -a` prints tens of kilobytes: the cut falls inside its output,
-    after part of it reached NetAudit (review #58 E3)."""
+def test_a_cut_in_the_middle_of_a_long_output_leaves_partial_stdout_and_no_exit_code(proxy, monkeypatch):
+    """The command/exit wrapper itself: 200 KB of output, cut after its first
+    part arrived -> the real stdout is partial, no completion marker, no exit
+    code."""
+    from netaudit_pkg.ssh_utils import run_command_with_exit_code
+
     p = proxy('forward')
-    _after_login(monkeypatch, lambda: p.cut_after(8192))
+    seen = _cut_after_first_output(monkeypatch, p, 'head -c 200000')
+    executor = ssh_mod.SSHExecutor('127.0.0.1', 'pwsudo', p.port, KEY, '').connect()
+    try:
+        stdout, exit_code = run_command_with_exit_code(executor, "head -c 200000 /dev/zero | tr '\\0' a")
+    except Exception as e:  # noqa: BLE001 - a raised error would mean no partial stdout reached the wrapper
+        pytest.fail(f'the wrapper raised instead of returning partial output: {type(e).__name__}: {e}')
+    finally:
+        executor.close()
+    assert p.was_cut and seen['read'] > 0
+    assert 0 < len(seen['stdout']) < 200000, len(seen['stdout'])
+    assert MARKER not in seen['stdout']
+    assert exit_code is None
+    assert 0 < len(stdout) < 200000
+
+
+@needs_stand
+def test_a_check_cut_in_the_middle_of_its_output_is_not_a_pass(proxy, monkeypatch):
+    """kernel_hardening's `sysctl -a`, cut after its first part arrived."""
+    p = proxy('forward')
+    seen = _cut_after_first_output(monkeypatch, p, 'sysctl -a')
     result = run_checks([{'id': 'kernel_hardening', 'params': _params(p.port)}])['results']['kernel_hardening']
-    assert p.cut_mid_reply, 'the output was smaller than the cut point; the test proved nothing'
+    assert p.was_cut and seen['read'] > 0, 'the cut did not happen inside sysctl -a'
+    assert seen['stdout'], 'no part of the output reached NetAudit'
+    assert MARKER not in seen['stdout'], 'the whole output arrived before the cut'
     assert _not_a_pass(result), result
 
 

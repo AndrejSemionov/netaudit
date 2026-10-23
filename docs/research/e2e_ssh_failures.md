@@ -20,13 +20,16 @@ A small TCP proxy inside the test sits between NetAudit and the stand
 | silent | the connection is accepted, no SSH banner ever comes |
 | close | the connection is closed right after it is accepted |
 | cut | a real SSH login to the stand, then every connection is closed |
-| cut mid-reply | a real login, then the connection is closed after 8 KB more from the server — inside `sysctl -a`'s output (tens of KB), after part of it arrived |
+| cut mid-reply | while a long command runs, the server's replies trickle through the proxy (512 bytes / 20 ms); right after NetAudit has read the first part of its output (`paramiko.Channel.recv`), every connection is cut — the rest is still on its way |
 | stall | a real SSH login, then the server's replies are held back |
 
 "cut" and "stall" switch on right after `SSHExecutor.connect()` returns, so
 the failure falls after the login and before the check's commands; "cut
-mid-reply" falls inside a command, and the test fails if the cut did not
-happen. With several hosts: one dropped and one stalled host, each next to a
+mid-reply" falls inside a command: the real `SSHExecutor.run()` result is
+observed, and the test requires a non-empty partial stdout without the
+completion marker (for the wrapper with a 200 KB output: no exit code), then
+the check's error without a score; it fails if the cut did not happen inside
+the output (review #58 pass 2). With several hosts: one dropped and one stalled host, each next to a
 healthy one (review #58 E3).
 
 The oracle (review #58 E2): a failed run has a non-empty `error`, no
