@@ -38,6 +38,9 @@ class _Proxy:
         self.mode = mode
         self._cut = threading.Event()
         self._stall = threading.Event()
+        self._cut_after: int | None = None   # server bytes after arming, then cut
+        self._server_bytes = 0
+        self.cut_mid_reply = False
         self._closed = threading.Event()
         self._socks: list[socket.socket] = []
         self._lock = threading.Lock()
@@ -84,6 +87,14 @@ class _Proxy:
                 time.sleep(0.05)            # the server's reply is held back
             if self._cut.is_set() or self._closed.is_set():
                 break
+            if from_server and self._cut_after is not None:
+                self._server_bytes += len(data)
+                if self._server_bytes >= self._cut_after:
+                    # part of the reply went through, the rest never will
+                    dst.sendall(data[:len(data) // 2])
+                    self.cut_mid_reply = True
+                    self.cut()
+                    break
             try:
                 dst.sendall(data)
             except OSError:
@@ -106,6 +117,12 @@ class _Proxy:
 
     def stall(self):
         self._stall.set()
+
+    def cut_after(self, server_bytes: int):
+        """Cut every connection once the server has sent `server_bytes` more:
+        in the middle of a command's output when the output is larger."""
+        self._server_bytes = 0
+        self._cut_after = server_bytes
 
     def close(self):
         self._closed.set()
@@ -147,11 +164,31 @@ def _params(port, host='127.0.0.1'):
 
 
 def _not_a_pass(result: dict) -> bool:
-    """An error, or at least no score computed from what was not collected."""
-    if 'error' in result:
-        return True
-    hardening = result.get('hardening') or {}
-    return hardening.get('score') is None
+    """The run is reported as failed: a non-empty error, no hardening score
+    and no finding that reads as a clean result (review #58 E2)."""
+    error = result.get('error')
+    if not (isinstance(error, str) and error.strip()):
+        return False
+    if isinstance((result.get('hardening') or {}).get('score'), (int, float)):
+        return False
+    return not any(isinstance(f, dict) and f.get('severity') == 'ok' for f in result.get('findings') or [])
+
+
+@pytest.mark.parametrize('result', [
+    {'ok': True, 'findings': [{'severity': 'ok', 'title': 'all clear'}]},
+    {'error': '', 'hardening': {'score': 100}},
+    {'error': '   '},
+    {'error': 'could not connect', 'hardening': {'score': 80}},
+    {'error': 'partial', 'findings': [{'severity': 'ok', 'title': 'no issues'}]},
+    {'hardening': {'score': None}},
+])
+def test_the_oracle_never_takes_a_clean_looking_result(result):
+    assert not _not_a_pass(result)
+
+
+def test_the_oracle_takes_a_reported_failure():
+    assert _not_a_pass({'error': 'could not connect: [Errno 111] Connection refused'})
+    assert _not_a_pass({'error': 'sudo sysctl -a did not complete', 'hardening': {'score': None}})
 
 
 # --- no stand needed ---------------------------------------------------------
@@ -189,6 +226,39 @@ def test_a_server_that_stops_answering_after_the_login_is_not_a_pass(proxy, monk
     result = run_checks([{'id': 'kernel_hardening', 'params': _params(p.port)}])['results']['kernel_hardening']
     assert _not_a_pass(result), result
     assert time.monotonic() - started < 180      # the command timeouts end it
+
+
+@needs_stand
+def test_a_connection_dropped_in_the_middle_of_a_commands_output_is_not_a_pass(proxy, monkeypatch):
+    """`sysctl -a` prints tens of kilobytes: the cut falls inside its output,
+    after part of it reached NetAudit (review #58 E3)."""
+    p = proxy('forward')
+    _after_login(monkeypatch, lambda: p.cut_after(8192))
+    result = run_checks([{'id': 'kernel_hardening', 'params': _params(p.port)}])['results']['kernel_hardening']
+    assert p.cut_mid_reply, 'the output was smaller than the cut point; the test proved nothing'
+    assert _not_a_pass(result), result
+
+
+@needs_stand
+def test_one_slow_host_leaves_the_healthy_one_whole(proxy, monkeypatch):
+    p = proxy('forward')
+    original = ssh_mod.SSHExecutor.connect
+
+    def connect(self):
+        result = original(self)
+        if self.port == p.port:
+            p.stall()
+        return result
+
+    monkeypatch.setattr(ssh_mod.SSHExecutor, 'connect', connect)
+    started = time.monotonic()
+    report = run_checks_multi([{'id': 'kernel_hardening', 'instances': [
+        _params(PORT, host=HOST), _params(p.port, host='localhost')]}])
+    by_host = report['results']['kernel_hardening']['by_host']
+    assert 'error' not in by_host[HOST], by_host[HOST]
+    assert isinstance(by_host[HOST]['hardening']['score'], int), by_host[HOST]
+    assert _not_a_pass(by_host['localhost']), by_host['localhost']
+    assert time.monotonic() - started < 180
 
 
 @needs_stand
