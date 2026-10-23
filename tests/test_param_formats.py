@@ -199,3 +199,27 @@ def test_web_api_refuses_dig_reading_a_file(monkeypatch, isolated_db, secret_fil
     assert 'dig: hostname takes a host name or an IP address' in resp.text
     assert SECRET not in resp.text and secret_file not in resp.text
     assert calls == []
+
+
+# --- IPv6 with a zone (review #53 R1) ----------------------------------------
+
+@pytest.mark.parametrize('check_id, name', TARGETS)
+@pytest.mark.parametrize('value', ['fe80::1%lo', 'fe80::1%1', 'fe80::a:b%eth0.100', 'fe80::1%br-1a2b'])
+def test_link_local_ipv6_with_a_zone_passes(check_id, name, value):
+    assert param_value(_param(check_id, name), value) == value
+
+
+@pytest.mark.parametrize('value', ['fe80::1%', 'fe80::1%-x', 'fe80::1% lo', 'fe80::1%lo/x', 'fe80::1%lo;id',
+                                   '192.0.2.1%lo', 'example.org%lo', '%lo', 'fe80::1%%lo'])
+def test_a_zone_only_follows_a_real_ipv6_address(value):
+    assert 'host name or an IP address' in _refused('ping', 'target', value)
+
+
+def test_cli_and_web_accept_a_scoped_ipv6_target(monkeypatch, isolated_db):
+    from fastapi.testclient import TestClient
+
+    from web.app import app
+    selected = netaudit._single_selection(Namespace(checks=['ping'], quick=False), {'target': 'fe80::1%lo'})
+    assert selected == [{'id': 'ping', 'params': {'target': 'fe80::1%lo'}}]
+    resp = TestClient(app).post('/api/estimate', json={'checks': [{'id': 'ping', 'params': {'target': 'fe80::1%1'}}]})
+    assert resp.status_code == 200
