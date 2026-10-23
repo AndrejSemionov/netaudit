@@ -333,6 +333,13 @@ IDENTITY_PARAM_KEYS = frozenset({'target', 'url', 'hostname', 'host', 'server', 
 RELATED_REPORTS_SEARCH_WINDOW = 200
 
 
+def identity_value(value) -> bool:
+    """Whether `value` names a target: a run with an empty or blank host,
+    url or domain checked nothing, so it is no object of trends and no
+    history of another such run (docs/research/trend_empty_target.md)."""
+    return value is not None and str(value).strip() != ''
+
+
 def identity_pairs(execution_context: dict) -> set[tuple[str, object]]:
     """
     (key, value) identity pairs from a report's execution_context,
@@ -355,7 +362,7 @@ def identity_pairs(execution_context: dict) -> set[tuple[str, object]]:
             param_dicts = [ctx]
         for params in param_dicts:
             for key, value in params.items():
-                if key in IDENTITY_PARAM_KEYS:
+                if key in IDENTITY_PARAM_KEYS and identity_value(value):
                     pairs.add((key, value))
     return pairs
 

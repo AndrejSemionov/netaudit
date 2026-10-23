@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Trends and the AI history ignore a run without a target (an empty host,
+  URL or domain): `netaudit trend` listed `systemd_hardening host=` for a
+  Web run with an empty host field, and two such runs were each other's
+  history for the AI. The run's error is still shown and notified.
 - Security: `dig --hostname -f<file>` (CLI, or the same value in a Web API
   request) made dig read a local file in batch mode, and its lines came back
   in the check's error, in the report and in the AI request. A check's
