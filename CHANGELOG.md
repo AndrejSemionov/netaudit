@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Stable finding ids for the remaining state checks: `aide_check`,
+  `cert_transparency`, `cve_audit` (one id per package and vulnerability,
+  e.g. `CVE-VULN-001:nginx:CVE-2023-44487`), `log_discovery`, `lynis_audit`
+  (by Lynis test id), `rootkit_check` and `sql_injection`. Trends, the AI
+  context and Telegram notifications now say which of their problems was
+  fixed, appeared or persists, not only that the count changed; titles with
+  changing numbers (`files changed: 12`) no longer matter. Only an `id` key
+  is added; titles, severities and order are unchanged. The catalogue is
+  `docs/checks/finding_ids.md`.
 - Firewall audit (`server_audit`): "iptables INPUT is effectively open"
   (FW-IPT-001, high) is no longer reported when the input is filtered by
   nftables. With the nf_tables backend, the Debian and Ubuntu default,
@@ -15,7 +24,6 @@
   the result is "could not determine" (FW-IPT-002). The detail names the
   backend (`iptables -V`). If the nftables ruleset cannot be read, the HIGH
   stays and the detail says so.
-
 - Web: every check reads in Russian in the Russian interface. 15 checks
   (`aide_check`, `backup_check`, `breach_check`, `cert_transparency`,
   `docker_audit`, the log audits, `kernel_hardening`, `nginx_hardening`,

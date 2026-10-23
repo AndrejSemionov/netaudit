@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qs, urlparse
 
+from ..findings import subject_id
 from ..registry import register
 from ..utils import run_cmd, tool_available
 
@@ -83,23 +84,25 @@ def _run_sqlmap(url: str, crawl: bool, level: int = 1, risk: int = 1) -> dict:
         dbms_m = re.search(r'back-end DBMS:\s*(.+)', combined)
         for p in params:
             findings.append({'severity': 'high', 'title': f'SQL injection: parameter {p.strip()}',
-                             'detail': 'the parameter is vulnerable to injection'})
+                             'detail': 'the parameter is vulnerable to injection',
+                             'id': subject_id('SQLI-INJ-001', p.strip())})
         if types:
             findings.append({'severity': 'high', 'title': 'injection types',
-                             'detail': ', '.join(t.strip() for t in dict.fromkeys(types))})
+                             'detail': ', '.join(t.strip() for t in dict.fromkeys(types)),
+                             'id': 'SQLI-INJ-002'})
         if dbms_m:
             findings.append({'severity': 'medium', 'title': f'DBMS disclosed: {dbms_m.group(1).strip()}',
-                             'detail': 'sqlmap identified the database type'})
+                             'detail': 'sqlmap identified the database type', 'id': 'SQLI-DBMS-001'})
     elif 'all tested parameters do not appear to be injectable' in combined:
         findings.append({'severity': 'ok', 'title': 'sqlmap: no injections found',
                          'detail': 'the tested parameters aren\'t vulnerable (at the given level)'})
     elif 'no parameter' in combined.lower() or 'not able to find' in combined.lower():
         findings.append({'severity': 'low', 'title': 'sqlmap: found no parameters to test',
-                         'detail': 'no GET params/forms to check on this URL'})
+                         'detail': 'no GET params/forms to check on this URL', 'id': 'SQLI-SCAN-002'})
     else:
         tail = combined.strip()[-400:]
         findings.append({'severity': 'low', 'title': 'sqlmap finished with no clear verdict',
-                         'detail': tail})
+                         'detail': tail, 'id': 'SQLI-SCAN-003'})
 
     return {'vulnerable': vulnerable, 'findings': findings}
 
@@ -135,7 +138,8 @@ def check_sql_injection(url='', authorization='no', mode='passive (input points 
     if n_points:
         findings.append({'severity': 'low', 'title': f'input points found: {n_points}',
                          'detail': f"GET params: {', '.join(points['get_params']) or '—'}; "
-                                   f"forms: {len(points['forms'])}"})
+                                   f"forms: {len(points['forms'])}",
+                         'id': 'SQLI-PNT-001'})
     elif html is not None:
         findings.append({'severity': 'ok', 'title': 'no input points found',
                          'detail': 'no GET params or form fields — injection is unlikely here'})
@@ -163,6 +167,7 @@ def check_sql_injection(url='', authorization='no', mode='passive (input points 
                 'detail': 'authorization not confirmed. SQL injection testing is only allowed on '
                           'your own site or with the owner\'s written permission — otherwise it\'s illegal. '
                           'Confirm authorization to run sqlmap.',
+                'id': 'SQLI-SCAN-001',
             })
             result['active_blocked'] = True
         else:
@@ -171,7 +176,7 @@ def check_sql_injection(url='', authorization='no', mode='passive (input points 
             result['sqlmap'] = sqlmap_res
             if sqlmap_res.get('error'):
                 result['findings'].append({'severity': 'low', 'title': 'sqlmap unavailable',
-                                           'detail': sqlmap_res['error']})
+                                           'detail': sqlmap_res['error'], 'id': 'SQLI-SCAN-004'})
             else:
                 result['findings'].extend(sqlmap_res.get('findings', []))
 

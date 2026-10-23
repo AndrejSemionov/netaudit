@@ -269,14 +269,16 @@ def check_aide(host='', user='root', port=22, key_path='', password='', sudo_pas
     findings = []
     if summary['added'] > 0:
         findings.append(_finding('medium', f"files added: {summary['added']}",
-                                  'new files outside of updates - worth checking where they came from'))
+                                  'new files outside of updates - worth checking where they came from',
+                                  id='AIDE-FILE-001'))
     if summary['removed'] > 0:
-        findings.append(_finding('medium', f"files removed: {summary['removed']}"))
+        findings.append(_finding('medium', f"files removed: {summary['removed']}", id='AIDE-FILE-002'))
     if summary['changed'] > 0:
         findings.append(_finding('high', f"files changed: {summary['changed']}",
                                   'if this isn\'t the result of a routine apt upgrade - figure out what '
                                   'exactly changed and why; after a legitimate update, reinitialize the '
-                                  'database (mode=init), otherwise it will keep making noise'))
+                                  'database (mode=init), otherwise it will keep making noise',
+                                  id='AIDE-FILE-003'))
     if not findings:
         findings.append(_finding('ok', 'no changes found — the filesystem matches the database'))
 
