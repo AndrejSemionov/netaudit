@@ -24,9 +24,73 @@ string matches, which would make tests brittle against minor wording changes.
 
 from __future__ import annotations
 
+import atexit
+import os
 import re
+import shutil
+import tempfile
+import threading
+import time
+from pathlib import Path
 
 import pytest
+
+# No test, and no thread a test leaves behind - even one still running after
+# the session ends - writes to the user's ~/.netaudit (FINDINGS 2026-10-23: a
+# report of the test-only check __test_stream_multi__ was found in a real
+# database). The database and known_hosts point here from the moment the
+# suite is loaded and are never put back; isolated_db and per-test patches
+# still override them.
+_TEST_HOME = Path(tempfile.mkdtemp(prefix='netaudit-tests-'))
+atexit.register(shutil.rmtree, _TEST_HOME, ignore_errors=True)
+# how long a test's threads may take to finish after the test (review #55)
+THREAD_DEADLINE = float(os.environ.get('NETAUDIT_TEST_THREAD_DEADLINE', '10'))
+
+
+def pytest_configure(config):
+    from netaudit_pkg import ssh, storage
+    storage.DB_PATH = _TEST_HOME / 'netaudit.db'
+    ssh.KNOWN_HOSTS_PATH = _TEST_HOME / 'known_hosts'
+    # storage._conn() reuses this thread's open connection without looking at
+    # DB_PATH: one opened before the suite loaded (an IDE, pytest.main from
+    # an application) would keep writing to the real database (review #55 R3)
+    if hasattr(storage._local, 'conn'):
+        storage._local.conn.close()
+        del storage._local.conn
+
+
+def _settle_threads(before: set) -> None:
+    """Wait for every thread the test started, children started meanwhile
+    included; the history-capture watcher is a loop, so it is asked to stop
+    first. A thread still alive at the deadline ends the whole run: it could
+    write into the next test's database."""
+    from netaudit_pkg import history_capture
+
+    deadline = time.monotonic() + THREAD_DEADLINE
+    while True:
+        new = [t for t in threading.enumerate() if t not in before and t is not threading.current_thread()]
+        if not new:
+            return
+        if any(t.name == 'traffic-history-watcher' for t in new):
+            history_capture.stop()
+        for thread in new:
+            thread.join(max(0.0, deadline - time.monotonic()))
+        if time.monotonic() >= deadline:
+            alive = [t.name for t in threading.enumerate()
+                     if t not in before and t is not threading.current_thread() and t.is_alive()]
+            if alive:
+                pytest.exit(f'a test left threads running after {THREAD_DEADLINE:g} s ({", ".join(alive)}); '
+                            'they could write into the next test\'s database', returncode=1)
+            return
+
+
+@pytest.fixture(autouse=True)
+def _wait_for_test_threads():
+    """A test without isolated_db gets the same wait, so its threads cannot
+    write into the next test's database either."""
+    before = set(threading.enumerate())
+    yield
+    _settle_threads(before)
 
 # ssh_utils.run_sudo_with_exit_code()'s wrapper: { sudo -n -- <argv>; ...'<marker>'... }
 _SUDO_WRAP_RE = re.compile(r"^\{ sudo (?:-n|-S -p '') -- .*'(__NETAUDIT_RC_[0-9a-f]+__)'")
@@ -236,7 +300,12 @@ def isolated_db(tmp_path, monkeypatch):
     if hasattr(storage._local, 'conn'):
         storage._local.conn.close()
         del storage._local.conn
+    before = set(threading.enumerate())
     yield storage
+    # a thread the test started (a Web stream, an async task) may still be
+    # saving: let it finish while DB_PATH is still this test's file, not the
+    # next test's (FINDINGS 2026-10-23, review #55)
+    _settle_threads(before)
     if hasattr(storage._local, 'conn'):
         storage._local.conn.close()
         del storage._local.conn
