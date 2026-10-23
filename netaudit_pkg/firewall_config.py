@@ -117,6 +117,9 @@ class CommandResult:
     stdout: str
     command: str  # the original (unwrapped) command, for error messages/debugging
     sudo_error: str | None = None
+    # kept for messages a tool prints on its own, such as iptables-nft's
+    # "iptables-legacy tables present" warning (its stream is not known)
+    stderr: str = ''
 
 
 @dataclass
@@ -144,6 +147,9 @@ class FirewallEvidence:
     nftables_live: CommandResult
     nftables_config: FileResult
     iptables_live: CommandResult
+    # `iptables -V`: which backend `iptables -S` read - "(nf_tables)" or
+    # "(legacy)" (docs/research/firewall_iptables_backend.md)
+    iptables_version: CommandResult | None = None
 
 
 # Same three candidate paths the pre-existing audit_firewall() checked,
@@ -167,7 +173,7 @@ def _run_sudo_with_exit_code(ssh: SSHExecutor, argv: Sequence[str], timeout: int
     exit code through sudo") and maps the result to CommandResult."""
     r = run_sudo_with_exit_code(ssh, argv, timeout=timeout)
     return CommandResult(completed=r.completed, exit_code=r.exit_code, stdout=r.stdout,
-                         command=r.command, sudo_error=r.sudo_error)
+                         command=r.command, sudo_error=r.sudo_error, stderr=r.stderr or '')
 
 
 def _cat_file(ssh: SSHExecutor, path: str, timeout: int = 20) -> FileResult:
@@ -278,6 +284,18 @@ def collect_iptables_live(ssh: SSHExecutor, timeout: int = 20) -> CommandResult:
     return _run_sudo_with_exit_code(ssh, ['iptables', '-S'], timeout=timeout)
 
 
+def collect_iptables_version(ssh: SSHExecutor, timeout: int = 20) -> CommandResult:
+    """Runs `iptables -V` without sudo (it needs no privilege and changes
+    nothing): "iptables v1.8.10 (nf_tables)" or "(legacy)" says which
+    tables `iptables -S` shows. With nf_tables they are only the
+    iptables-nft ones, not native nftables chains or legacy tables."""
+    from .ssh_utils import run_command_with_exit_code
+
+    cmd = 'iptables -V'
+    stdout, code = run_command_with_exit_code(ssh, cmd, timeout=timeout)
+    return CommandResult(completed=code is not None, exit_code=code, stdout=stdout, command=cmd)
+
+
 def collect_firewall_config(ssh: SSHExecutor, timeout: int = 20) -> FirewallEvidence:
     """Collects all firewall evidence from one host in one call - the
     single entry point audit_firewall() (server_security.py) uses."""
@@ -288,4 +306,5 @@ def collect_firewall_config(ssh: SSHExecutor, timeout: int = 20) -> FirewallEvid
         nftables_live=collect_nftables_live(ssh, timeout=timeout),
         nftables_config=collect_nftables_config(ssh, timeout=timeout),
         iptables_live=collect_iptables_live(ssh, timeout=timeout),
+        iptables_version=collect_iptables_version(ssh, timeout=timeout),
     )
