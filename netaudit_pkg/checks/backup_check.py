@@ -148,13 +148,13 @@ def _check_disk_space(ssh: SSHExecutor, directory: str) -> tuple[int | None, str
     params=[
         {'name': 'host', 'type': 'text', 'label': 'Host', 'default': ''},
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
-        {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
+        {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22, 'min': 1, 'max': 65535},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
         {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key)', 'default': ''},
         {'name': 'directories', 'type': 'text', 'label': 'Backup directories (comma-separated)',
          'default': '/var/backups'},
-        {'name': 'max_age_hours', 'type': 'number', 'label': 'Expected freshness, hours', 'default': 26},
-        {'name': 'min_copies', 'type': 'number', 'label': 'Minimum copies (local retention)', 'default': 2},
+        {'name': 'max_age_hours', 'type': 'number', 'label': 'Expected freshness, hours', 'default': 26, 'min': 1, 'max': 8760},
+        {'name': 'min_copies', 'type': 'number', 'label': 'Minimum copies (local retention)', 'default': 2, 'min': 0, 'max': 1000},
     ],
     required_tools=[],
     description='Backup verification over SSH: latest file freshness, suspiciously small size '

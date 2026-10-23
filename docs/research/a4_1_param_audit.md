@@ -5,6 +5,9 @@ Status: research, no code. USER approved the stabilization plan step A4.1
 every hole, then fix by a contract USER approves. Author: Claude. Review:
 GPT/Codex.
 
+USER decision on §4 (2026-10-23): «Всё, включая диапазоны чисел
+(Recommended)» — every rule below, number ranges included.
+
 Base: `main` `da2c9d6` (after #49-#52). All runs below on a temporary HOME,
 no audited server, no network unless stated.
 

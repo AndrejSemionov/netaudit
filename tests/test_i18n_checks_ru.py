@@ -20,7 +20,9 @@ I18N = (STATIC / 'i18n.js').read_text(encoding='utf-8')
 INDEX = (STATIC / 'index.html').read_text(encoding='utf-8')
 CYRILLIC = re.compile('[а-яё]', re.IGNORECASE)
 # tool and command names, shown as they are in both languages
-TOOL_NAMES = {'openssl', 'python', 'curl', 'client', 'status-wrapper'}
+TOOL_NAMES = {'openssl', 'python', 'curl', 'client', 'status-wrapper',
+              # DNS record types (dig), the same in every language (A4.1)
+              'A', 'AAAA', 'CNAME', 'MX', 'NS', 'PTR', 'SOA', 'SRV', 'TXT', 'CAA'}
 
 
 def _entry(check_id: str) -> str | None:

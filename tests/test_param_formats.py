@@ -83,7 +83,7 @@ URLS = [('ssl', 'url'), ('http', 'url'), ('security_headers', 'url'), ('sql_inje
 
 @pytest.mark.parametrize('check_id, name', URLS)
 @pytest.mark.parametrize('value', ['file:///etc/hostname', '--url=file:///etc/hostname', 'ftp://h.example',
-                                   'https://-x.example', '-K/etc/x://', 'https://', 'https://h ex'])
+                                   'https://-x.example', '-K/etc/x://', 'https:///path', 'https://h ex'])
 def test_a_url_that_is_not_http_is_refused(check_id, name, value):
     assert 'http:// or https:// URL' in _refused(check_id, name, value)
 

@@ -493,7 +493,7 @@ def build_findings(report: LogDiscoveryReport) -> list[dict]:
     params=[
         {'name': 'host', 'type': 'text', 'label': 'Host', 'default': ''},
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
-        {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
+        {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22, 'min': 1, 'max': 65535},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
         {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key)', 'default': ''},
     ],

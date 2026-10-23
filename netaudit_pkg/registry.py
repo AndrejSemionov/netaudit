@@ -13,6 +13,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 # What a check actually does to the target, in increasing order of consequence.
 # This isn't decoration - it's meant to let the CLI/web UI warn appropriately
@@ -61,6 +62,51 @@ CHECKBOX_WORDS = {'true': True, 'yes': True, '1': True, 'on': True,
                   'false': False, 'no': False, '0': False, 'off': False}
 WHOLE_NUMBER = re.compile(r'[+-]?[0-9]+')
 
+# what a text parameter with a `format` holds (docs/research/a4_1_param_audit.md):
+# a value a local tool reads as its last argument must never start with "-"
+# (dig -f <file> read a local file), and a URL must be http(s)
+_HOST = re.compile(r'[\w.:-]{1,253}')        # host name (any script), IPv4, IPv6
+_INTERFACE = re.compile(r'[\w.:-]{1,64}')
+_EMAIL = re.compile(r'[^@\s/?#\\,]+@([^@\s/?#\\,]+)')
+FORMAT_EXPECTS = {
+    'host': 'takes a host name or an IP address',
+    'domains': 'takes host names separated by commas',
+    'url': 'takes an http:// or https:// URL',
+    'emails': 'takes email addresses separated by commas',
+    'interface': 'takes a network interface name',
+}
+
+
+def _is_host(text: str) -> bool:
+    return bool(_HOST.fullmatch(text)) and not text.startswith('-')
+
+
+def _is_url(text: str) -> bool:
+    """http(s) only, after the `https://` the URL checks add when there is no
+    scheme; the host must pass the host rule."""
+    if text.startswith('-') or any(c.isspace() for c in text):
+        return False
+    try:
+        parsed = urlparse(text if '://' in text else f'https://{text}')
+    except ValueError:
+        return False
+    return parsed.scheme in ('http', 'https') and bool(parsed.hostname) and _is_host(parsed.hostname)
+
+
+def _format_ok(form: str, text: str) -> bool:
+    items = [item.strip() for item in text.split(',') if item.strip()]
+    if form == 'host':
+        return _is_host(text)
+    if form == 'domains':
+        return all(_is_host(item) for item in items)
+    if form == 'url':
+        return _is_url(text)
+    if form == 'emails':
+        return all((m := _EMAIL.fullmatch(item)) and _is_host(m.group(1)) for item in items)
+    if form == 'interface':
+        return bool(_INTERFACE.fullmatch(text)) and not text.startswith('-')
+    raise ValueError(f'unknown format {form!r}')
+
 
 def param_value(param: dict, value):
     """`value` as the check expects it for the type of `param`, so a word
@@ -68,9 +114,11 @@ def param_value(param: dict, value):
     check as truthy text ('false') or as a shell fragment ('5; id').
 
     checkbox -> bool, number -> int (whole) or float within the float
-    range (trends compare numbers as floats), select -> one of
-    `options` (a name from `aliases` becomes its option). Other types are
-    returned unchanged; the range of a number is the check's business.
+    range (trends compare numbers as floats) and within the spec's
+    `min`/`max`, select -> one of `options` (a name from `aliases` becomes
+    its option), text with a `format` -> unchanged when it has that form
+    (an empty value is left to the check). Other values are returned
+    unchanged.
     Raises ValueError saying what the parameter takes - never with the value
     in it, a mistyped secret must not end up in a log."""
     kind = param.get('type')
@@ -98,6 +146,9 @@ def param_value(param: dict, value):
             finite = False
         if not finite:
             raise ValueError('takes a number')
+        low, high = param.get('min'), param.get('max')
+        if (low is not None and number < low) or (high is not None and number > high):
+            raise ValueError(f'takes a number from {low} to {high}')
         return int(number) if number == int(number) else number
     if kind == 'select' and param.get('options'):
         if isinstance(value, str):
@@ -106,6 +157,11 @@ def param_value(param: dict, value):
             if value in param.get('aliases', {}):
                 return param['aliases'][value]
         raise ValueError('takes one of: ' + ', '.join(f'"{o}"' for o in param['options']))
+    if kind == 'text' and param.get('format'):
+        if value == '':
+            return value  # not given: the check says what is missing
+        if not isinstance(value, str) or not _format_ok(param['format'], value):
+            raise ValueError(FORMAT_EXPECTS[param['format']])
     return value
 
 

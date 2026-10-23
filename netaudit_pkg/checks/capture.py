@@ -52,8 +52,8 @@ def _enrich_top(dests: list[dict], limit: int = 15) -> list[dict]:
 @register(
     id='tshark_capture', label='Traffic capture (tshark)', category='capture',
     params=[
-        {'name': 'interface', 'type': 'text', 'label': 'Interface', 'default': 'any'},
-        {'name': 'duration', 'type': 'number', 'label': 'Duration, sec', 'default': 15},
+        {'name': 'interface', 'type': 'text', 'label': 'Interface', 'default': 'any', 'format': 'interface'},
+        {'name': 'duration', 'type': 'number', 'label': 'Duration, sec', 'default': 15, 'min': 1, 'max': 3600},
         {'name': 'bpf_filter', 'type': 'text', 'label': 'BPF filter (e.g. host 192.168.88.55)', 'default': ''},
         {'name': 'analyze_threats', 'type': 'select', 'label': 'Threat analysis',
          'options': ['да', 'да+whois', 'нет'], 'default': 'да'},
@@ -253,11 +253,11 @@ def check_arp_capture(target_ip: str = '', gateway_ip: str = '', interface: str 
 @register(
     id='mikrotik_sniffer', label='Device traffic via MikroTik', category='capture',
     params=[
-        {'name': 'router', 'type': 'text', 'label': 'Router IP', 'default': '192.168.88.1'},
+        {'name': 'router', 'type': 'text', 'label': 'Router IP', 'default': '192.168.88.1', 'format': 'host'},
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'admin'},
         {'name': 'password', 'type': 'password', 'label': 'Password', 'default': ''},
         {'name': 'target_ip', 'type': 'text', 'label': 'Device IP (phone)', 'default': ''},
-        {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
+        {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22, 'min': 1, 'max': 65535},
         {'name': 'analyze_threats', 'type': 'select', 'label': 'Threat analysis',
          'options': ['да', 'да+whois', 'нет'], 'default': 'да'},
     ],

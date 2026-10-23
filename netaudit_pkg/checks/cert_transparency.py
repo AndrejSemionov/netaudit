@@ -68,7 +68,7 @@ def _parse_crtsh_date(s: str) -> datetime | None:
 @register(
     id='cert_transparency', label='Certificate Transparency monitoring', category='site', risk_level='PASSIVE',
     params=[
-        {'name': 'domain', 'type': 'text', 'label': 'Domain', 'default': 'example.com'},
+        {'name': 'domain', 'type': 'text', 'label': 'Domain', 'default': 'example.com', 'format': 'host'},
         {'name': 'expected_issuer_contains', 'type': 'text',
          'label': 'Expected issuer contains (optional, e.g. "Let\'s Encrypt")', 'default': ''},
         {'name': 'include_expired', 'type': 'checkbox', 'label': 'Include expired certificates', 'default': False},

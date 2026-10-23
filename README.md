@@ -259,6 +259,12 @@ values `netaudit list` shows, e.g. `--fail2ban_mode status-wrapper` (`aide_check
 the flag, the check and what it takes, but not the value. Before, the text was passed on as
 typed: `--auto_install false` worked as "yes", and a number could carry a shell command. The
 Web API refuses such values with 400; the Web form is unchanged.
+A target (`--target`, `--hostname`, `--server`, `--domain`, ...) must be a host name or an IP
+address and never starts with `-`, a URL must be `http://` or `https://`, emails and the
+`tshark` interface are checked too, and numbers have ranges (`--port` 1-65535, `--count`
+1-1000, durations up to 3600 s, `--lines` up to 100000). Before, `dig --hostname -f<file>`
+read a local file and showed its lines. `dig --record_type` takes one of `A`, `AAAA`, `CNAME`,
+`MX`, `NS`, `PTR`, `SOA`, `SRV`, `TXT`, `CAA` (lowercase works).
 
 `trend` reads saved reports from `~/.netaudit/netaudit.db`. For state checks it
 compares stable finding IDs; a finding that disappeared from an area the latest

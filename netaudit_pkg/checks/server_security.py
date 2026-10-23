@@ -1416,7 +1416,7 @@ def audit_ssh_hardening(ssh: SSHExecutor) -> dict:
     params=[
         {'name': 'host', 'type': 'text', 'label': 'Host', 'default': ''},
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
-        {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22},
+        {'name': 'port', 'type': 'number', 'label': 'SSH port', 'default': 22, 'min': 1, 'max': 65535},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
         {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key)', 'default': ''},
         {'name': 'sudo_password', 'type': 'password', 'label': 'Sudo password (if sudo asks for one)', 'default': ''},
@@ -1618,7 +1618,7 @@ def _audit_error_page(base: str) -> list[dict]:
 
 @register(
     id='web_security_external', label='External web audit (no access)', category='site', risk_level='PASSIVE',
-    params=[{'name': 'url', 'type': 'text', 'label': 'Site URL', 'default': 'https://example.com'}],
+    params=[{'name': 'url', 'type': 'text', 'label': 'Site URL', 'default': 'https://example.com', 'format': 'url'}],
     required_tools=['curl'],
     description='Audits a site from the outside: security headers, outdated TLS, version leaks, exposed '
                 '.git/.env/backups, cookie flags (Secure/HttpOnly/SameSite), CORS misconfiguration, '

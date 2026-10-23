@@ -12,8 +12,8 @@ from ..utils import run_cmd, tool_available
 @register(
     id='mtr', label='MTR (ICMP traceroute)', category='network', risk_level='PASSIVE',
     params=[
-        {'name': 'target', 'type': 'text', 'label': 'Target (IP/host)', 'default': '8.8.8.8'},
-        {'name': 'duration_sec', 'type': 'number', 'label': 'Duration, sec', 'default': 15},
+        {'name': 'target', 'type': 'text', 'label': 'Target (IP/host)', 'default': '8.8.8.8', 'format': 'host'},
+        {'name': 'duration_sec', 'type': 'number', 'label': 'Duration, sec', 'default': 15, 'min': 1, 'max': 3600},
     ],
     required_tools=['mtr'],
     description='Loss and latency per hop. Set the run time in seconds directly: '
@@ -85,9 +85,9 @@ def check_mtr(target: str = '8.8.8.8', duration_sec: float = 15) -> dict:
 @register(
     id='tcptraceroute', label='TCP traceroute', category='network', risk_level='PASSIVE',
     params=[
-        {'name': 'target', 'type': 'text', 'label': 'Target (IP/host)', 'default': '8.8.8.8'},
-        {'name': 'port', 'type': 'number', 'label': 'Port', 'default': 80},
-        {'name': 'max_hops', 'type': 'number', 'label': 'Max hops', 'default': 8},
+        {'name': 'target', 'type': 'text', 'label': 'Target (IP/host)', 'default': '8.8.8.8', 'format': 'host'},
+        {'name': 'port', 'type': 'number', 'label': 'Port', 'default': 80, 'min': 1, 'max': 65535},
+        {'name': 'max_hops', 'type': 'number', 'label': 'Max hops', 'default': 8, 'min': 1, 'max': 64},
     ],
     required_tools=['tcptraceroute'],
     description='TCP SYN instead of ICMP — refutes the ISP excuse "ICMP is just deprioritized". Default 8 hops: usually enough to catch the provider, and beyond that internet nodes often stay silent to TCP traceroute and only waste time.',
@@ -127,8 +127,8 @@ def check_tcptraceroute(target: str = '8.8.8.8', port: int = 80, max_hops: int =
 @register(
     id='ping', label='Ping', category='network', risk_level='PASSIVE',
     params=[
-        {'name': 'target', 'type': 'text', 'label': 'Target', 'default': '8.8.8.8'},
-        {'name': 'count', 'type': 'number', 'label': 'Packets', 'default': 10},
+        {'name': 'target', 'type': 'text', 'label': 'Target', 'default': '8.8.8.8', 'format': 'host'},
+        {'name': 'count', 'type': 'number', 'label': 'Packets', 'default': 10, 'min': 1, 'max': 1000},
     ],
     required_tools=['ping'],
     description='Basic loss and RTT check.',
@@ -156,8 +156,11 @@ def check_ping(target: str = '8.8.8.8', count: int = 10) -> dict:
 @register(
     id='dig', label='DNS (dig)', category='network', risk_level='PASSIVE',
     params=[
-        {'name': 'hostname', 'type': 'text', 'label': 'Domain', 'default': 'google.com'},
-        {'name': 'record_type', 'type': 'text', 'label': 'Record type', 'default': 'A'},
+        {'name': 'hostname', 'type': 'text', 'label': 'Domain', 'default': 'google.com', 'format': 'host'},
+        {'name': 'record_type', 'type': 'select', 'label': 'Record type',
+         'options': ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'PTR', 'SOA', 'SRV', 'TXT', 'CAA'],
+         'aliases': {t.lower(): t for t in ('A', 'AAAA', 'CNAME', 'MX', 'NS', 'PTR', 'SOA', 'SRV', 'TXT', 'CAA')},
+         'default': 'A'},
     ],
     required_tools=['dig'],
     description='Detailed DNS: server, TTL, query time.',
@@ -198,8 +201,8 @@ def check_dig(hostname: str = 'google.com', record_type: str = 'A') -> dict:
 @register(
     id='arping', label='ARPing (L2, local network)', category='network', risk_level='PASSIVE',
     params=[
-        {'name': 'target', 'type': 'text', 'label': 'IP on the local subnet', 'default': '192.168.88.1'},
-        {'name': 'count', 'type': 'number', 'label': 'Packets', 'default': 5},
+        {'name': 'target', 'type': 'text', 'label': 'IP on the local subnet', 'default': '192.168.88.1', 'format': 'host'},
+        {'name': 'count', 'type': 'number', 'label': 'Packets', 'default': 5, 'min': 1, 'max': 1000},
     ],
     required_tools=['arping'],
     description='L2 check within the local subnet (not over the internet).',

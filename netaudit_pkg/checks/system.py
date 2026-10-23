@@ -128,7 +128,7 @@ REMOTE_SUDO_CHECKS = {
     params=[
         {'name': 'host', 'type': 'text', 'label': 'Host', 'default': ''},
         {'name': 'user', 'type': 'text', 'label': 'User', 'default': 'root'},
-        {'name': 'port', 'type': 'number', 'label': 'Port', 'default': 22},
+        {'name': 'port', 'type': 'number', 'label': 'Port', 'default': 22, 'min': 1, 'max': 65535},
         {'name': 'key_path', 'type': 'text', 'label': 'Key path', 'default': '~/.ssh/id_rsa'},
         {'name': 'password', 'type': 'password', 'label': 'SSH password (if no key)', 'default': ''},
         {'name': 'sudo_password', 'type': 'password', 'label': 'Sudo password (if sudo asks for one)', 'default': ''},
@@ -171,9 +171,9 @@ def check_ssh_audit(host: str = '', user: str = 'root', port: int = 22,  # nosec
 @register(
     id='iperf', label='iperf3 throughput', category='performance', risk_level='ACTIVE',
     params=[
-        {'name': 'server', 'type': 'text', 'label': 'iperf3 server', 'default': ''},
-        {'name': 'port', 'type': 'number', 'label': 'Port', 'default': 5201},
-        {'name': 'duration', 'type': 'number', 'label': 'Seconds', 'default': 10},
+        {'name': 'server', 'type': 'text', 'label': 'iperf3 server', 'default': '', 'format': 'host'},
+        {'name': 'port', 'type': 'number', 'label': 'Port', 'default': 5201, 'min': 1, 'max': 65535},
+        {'name': 'duration', 'type': 'number', 'label': 'Seconds', 'default': 10, 'min': 1, 'max': 3600},
     ],
     required_tools=['iperf3'],
     description='Real upload/download speed (needs `iperf3 -s` running on the other end).',
