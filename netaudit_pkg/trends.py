@@ -264,7 +264,7 @@ def snapshots_from_report(report: dict) -> list[dict]:
     for check_id, ctx in (report.get('execution_context') or {}).items():
         for params, result in _result_param_pairs(check_id, ctx, results):
             for key, value in params.items():
-                if key not in storage.IDENTITY_PARAM_KEYS:
+                if key not in storage.IDENTITY_PARAM_KEYS or not storage.identity_value(value):
                     continue
                 snap = _snapshot(check_id, key, value, timestamp, result, params)
                 if snap:
