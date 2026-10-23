@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.1.0 — 2026-10-23
+
 - Trends and the AI history ignore a run without a target (an empty host,
   URL or domain): `netaudit trend` listed `systemd_hardening host=` for a
   Web run with an empty host field, and two such runs were each other's
