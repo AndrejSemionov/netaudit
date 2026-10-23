@@ -140,10 +140,19 @@ def collect_changes(report: dict, report_id: int | None, window: int | None = No
     `report`, against the reports saved strictly before it (the same window
     as trends, without the AI context's unit and id limits)."""
     window = HISTORY_WINDOW if window is None else window
+    # a scheduled job (`run --notify --job`) compares with its own runs, so a
+    # manual or Web run in between cannot cancel its alert; a unit the job
+    # has never seen falls back to any run (docs/research/a4_6_job_baseline.md)
+    job = report.get('job')
     history: dict[tuple, list] = {}
+    job_history: dict[tuple, list] = {}
     for past in reversed(storage.report_data_before(report, report_id, window)):
+        same_job = job is not None and past.get('job') == job
         for snap in trends.snapshots_from_report(past):
-            history.setdefault((snap['check_id'], snap['key'], snap['value']), []).append(snap)
+            unit = (snap['check_id'], snap['key'], snap['value'])
+            history.setdefault(unit, []).append(snap)
+            if same_job:
+                job_history.setdefault(unit, []).append(snap)
 
     problems, no_findings = [], []
     for check_id, key, params, result in _instances(report):
@@ -159,7 +168,8 @@ def collect_changes(report: dict, report_id: int | None, window: int | None = No
         if snap['error'] is not None or trends._kind(snap['check_id']) != 'state':
             continue
         unit = (snap['check_id'], snap['key'], snap['value'])
-        good = [s for s in history.get(unit, []) if s['error'] is None and s['counts'] is not None]
+        earlier = job_history.get(unit) or history.get(unit, [])
+        good = [s for s in earlier if s['error'] is None and s['counts'] is not None]
         entry = {'check_id': unit[0], 'key': unit[1], 'target': str(unit[2]), 'counts': snap['counts']}
         if good:
             entry.update(_unit_change(snap, good[-1], _titles(report, *unit)))

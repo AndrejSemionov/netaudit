@@ -395,6 +395,10 @@ def cmd_run(args):
     opts = _notify_options(args, extra)
     try:
         report = _run_selected(args, extra, repeated)
+        if opts and opts['job']:
+            # a scheduled job's next notification compares with this run
+            # (docs/research/a4_6_job_baseline.md)
+            report['job'] = opts['job']
         saved = save_report(report)
     except SystemExit as e:
         if opts and e.code not in (0, None):
