@@ -25,6 +25,8 @@ string matches, which would make tests brittle against minor wording changes.
 from __future__ import annotations
 
 import re
+import threading
+import time
 
 import pytest
 
@@ -217,6 +219,25 @@ def exit_marked(stdout: str, exit_code: int, marker: str = '__NETAUDIT_CVE_AUDIT
     return f'{stdout}\n{marker}:{exit_code}\n'
 
 
+@pytest.fixture(autouse=True, scope='session')
+def _never_the_real_home(tmp_path_factory):
+    """No test, and no thread a test leaves behind, writes to the user's
+    ~/.netaudit: for the whole session the database and known_hosts point to
+    a temporary directory. isolated_db and per-test patches still override
+    them (FINDINGS 2026-10-23: a report of the test-only check
+    __test_stream_multi__ was found in a real database)."""
+    from netaudit_pkg import ssh, storage
+
+    home = tmp_path_factory.mktemp('netaudit-home')
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(storage, 'DB_PATH', home / 'netaudit.db')
+        mp.setattr(ssh, 'KNOWN_HOSTS_PATH', home / 'known_hosts')
+        if hasattr(storage._local, 'conn'):
+            storage._local.conn.close()
+            del storage._local.conn
+        yield
+
+
 @pytest.fixture
 def isolated_db(tmp_path, monkeypatch):
     """
@@ -236,7 +257,15 @@ def isolated_db(tmp_path, monkeypatch):
     if hasattr(storage._local, 'conn'):
         storage._local.conn.close()
         del storage._local.conn
+    before = set(threading.enumerate())
     yield storage
+    # a thread the test started (a Web stream, an async task) may still be
+    # saving: let it finish while DB_PATH is still this test's file, not the
+    # next test's (FINDINGS 2026-10-23)
+    deadline = time.monotonic() + 10
+    for thread in set(threading.enumerate()) - before:
+        if thread.name != 'traffic-history-watcher':  # a loop, stopped by its own tests
+            thread.join(max(0.0, deadline - time.monotonic()))
     if hasattr(storage._local, 'conn'):
         storage._local.conn.close()
         del storage._local.conn
