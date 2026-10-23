@@ -131,3 +131,43 @@ def test_a_writer_alive_at_the_deadline_stops_the_run_and_never_reaches_home(tmp
     assert 'EXIT 0' not in text, text           # the run did not go on as if nothing happened
     assert 'left threads running' in text, text
     assert not (home / '.netaudit').exists(), text  # the late write did not reach HOME
+
+
+# --- review #55 pass 2 (R3): a connection opened before the suite loads ---------
+
+CACHED_PROBE = '''
+from netaudit_pkg import storage
+
+
+def test_saves_a_report_without_isolated_db():
+    storage.save_report({"timestamp": "2026-10-23 00:00:03", "results": {"cached_conn": {}},
+                         "timing": {}, "meta": {}, "execution_context": {}, "total_time": 0})
+'''
+
+CACHED_RUNNER = '''
+import sqlite3
+import sys
+import pytest
+from netaudit_pkg import storage
+storage.setting_set("opened_before_pytest", "1")   # an open connection to HOME's database
+home_db = str(storage.DB_PATH)
+code = pytest.main([sys.argv[1], "-q", "-p", "no:cacheprovider", "-p", "tests.conftest"])
+reports = sqlite3.connect(home_db).execute("SELECT COUNT(*) FROM reports").fetchone()[0]
+print("EXIT", int(code), "HOME_REPORTS", reports)
+'''
+
+
+def test_a_connection_opened_before_the_suite_is_not_reused(tmp_path):
+    import os
+    import subprocess
+    import sys
+    repo = Path(__file__).resolve().parent.parent
+    (tmp_path / 'probe_cached_conn.py').write_text(CACHED_PROBE, encoding='utf-8')
+    (tmp_path / 'runner.py').write_text(CACHED_RUNNER, encoding='utf-8')
+    home = tmp_path / 'home'
+    home.mkdir()
+    env = {**os.environ, 'HOME': str(home), 'PYTHONPATH': str(repo)}
+    out = subprocess.run([sys.executable, str(tmp_path / 'runner.py'), str(tmp_path / 'probe_cached_conn.py')],
+                         cwd=repo, env=env, capture_output=True, text=True, timeout=60, check=False)
+    text = out.stdout + out.stderr
+    assert 'EXIT 0 HOME_REPORTS 0' in text, text
