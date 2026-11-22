@@ -264,6 +264,93 @@ def test_odd_plugin_paths_are_not_slugs(monkeypatch):
     assert [p['slug'] for p in result['plugins']] == ['ok-slug']
 
 
+# Seen on a real, hardened site (sysadmin.courses, 2026-11-22): readme.txt
+# answers 403, the core version is hidden, but Elementor and WPML print their
+# own generator tags, and a plugin's own files carry ?ver=<its version>.
+REAL_HEAD = (
+    '<meta name="generator" content="WPML ver:4.9.2.1 stt:1,32,45;" />'
+    '<meta name="generator" content="Elementor 4.4.1; features: additional_custom_breakpoints; '
+    'settings: css_print_method-external">'
+)
+REAL_BODY = (
+    '<link rel="stylesheet" href="/wp-content/plugins/elementor/assets/css/frontend.min.css?ver=4.4.1">'
+    '<script src="/wp-content/plugins/elementor/assets/lib/swiper/v8/swiper.min.js?ver=8.4.5"></script>'
+    '<script src="/wp-content/plugins/elementor/assets/js/frontend.min.js?ver=4.4.1"></script>'
+    '<link rel="stylesheet" href="/wp-content/plugins/learnpress/assets/css/learnpress.min.css?ver=4.5.0">'
+    '<script src="/wp-content/plugins/learnpress/assets/js/dist/loadAJAX.min.js?ver=4.5.0"></script>'
+    '<script src="/wp-content/plugins/sitepress-multilingual-cms/res/js/cookies.js?ver=492100"></script>'
+    '<script src="/wp-content/plugins/one-file/x.js?ver=2.0.1"></script>'
+    '<script src="/wp-content/plugins/split/a.js?ver=1.2.0"></script>'
+    '<script src="/wp-content/plugins/split/b.js?ver=5.57.0"></script>'
+)
+
+
+def _real_pages():
+    pages = {BASE: (200, {}, _wp_home(REAL_HEAD, REAL_BODY))}
+    for slug in ('elementor', 'learnpress', 'sitepress-multilingual-cms', 'one-file', 'split'):
+        pages[f'{BASE}wp-content/plugins/{slug}/readme.txt'] = (403, {}, 'Forbidden')
+    return pages
+
+
+REAL_LATEST = {
+    'elementor': {'status': 'ok', 'version': '4.4.1', 'error': None},
+    'learnpress': {'status': 'ok', 'version': '4.6.2', 'error': None},
+    'one-file': {'status': 'ok', 'version': '3.0.0', 'error': None},
+    'split': {'status': 'ok', 'version': '9.9.9', 'error': None},
+}
+
+
+def _plugins(result):
+    return {p['slug']: p for p in result['plugins']}
+
+
+def test_plugin_version_from_its_own_generator_tag(monkeypatch):
+    _site(monkeypatch, _real_pages(), core=CORE_LATEST, plugins=REAL_LATEST)
+    plugins = _plugins(wordpress.check_wordpress_external(BASE))
+    assert (plugins['elementor']['version'], plugins['elementor']['version_source']) == ('4.4.1', 'generator')
+    assert plugins['elementor']['status'] == 'current'
+    wpml = plugins['sitepress-multilingual-cms']
+    assert (wpml['version'], wpml['version_source']) == ('4.9.2.1', 'generator')
+    assert wpml['status'] == 'unknown'          # premium: not on wordpress.org
+
+
+def test_plugin_version_from_the_ver_of_its_own_files(monkeypatch):
+    _site(monkeypatch, _real_pages(), core=CORE_LATEST, plugins=REAL_LATEST)
+    result = wordpress.check_wordpress_external(BASE)
+    learnpress = _plugins(result)['learnpress']
+    assert (learnpress['version'], learnpress['version_source']) == ('4.5.0', 'asset ver')
+    assert learnpress['status'] == 'outdated'
+    finding = _by_id(result, 'WP-PLG-001:learnpress')
+    assert finding['confidence'] == 'low'        # ?ver= is the weakest source
+    assert '?ver=' in finding['detail']
+
+
+def test_ver_without_two_agreeing_files_is_not_a_version(monkeypatch):
+    # one file is not enough (a bundled library has its own ?ver=), two
+    # different values are no majority, and a number without a dot is a build id
+    _site(monkeypatch, _real_pages(), core=CORE_LATEST, plugins=REAL_LATEST)
+    plugins = _plugins(wordpress.check_wordpress_external(BASE))
+    for slug in ('one-file', 'split'):
+        assert plugins[slug]['version'] is None, slug
+        assert plugins[slug]['status'] == 'unknown', slug
+
+
+def test_ver_equal_to_the_core_version_is_not_the_plugin_s(monkeypatch):
+    # a plugin that registers its files without a version gets WordPress's own
+    body = ('<script src="/wp-content/plugins/lazy/a.js?ver=7.1.5"></script>'
+            '<script src="/wp-content/plugins/lazy/b.js?ver=7.1.5"></script>')
+    _site(monkeypatch, {BASE: (200, {}, _wp_home(GENERATOR.format(LATEST), body))}, core=CORE_LATEST)
+    lazy = _plugins(wordpress.check_wordpress_external(BASE))['lazy']
+    assert lazy['version'] is None
+
+
+def test_a_generator_tag_alone_is_enough_to_list_the_plugin(monkeypatch):
+    _site(monkeypatch, {BASE: (200, {}, _wp_home(GENERATOR.format(LATEST) + REAL_HEAD))}, core=CORE_LATEST,
+          plugins=REAL_LATEST)
+    plugins = _plugins(wordpress.check_wordpress_external(BASE))
+    assert sorted(plugins) == ['elementor', 'sitepress-multilingual-cms']
+
+
 def test_plugin_vulnerabilities_are_reported_as_not_checked(monkeypatch):
     # no vulnerability database in this PR (contract C3): never "no vulnerabilities"
     _site(monkeypatch, _plugin_pages(), core=CORE_LATEST, plugins=PLUGIN_LATEST)
