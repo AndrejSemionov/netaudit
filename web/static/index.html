@@ -1767,7 +1767,8 @@ function wordPressHtml(r) {
   let head = '';
   if (r.score && Number.isFinite(r.score.value)) {
     const value = Math.round(r.score.value);
-    const scoreClass = value >= 80 ? 'ok' : value >= 50 ? 'warn' : 'bad';
+    // an incomplete score is never green: what was not checked may be the problem
+    const scoreClass = value >= 80 && r.score.complete ? 'ok' : value >= 50 ? 'warn' : 'bad';
     head = `<div><div class="timing">${t('wp.score')}</div><div class="wp-score ${scoreClass}">${value}<small>/100</small></div></div>`;
   }
   const gaps = r.score && Array.isArray(r.score.not_checked) ? r.score.not_checked : [];
