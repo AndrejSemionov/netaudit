@@ -5,7 +5,7 @@
 - WordPress: a new tab in the Web and a `wordpress` category with the check
   `wordpress_external` (also `netaudit run wordpress_external --url …`). It
   checks a site the way any visitor sees it, with GET requests only, and
-  reports sixteen parts one by one with a score out of 100: HTTPS, the
+  reports seventeen parts one by one with a score out of 100: HTTPS, the
   http -> https redirect, the certificate's end date, HSTS,
   `X-Content-Type-Options`, framing protection, the WordPress version
   against wordpress.org (insecure, outdated or latest), plugins seen on the
@@ -17,9 +17,12 @@
   and `license.txt`. A hidden version, a failed request, a server error or
   a rate limit, and a plugin whose version or latest release is unknown are
   "not checked", never "fine"; the verdict says "not everything was
-  checked" and the score names what it could not count. Known plugin
-  vulnerabilities are not checked yet and say so. Redirects are followed
-  only within the site (http to https, with or without www).
+  checked" and the score names what it could not count. When the server
+  gives no answer to tell whether a site runs WordPress, the check says so
+  instead of "not WordPress". Known plugin vulnerabilities are not checked
+  yet and say so. Redirects are followed only within the site (http to
+  https, with or without www), and http counts as redirected only when it
+  ends on this site's https.
 - `cve_audit` no longer says "no known CVEs found" for WordPress: the
   vulnerability database it uses (OSV) has no WordPress data, so every
   version, however old, looked clean. The WordPress status now comes from

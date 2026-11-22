@@ -17,8 +17,8 @@ verdict stays 'incomplete' (review #59 pass 1).
 
 Every part is its own item in 'checked' (USER 2026-11-22 asked for a report
 more detailed than the reference's): HTTPS, the http redirect, the
-certificate, three headers, the core, plugins, usernames, XML-RPC and five
-kinds of public files. The score is 100 minus PENALTY per finding; it names
+certificate, three headers, the core, plugins (updates, coverage,
+vulnerabilities), usernames, XML-RPC and five kinds of public files. The score is 100 minus PENALTY per finding; it names
 the items it could not count.
 """
 
@@ -237,20 +237,29 @@ def _check_transport(home: Page, base: str, findings: list, checked: list) -> di
     else:
         checked.append({'item': 'https', 'status': 'ok', 'detail': 'the site opens over HTTPS'})
         plain_url = f'http://{parsed.hostname}{parsed.path}'
-        plain = _try(plain_url, follow=False)
-        if not _answered(plain):
-            checked.append({'item': 'http_redirect', 'status': 'not_checked', 'detail': _why(plain)})
-        elif plain.status in _REDIRECTS and plain.headers.get('location', '').startswith('https://'):
-            checked.append({'item': 'http_redirect', 'status': 'ok', 'detail': 'http redirects to https'})
+        # follow it the way a browser would, on this site only: the redirect
+        # counts when the site itself ends on https (review #59 pass 2)
+        try:
+            plain = _fetch_twice(plain_url)
+        except OffSiteRedirect as e:
+            plain, gap = None, f'{e}: no proof that this site redirects to https'
+        except httpx.HTTPError:
+            plain, gap = None, 'the request failed'
+        else:
+            gap = None if _answered(plain) else _why(plain)
+        if gap:
+            checked.append({'item': 'http_redirect', 'status': 'not_checked', 'detail': gap})
+        elif urlparse(plain.url).scheme == 'https':
+            checked.append({'item': 'http_redirect', 'status': 'ok', 'detail': f'http redirects to {plain.url}'})
         elif 200 <= plain.status < 300:
             findings.append(_finding('medium', 'http does not redirect to https',
-                                     f'{plain_url} answers {plain.status} with the page itself',
+                                     f'{plain.url} answers {plain.status} with a page over plain http',
                                      id='WP-TLS-002',
                                      recommendation='Redirect every http request to https (301).'))
             checked.append({'item': 'http_redirect', 'status': 'problem', 'detail': f'http answers {plain.status}'})
         else:
-            checked.append({'item': 'http_redirect', 'status': 'ok',
-                            'detail': f'http answers {plain.status}: the site is not served over it'})
+            checked.append({'item': 'http_redirect', 'status': 'not_checked',
+                            'detail': f'http answers {plain.status} without a redirect to https'})
         cert = _check_certificate(parsed.hostname, parsed.port or 443, findings, checked)
 
     headers = home.headers
@@ -281,44 +290,60 @@ def _check_transport(home: Page, base: str, findings: list, checked: list) -> di
     return cert
 
 
-def _is_wordpress(home: Page, base: str) -> bool:
+def _is_wordpress(home: Page, base: str) -> tuple[bool | None, str]:
+    """(True | False | None, why). None: no markers on the home page and the
+    REST root gave no answer to judge by - "could not tell", not "no"
+    (review #59 pass 2)."""
     if 'api.w.org' in home.headers.get('link', ''):
-        return True
+        return True, 'REST API link header'
     html = home.text
     if 'api.w.org' in html or '/wp-content/' in html or '/wp-includes/' in html:
-        return True
+        return True, 'WordPress paths on the home page'
     if any(rx.search(html) for rx in _GENERATOR):
-        return True
+        return True, 'generator tag'
     root = _try(base + '?rest_route=/')
-    if root is None or root.status != 200:
-        return False
+    if not _answered(root):
+        return None, f'no WordPress markers on the home page, and the REST API gave no answer ({_why(root)})'
+    if root.status != 200:
+        return False, f'no WordPress markers on the home page, and the REST API answered HTTP {root.status}'
     try:
         data = json.loads(root.text)
     except ValueError:
-        return False
-    return isinstance(data, dict) and 'wp/v2' in (data.get('namespaces') or [])
+        data = None
+    if isinstance(data, dict) and 'wp/v2' in (data.get('namespaces') or []):
+        return True, 'REST API'
+    return False, 'no WordPress markers on the home page and no WordPress REST API'
 
 
-def _core_version(home: Page, base: str) -> tuple[str | None, str | None]:
+def _core_version(home: Page, base: str) -> tuple[str | None, str | None, str | None]:
+    """(version, where it was read, why the feed could not tell)."""
     for rx in _GENERATOR:
         m = rx.search(home.text)
         if m:
-            return m.group(1), 'generator'
+            return m.group(1), 'generator', None
     feed = _try(base + '?feed=rss2')
-    if feed is not None and feed.status == 200:
+    if not _answered(feed):
+        return None, None, f'the RSS feed gave no answer ({_why(feed)})'
+    if feed.status == 200:
         m = _FEED_GENERATOR.search(feed.text)
         if m:
-            return m.group(1), 'feed'
-    return None, None
+            return m.group(1), 'feed', None
+    return None, None, None
 
 
 def _check_core(home: Page, base: str, findings: list, checked: list) -> dict:
-    version, source = _core_version(home, base)
+    version, source, feed_failed = _core_version(home, base)
     if version is None:
-        findings.append(_finding('info', 'the WordPress version is hidden — the core was not checked',
-                                 'neither the generator tag nor the RSS feed shows it; look it up in the '
-                                 'admin panel (Dashboard → Updates)', requires_manual_verification=True))
-        checked.append({'item': 'core', 'status': 'not_checked', 'detail': 'version hidden'})
+        if feed_failed:
+            findings.append(_finding('info', 'the WordPress version could not be read — the core was not checked',
+                                     f'no generator tag on the home page, and {feed_failed}',
+                                     requires_manual_verification=True))
+            checked.append({'item': 'core', 'status': 'not_checked', 'detail': feed_failed})
+        else:
+            findings.append(_finding('info', 'the WordPress version is hidden — the core was not checked',
+                                     'neither the generator tag nor the RSS feed shows it; look it up in the '
+                                     'admin panel (Dashboard → Updates)', requires_manual_verification=True))
+            checked.append({'item': 'core', 'status': 'not_checked', 'detail': 'version hidden'})
         return {'version': None, 'source': None, 'status': 'not_checked', 'latest': None}
     status = wordpress_org.core_status(version)
     core = {'version': version, 'source': source, 'status': status['status'], 'latest': status['latest']}
@@ -429,21 +454,27 @@ def _check_plugins(home: Page, base: str, core_version: str | None, findings: li
                                      confidence=confidence, id=subject_id('WP-PLG-001', p['slug']),
                                      recommendation=f'Update {p["slug"]} to {p["latest"]}.'))
     outdated = [p['slug'] for p in plugins if p['status'] == 'outdated']
-    # a plugin without a known version or latest is a gap, and so are the
-    # plugins past the cap (review #59 pass 1)
-    gaps = []
     unjudged = [p['slug'] for p in plugins if p['status'] in ('unknown', 'not_checked')]
+    judged = len(plugins) - len(unjudged)
+    # two items, so a finding about one plugin never hides the gaps about the
+    # others (review #59 pass 1-2): updates of what could be judged, and coverage
+    if outdated:
+        checked.append({'item': 'plugins', 'status': 'problem', 'detail': f'outdated: {", ".join(outdated)}'})
+    elif plugins and not judged:
+        checked.append({'item': 'plugins', 'status': 'not_checked', 'detail': 'no plugin could be judged'})
+    else:
+        checked.append({'item': 'plugins', 'status': 'ok',
+                        'detail': f'none outdated of {judged} judged' if plugins else 'no plugins visible from outside'})
+    gaps = []
     if unjudged:
         gaps.append(f'could not be judged: {", ".join(unjudged)}')
     if truncated:
         gaps.append(f'only the first {MAX_PLUGINS} plugins were checked')
-    if outdated:
-        checked.append({'item': 'plugins', 'status': 'problem',
-                        'detail': '; '.join([f'outdated: {", ".join(outdated)}', *gaps])})
-    elif gaps:
-        checked.append({'item': 'plugins', 'status': 'not_checked', 'detail': '; '.join(gaps)})
+    if gaps:
+        checked.append({'item': 'plugin_versions', 'status': 'not_checked', 'detail': '; '.join(gaps)})
     else:
-        checked.append({'item': 'plugins', 'status': 'ok', 'detail': f'{len(plugins)} visible from outside'})
+        checked.append({'item': 'plugin_versions', 'status': 'ok',
+                        'detail': f'all {len(plugins)} judged' if plugins else 'no plugins visible from outside'})
     checked.append({'item': 'plugin_vulns', 'status': 'not_checked',
                     'detail': 'no vulnerability database is connected'})
     return plugins, truncated
@@ -623,10 +654,16 @@ def check_wordpress_external(url='https://example.com') -> dict:
         return {'url': base, 'verdict': 'unreachable', 'error': f'{base} answered HTTP {home.status}'}
     base = _base_url(home.url) or base   # follow the site's own redirect (http -> https, www)
 
-    if not _is_wordpress(home, base):
-        findings = [_finding('info', 'no sign of WordPress',
-                             'no WordPress markers on the home page and no WordPress REST API; '
-                             'nothing else was checked', confidence='medium')]
+    is_wp, why = _is_wordpress(home, base)
+    if is_wp is None:
+        findings = [_finding('info', 'could not tell whether the site runs WordPress',
+                             f'{why}; nothing else was checked - try again later',
+                             requires_manual_verification=True)]
+        return {'url': base, 'wordpress': None, 'verdict': 'incomplete', 'findings': findings,
+                'summary': _summary(findings)}
+    if not is_wp:
+        findings = [_finding('info', 'no sign of WordPress', f'{why}; nothing else was checked',
+                             confidence='medium')]
         return {'url': base, 'wordpress': False, 'verdict': 'not_wp', 'findings': findings,
                 'summary': _summary(findings)}
 
