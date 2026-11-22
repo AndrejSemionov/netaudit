@@ -10,6 +10,8 @@ wordpress_org.core_status / plugin_latest (tested in test_wordpress_org.py).
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -22,6 +24,9 @@ from netaudit_pkg.registry import registry
 BASE = 'https://blog.test/'
 LATEST = '7.1.5'
 PLAIN = '<html><head><title>Shop</title></head><body>hello</body></html>'
+# what a well-kept site sends; tests about other parts use it so the headers stay out of the way
+HOME_HEADERS = {'Strict-Transport-Security': 'max-age=31536000', 'X-Content-Type-Options': 'nosniff',
+                'X-Frame-Options': 'SAMEORIGIN'}
 
 
 def _wp_home(head='', body=''):
@@ -33,8 +38,9 @@ def _wp_home(head='', body=''):
 GENERATOR = '<meta name="generator" content="WordPress {}">'
 
 
-def _site(monkeypatch, pages, *, core=None, plugins=None):
+def _site(monkeypatch, pages, *, core=None, plugins=None, cert_days=90):
     """pages: url -> (status, headers, text) | Exception. Unlisted URLs answer 404.
+    cert_days: the certificate's days left, or an exception raised reading it.
     Returns the list of requested (url, follow) pairs."""
     requested = []
 
@@ -49,6 +55,13 @@ def _site(monkeypatch, pages, *, core=None, plugins=None):
         return wordpress.Page(status, url, {k.lower(): v for k, v in headers.items()}, text)
 
     monkeypatch.setattr(wordpress, '_fetch', fetch)
+
+    def not_after(host, port):
+        if isinstance(cert_days, Exception):
+            raise cert_days
+        return datetime.now(UTC) + timedelta(days=cert_days, hours=1)
+
+    monkeypatch.setattr(wordpress, '_cert_not_after', not_after)
     core = core or {}
     plugins = plugins or {}
     monkeypatch.setattr(wordpress_org, 'core_status',
@@ -130,7 +143,7 @@ def test_rest_root_alone_identifies_wordpress(monkeypatch):
 # --- core ---------------------------------------------------------------------
 
 def test_insecure_core_from_the_generator_tag_is_high(monkeypatch):
-    _site(monkeypatch, {BASE: (200, {}, _wp_home(GENERATOR.format('6.8.3')))},
+    _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home(GENERATOR.format('6.8.3')))},
           core={'6.8.3': {'status': 'insecure', 'latest': LATEST, 'error': None}})
     result = wordpress.check_wordpress_external(BASE)
     assert result['core'] == {'version': '6.8.3', 'source': 'generator', 'status': 'insecure', 'latest': LATEST}
@@ -139,11 +152,12 @@ def test_insecure_core_from_the_generator_tag_is_high(monkeypatch):
     assert '6.8.3' in finding['title'] and LATEST in finding['recommendation']
     assert result['verdict'] == 'danger'
     assert _checked(result)['core'] == 'problem'
+    assert result['score']['value'] == 75     # 100 - 25 for a high finding
 
 
 def test_core_version_from_the_feed_when_the_tag_is_removed(monkeypatch):
     feed = f'<rss><channel><generator>https://wordpress.org/?v={LATEST}</generator></channel></rss>'
-    _site(monkeypatch, {BASE: (200, {}, _wp_home()), BASE + '?feed=rss2': (200, {}, feed)}, core=CORE_LATEST)
+    _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home()), BASE + '?feed=rss2': (200, {}, feed)}, core=CORE_LATEST)
     result = wordpress.check_wordpress_external(BASE)
     assert result['core']['version'] == LATEST
     assert result['core']['source'] == 'feed'
@@ -152,14 +166,14 @@ def test_core_version_from_the_feed_when_the_tag_is_removed(monkeypatch):
 
 
 def test_outdated_core_is_low(monkeypatch):
-    _site(monkeypatch, {BASE: (200, {}, _wp_home(GENERATOR.format('7.0.9')))},
+    _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home(GENERATOR.format('7.0.9')))},
           core={'7.0.9': {'status': 'outdated', 'latest': LATEST, 'error': None}})
     result = wordpress.check_wordpress_external(BASE)
     assert _by_id(result, 'WP-CORE-002')['severity'] == 'low'
 
 
 def test_hidden_core_version_is_never_up_to_date(monkeypatch):
-    _site(monkeypatch, {BASE: (200, {}, _wp_home())})
+    _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home())})
     result = wordpress.check_wordpress_external(BASE)
     assert result['core']['version'] is None
     assert _checked(result)['core'] == 'not_checked'
@@ -173,7 +187,7 @@ def test_hidden_core_version_is_never_up_to_date(monkeypatch):
     {'status': 'unknown', 'latest': LATEST, 'error': None},
 ])
 def test_core_status_not_known_is_not_checked(monkeypatch, status):
-    _site(monkeypatch, {BASE: (200, {}, _wp_home(GENERATOR.format('7.2-RC2')))}, core={'7.2-RC2': status})
+    _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home(GENERATOR.format('7.2-RC2')))}, core={'7.2-RC2': status})
     result = wordpress.check_wordpress_external(BASE)
     assert result['core']['version'] == '7.2-RC2'
     assert _checked(result)['core'] == 'not_checked'
@@ -193,7 +207,7 @@ PLUGIN_HTML = (
 
 def _plugin_pages():
     return {
-        BASE: (200, {}, _wp_home(GENERATOR.format(LATEST), PLUGIN_HTML)),
+        BASE: (200, HOME_HEADERS, _wp_home(GENERATOR.format(LATEST), PLUGIN_HTML)),
         BASE + 'wp-content/plugins/contact-form-7/readme.txt':
             (200, {'Content-Type': 'text/plain'}, '=== Contact Form 7 ===\nStable tag: 6.2.5\n'),
         BASE + 'wp-content/plugins/elementor/readme.txt':
@@ -248,7 +262,7 @@ def test_latest_plugin_version_not_known_is_not_checked(monkeypatch):
 
 def test_plugin_list_is_capped(monkeypatch):
     body = ''.join(f'<script src="/wp-content/plugins/p{i:02d}/x.js"></script>' for i in range(40))
-    requested = _site(monkeypatch, {BASE: (200, {}, _wp_home(GENERATOR.format(LATEST), body))}, core=CORE_LATEST)
+    requested = _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home(GENERATOR.format(LATEST), body))}, core=CORE_LATEST)
     result = wordpress.check_wordpress_external(BASE)
     assert len(result['plugins']) == wordpress.MAX_PLUGINS
     assert result['plugins_truncated'] is True
@@ -259,7 +273,7 @@ def test_odd_plugin_paths_are_not_slugs(monkeypatch):
     body = ('<script src="/wp-content/plugins/../../etc/x.js"></script>'
             '<script src="/wp-content/plugins/%2e%2e/x.js"></script>'
             '<script src="/wp-content/plugins/ok-slug/x.js"></script>')
-    _site(monkeypatch, {BASE: (200, {}, _wp_home(GENERATOR.format(LATEST), body))}, core=CORE_LATEST)
+    _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home(GENERATOR.format(LATEST), body))}, core=CORE_LATEST)
     result = wordpress.check_wordpress_external(BASE)
     assert [p['slug'] for p in result['plugins']] == ['ok-slug']
 
@@ -286,7 +300,7 @@ REAL_BODY = (
 
 
 def _real_pages():
-    pages = {BASE: (200, {}, _wp_home(REAL_HEAD, REAL_BODY))}
+    pages = {BASE: (200, HOME_HEADERS, _wp_home(REAL_HEAD, REAL_BODY))}
     for slug in ('elementor', 'learnpress', 'sitepress-multilingual-cms', 'one-file', 'split'):
         pages[f'{BASE}wp-content/plugins/{slug}/readme.txt'] = (403, {}, 'Forbidden')
     return pages
@@ -339,13 +353,13 @@ def test_ver_equal_to_the_core_version_is_not_the_plugin_s(monkeypatch):
     # a plugin that registers its files without a version gets WordPress's own
     body = ('<script src="/wp-content/plugins/lazy/a.js?ver=7.1.5"></script>'
             '<script src="/wp-content/plugins/lazy/b.js?ver=7.1.5"></script>')
-    _site(monkeypatch, {BASE: (200, {}, _wp_home(GENERATOR.format(LATEST), body))}, core=CORE_LATEST)
+    _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home(GENERATOR.format(LATEST), body))}, core=CORE_LATEST)
     lazy = _plugins(wordpress.check_wordpress_external(BASE))['lazy']
     assert lazy['version'] is None
 
 
 def test_a_generator_tag_alone_is_enough_to_list_the_plugin(monkeypatch):
-    _site(monkeypatch, {BASE: (200, {}, _wp_home(GENERATOR.format(LATEST) + REAL_HEAD))}, core=CORE_LATEST,
+    _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home(GENERATOR.format(LATEST) + REAL_HEAD))}, core=CORE_LATEST,
           plugins=REAL_LATEST)
     plugins = _plugins(wordpress.check_wordpress_external(BASE))
     assert sorted(plugins) == ['elementor', 'sitepress-multilingual-cms']
@@ -361,7 +375,7 @@ def test_plugin_vulnerabilities_are_reported_as_not_checked(monkeypatch):
 # --- usernames ----------------------------------------------------------------
 
 def _home_latest():
-    return {BASE: (200, {}, _wp_home(GENERATOR.format(LATEST)))}
+    return {BASE: (200, HOME_HEADERS, _wp_home(GENERATOR.format(LATEST)))}
 
 
 def test_author_usernames_from_the_rest_api(monkeypatch):
@@ -434,7 +448,9 @@ def test_soft_404_is_not_a_public_file(monkeypatch):
     _site(monkeypatch, pages, core=CORE_LATEST)
     result = wordpress.check_wordpress_external(BASE)
     assert not [i for i in _ids(result) if i and i.startswith('WP-FILE-')]
-    assert _checked(result)['files'] == 'ok'
+    statuses = _checked(result)
+    for item in ('debug_log', 'config_copies', 'uploads_listing', 'readme_html', 'license_txt'):
+        assert statuses[item] == 'ok', item
 
 
 def test_wp_config_backup_is_critical_and_its_content_is_not_kept(monkeypatch):
@@ -465,7 +481,7 @@ def test_failed_probe_is_not_checked_not_absent(monkeypatch):
     result = wordpress.check_wordpress_external(BASE)
     gap = [f for f in result['findings'] if f['severity'] == 'info' and f.get('requires_manual_verification')]
     assert any('wp-content/debug.log' in f['detail'] for f in gap)
-    assert _checked(result)['files'] == 'not_checked'
+    assert _checked(result)['debug_log'] == 'not_checked'
     assert result['verdict'] == 'incomplete'
 
 
@@ -478,12 +494,137 @@ def test_clean_site_is_ok(monkeypatch):
     assert [f['severity'] for f in result['findings']] == ['ok']
     assert result['summary']['ok'] == 1
     statuses = _checked(result)
-    assert statuses == {'site': 'ok', 'core': 'ok', 'plugins': 'ok', 'plugin_vulns': 'not_checked',
-                        'users': 'ok', 'xmlrpc': 'ok', 'files': 'ok'}
+    assert statuses == {
+        'https': 'ok', 'http_redirect': 'ok', 'certificate': 'ok', 'hsts': 'ok', 'nosniff': 'ok', 'framing': 'ok',
+        'core': 'ok', 'plugins': 'ok', 'plugin_vulns': 'not_checked', 'users': 'ok', 'xmlrpc': 'ok',
+        'debug_log': 'ok', 'config_copies': 'ok', 'uploads_listing': 'ok', 'readme_html': 'ok', 'license_txt': 'ok'}
+    # the score says what it could not count
+    assert result['score'] == {'value': 100, 'complete': False, 'not_checked': ['plugin_vulns']}
 
 
 def test_only_the_site_itself_is_requested(monkeypatch):
     requested = _site(monkeypatch, _plugin_pages(), core=CORE_LATEST, plugins=PLUGIN_LATEST)
     wordpress.check_wordpress_external(BASE)
     assert requested
-    assert all(url.startswith(BASE) for url, _ in requested)
+    assert {urlparse(url).hostname for url, _ in requested} == {'blog.test'}
+
+
+# --- HTTPS, certificate, headers (the reference's "what is fine", and more) ----
+
+def test_http_that_does_not_redirect_to_https_is_medium(monkeypatch):
+    pages = _home_latest()
+    pages['http://blog.test/'] = (200, {}, PLAIN)
+    requested = _site(monkeypatch, pages, core=CORE_LATEST)
+    result = wordpress.check_wordpress_external(BASE)
+    assert _by_id(result, 'WP-TLS-002')['severity'] == 'medium'
+    assert _checked(result)['http_redirect'] == 'problem'
+    assert ('http://blog.test/', False) in requested
+
+
+def test_http_redirect_to_https_is_fine(monkeypatch):
+    pages = _home_latest()
+    pages['http://blog.test/'] = (301, {'Location': BASE}, '')
+    _site(monkeypatch, pages, core=CORE_LATEST)
+    result = wordpress.check_wordpress_external(BASE)
+    assert _checked(result)['http_redirect'] == 'ok'
+    assert 'WP-TLS-002' not in _ids(result)
+
+
+def test_site_only_on_http_is_high(monkeypatch):
+    http_base = 'http://blog.test/'
+    home = (200, HOME_HEADERS, _wp_home(GENERATOR.format(LATEST)))
+    _site(monkeypatch, {http_base: home}, core=CORE_LATEST)
+    result = wordpress.check_wordpress_external(http_base)
+    assert _by_id(result, 'WP-TLS-001')['severity'] == 'high'
+    statuses = _checked(result)
+    assert statuses['https'] == 'problem'
+    assert 'certificate' not in statuses and 'http_redirect' not in statuses
+
+
+def test_certificate_valid_until_and_days_left(monkeypatch):
+    _site(monkeypatch, _home_latest(), core=CORE_LATEST, cert_days=43)
+    result = wordpress.check_wordpress_external(BASE)
+    cert = next(c for c in result['checked'] if c['item'] == 'certificate')
+    assert cert['status'] == 'ok'
+    assert '43 days left' in cert['detail']
+    assert result['certificate']['days_left'] == 43
+
+
+def test_certificate_ending_soon_is_medium(monkeypatch):
+    _site(monkeypatch, _home_latest(), core=CORE_LATEST, cert_days=10)
+    result = wordpress.check_wordpress_external(BASE)
+    finding = _by_id(result, 'WP-TLS-003')
+    assert finding['severity'] == 'medium'
+    assert '10 days' in finding['title']
+    assert _checked(result)['certificate'] == 'problem'
+
+
+def test_certificate_not_read_is_not_checked(monkeypatch):
+    _site(monkeypatch, _home_latest(), core=CORE_LATEST, cert_days=OSError('reset'))
+    result = wordpress.check_wordpress_external(BASE)
+    assert _checked(result)['certificate'] == 'not_checked'
+    assert result['verdict'] == 'incomplete'
+
+
+def test_missing_security_headers_are_low(monkeypatch):
+    _site(monkeypatch, {BASE: (200, {}, _wp_home(GENERATOR.format(LATEST)))}, core=CORE_LATEST)
+    result = wordpress.check_wordpress_external(BASE)
+    for fid in ('WP-HDR-001', 'WP-HDR-002', 'WP-HDR-003'):
+        assert _by_id(result, fid)['severity'] == 'low', fid
+    statuses = _checked(result)
+    assert (statuses['hsts'], statuses['nosniff'], statuses['framing']) == ('problem', 'problem', 'problem')
+    assert result['score']['value'] == 91     # 100 - 3 x 3
+
+
+def test_csp_frame_ancestors_protects_from_framing(monkeypatch):
+    headers = {'Strict-Transport-Security': 'max-age=63072000', 'X-Content-Type-Options': 'nosniff',
+               'Content-Security-Policy': "default-src 'self'; frame-ancestors 'self'"}
+    _site(monkeypatch, {BASE: (200, headers, _wp_home(GENERATOR.format(LATEST)))}, core=CORE_LATEST)
+    result = wordpress.check_wordpress_external(BASE)
+    assert _checked(result)['framing'] == 'ok'
+    assert 'WP-HDR-003' not in _ids(result)
+
+
+def test_public_readme_and_license_are_low(monkeypatch):
+    pages = _home_latest()
+    pages[BASE + 'readme.html'] = (200, {}, '<html><head><title>WordPress &#8250; ReadMe</title></head></html>')
+    pages[BASE + 'license.txt'] = (200, {}, 'WordPress - Web publishing software\n\nCopyright 2011-2026')
+    _site(monkeypatch, pages, core=CORE_LATEST)
+    result = wordpress.check_wordpress_external(BASE)
+    finding = _by_id(result, 'WP-FILE-004')
+    assert finding['severity'] == 'low'
+    assert 'readme.html' in finding['detail'] and 'license.txt' in finding['detail']
+    statuses = _checked(result)
+    assert (statuses['readme_html'], statuses['license_txt']) == ('problem', 'problem')
+
+
+# --- the score and a flaky network ------------------------------------------------
+
+def test_not_wordpress_and_unreachable_have_no_score(monkeypatch):
+    _site(monkeypatch, {BASE: (200, {}, PLAIN)})
+    assert 'score' not in wordpress.check_wordpress_external(BASE)
+    _site(monkeypatch, {BASE: httpx.ConnectError('refused')})
+    assert 'score' not in wordpress.check_wordpress_external(BASE)
+
+
+def test_score_counts_what_was_not_checked(monkeypatch):
+    _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home())})   # the version is hidden
+    result = wordpress.check_wordpress_external(BASE)
+    assert result['score'] == {'value': 100, 'complete': False, 'not_checked': ['core', 'plugin_vulns']}
+
+
+def test_a_request_that_fails_once_is_tried_again(monkeypatch):
+    _site(monkeypatch, _home_latest(), core=CORE_LATEST)
+    fetch = wordpress._fetch
+    failed = []
+
+    def flaky(url, follow=True):
+        if url.endswith('debug.log') and not failed:
+            failed.append(url)
+            raise httpx.ConnectError('blip')
+        return fetch(url, follow)
+
+    monkeypatch.setattr(wordpress, '_fetch', flaky)
+    result = wordpress.check_wordpress_external(BASE)
+    assert failed
+    assert _checked(result)['debug_log'] == 'ok'
