@@ -212,7 +212,7 @@ Contract: `docs/research/wordpress_audit.md` (C2).
 | WP-CORE-002 | low | — | the WordPress version is outdated, not insecure |
 | WP-PLG-001 | medium | plugin slug | a plugin visible from outside is older than its wordpress.org release |
 | WP-USR-001 | medium | — | author usernames are public (REST API, author redirect, users sitemap) |
-| WP-XMLRPC-001 | low | — | XML-RPC is enabled |
+| WP-XMLRPC-001 | low | — | xmlrpc.php is reachable |
 | WP-FILE-001 | high | — | the WordPress debug log is public |
 | WP-FILE-002 | critical | — | a copy of wp-config.php is public |
 | WP-FILE-003 | low | — | directory listing is on in uploads |

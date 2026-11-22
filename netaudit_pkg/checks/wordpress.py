@@ -293,12 +293,15 @@ def _check_xmlrpc(base: str, findings: list, checked: list) -> None:
     if page is None:
         checked.append({'item': 'xmlrpc', 'status': 'not_checked', 'detail': 'the request failed'})
     elif _XMLRPC_GET in page.text:
-        findings.append(_finding('low', 'XML-RPC is enabled',
-                                 'xmlrpc.php answers; bots use it to try many passwords in one request '
-                                 '(system.multicall) and for pingback abuse', id='WP-XMLRPC-001',
-                                 recommendation='Turn XML-RPC off if no app or plugin needs it, or block '
-                                                'xmlrpc.php in the web server.'))
-        checked.append({'item': 'xmlrpc', 'status': 'problem', 'detail': 'enabled'})
+        # a GET cannot tell whether WordPress turned the login methods off
+        # (the xmlrpc_enabled filter): the endpoint is there, pingbacks too
+        findings.append(_finding('low', 'xmlrpc.php is reachable',
+                                 'XML-RPC answers requests; unless it is turned off inside WordPress, bots '
+                                 'use it to try many passwords in one request (system.multicall), and its '
+                                 'pingbacks are abused for attacks on other sites', id='WP-XMLRPC-001',
+                                 recommendation='Block xmlrpc.php in the web server if no app or plugin '
+                                                'needs it.'))
+        checked.append({'item': 'xmlrpc', 'status': 'problem', 'detail': 'reachable'})
     else:
         checked.append({'item': 'xmlrpc', 'status': 'ok', 'detail': 'not answering'})
 
