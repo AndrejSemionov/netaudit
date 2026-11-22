@@ -93,7 +93,23 @@ def test_author_archive_still_shows_the_author(site2):
     assert 'author' in site2['users']['sources']
 
 
-def test_no_public_files_and_not_ok(site2):
-    assert not {i for i in _ids(site2) if i and i.startswith('WP-FILE-')}
-    assert _checked(site2)['files'] == 'ok'
-    assert site2['verdict'] == 'warn'
+def test_only_the_stock_service_files_are_public(site2):
+    # the official image ships readme.html and license.txt; nothing else was left on wp2
+    ids = _ids(site2)
+    assert 'WP-FILE-004' in ids
+    assert not {'WP-FILE-001', 'WP-FILE-002', 'WP-FILE-003'} & ids
+    statuses = _checked(site2)
+    assert (statuses['debug_log'], statuses['config_copies'], statuses['uploads_listing']) == ('ok', 'ok', 'ok')
+    assert (statuses['readme_html'], statuses['license_txt']) == ('problem', 'problem')
+
+
+# --- both: the stand serves plain http -----------------------------------------
+
+def test_plain_http_is_reported_and_there_is_no_certificate(site1, site2):
+    for site in (site1, site2):
+        assert 'WP-TLS-001' in _ids(site)
+        statuses = _checked(site)
+        assert statuses['https'] == 'problem'
+        assert 'certificate' not in statuses and 'http_redirect' not in statuses
+        assert site['verdict'] == 'danger'
+        assert site['score']['value'] < 50
