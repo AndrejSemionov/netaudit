@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 import pytest
@@ -39,20 +39,34 @@ GENERATOR = '<meta name="generator" content="WordPress {}">'
 
 
 def _site(monkeypatch, pages, *, core=None, plugins=None, cert_days=90):
-    """pages: url -> (status, headers, text) | Exception. Unlisted URLs answer 404.
+    """pages: url -> (status, headers, text) | Exception. Unlisted URLs answer 404,
+    except http://blog.test/, which redirects to https like a well-kept site.
+    With follow, redirects are followed the way the real _fetch does: on the
+    same site only, otherwise OffSiteRedirect.
     cert_days: the certificate's days left, or an exception raised reading it.
     Returns the list of requested (url, follow) pairs."""
     requested = []
+    pages.setdefault('http://blog.test/', (301, {'Location': BASE}, ''))
 
     def fetch(url, follow=True):
         requested.append((url, follow))
-        hit = pages.get(url)
-        if isinstance(hit, Exception):
-            raise hit
-        if hit is None:
-            return wordpress.Page(404, url, {}, '<html>Not Found</html>')
-        status, headers, text = hit
-        return wordpress.Page(status, url, {k.lower(): v for k, v in headers.items()}, text)
+        start = url
+        for _ in range(6):
+            hit = pages.get(url)
+            if isinstance(hit, Exception):
+                raise hit
+            if hit is None:
+                return wordpress.Page(404, url, {}, '<html>Not Found</html>')
+            status, headers, text = hit
+            headers = {k.lower(): v for k, v in headers.items()}
+            if follow and status in (301, 302, 303, 307, 308) and 'location' in headers:
+                target = urljoin(url, headers['location'])
+                if urlparse(target).scheme not in ('http', 'https') or not wordpress._same_site(target, start):
+                    raise wordpress.OffSiteRedirect(f'redirected to another site: {urlparse(target).hostname}')
+                url = target
+                continue
+            return wordpress.Page(status, url, headers, text)
+        raise httpx.TooManyRedirects('loop')
 
     monkeypatch.setattr(wordpress, '_fetch', fetch)
 
@@ -497,7 +511,8 @@ def test_clean_site_is_incomplete_while_plugin_vulnerabilities_are_not_checked(m
     statuses = _checked(result)
     assert statuses == {
         'https': 'ok', 'http_redirect': 'ok', 'certificate': 'ok', 'hsts': 'ok', 'nosniff': 'ok', 'framing': 'ok',
-        'core': 'ok', 'plugins': 'ok', 'plugin_vulns': 'not_checked', 'users': 'ok', 'xmlrpc': 'ok',
+        'core': 'ok', 'plugins': 'ok', 'plugin_versions': 'ok', 'plugin_vulns': 'not_checked', 'users': 'ok',
+        'xmlrpc': 'ok',
         'debug_log': 'ok', 'config_copies': 'ok', 'uploads_listing': 'ok', 'readme_html': 'ok', 'license_txt': 'ok'}
     # the score says what it could not count
     assert result['score'] == {'value': 100, 'complete': False, 'not_checked': ['plugin_vulns']}
@@ -519,7 +534,7 @@ def test_http_that_does_not_redirect_to_https_is_medium(monkeypatch):
     result = wordpress.check_wordpress_external(BASE)
     assert _by_id(result, 'WP-TLS-002')['severity'] == 'medium'
     assert _checked(result)['http_redirect'] == 'problem'
-    assert ('http://blog.test/', False) in requested
+    assert ('http://blog.test/', True) in requested
 
 
 def test_http_redirect_to_https_is_fine(monkeypatch):
@@ -664,14 +679,19 @@ def test_users_answer_that_is_not_a_list_is_not_checked(monkeypatch):
 
 # (3) a plugin that could not be judged is a gap, not "fine"
 
+def _item(result, name):
+    return next(c for c in result['checked'] if c['item'] == name)
+
+
 def test_plugin_without_a_known_version_is_a_gap(monkeypatch):
     body = '<script src="/wp-content/plugins/mystery/x.js"></script>'
     _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home(GENERATOR.format(LATEST), body))}, core=CORE_LATEST)
     result = wordpress.check_wordpress_external(BASE)
-    plugins = next(c for c in result['checked'] if c['item'] == 'plugins')
-    assert plugins['status'] == 'not_checked'
-    assert 'mystery' in plugins['detail']
-    assert result['score']['not_checked'] == ['plugins', 'plugin_vulns']
+    # nothing could be judged: neither "no outdated plugins" nor "all versions known"
+    assert _item(result, 'plugins')['status'] == 'not_checked'
+    versions = _item(result, 'plugin_versions')
+    assert versions['status'] == 'not_checked' and 'mystery' in versions['detail']
+    assert result['score']['not_checked'] == ['plugins', 'plugin_versions', 'plugin_vulns']
 
 
 def test_plugin_missing_from_wordpress_org_is_a_gap(monkeypatch):
@@ -679,22 +699,113 @@ def test_plugin_missing_from_wordpress_org_is_a_gap(monkeypatch):
     _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home(GENERATOR.format(LATEST) + REAL_HEAD))},
           core=CORE_LATEST, plugins={'elementor': {'status': 'ok', 'version': '4.4.1', 'error': None}})
     result = wordpress.check_wordpress_external(BASE)
-    plugins = next(c for c in result['checked'] if c['item'] == 'plugins')
-    assert plugins['status'] == 'not_checked'
-    assert 'sitepress-multilingual-cms' in plugins['detail']
+    assert _item(result, 'plugins')['status'] == 'ok'          # elementor was judged: current
+    versions = _item(result, 'plugin_versions')
+    assert versions['status'] == 'not_checked' and 'sitepress-multilingual-cms' in versions['detail']
+
+
+def _many_plugins(n, outdated=()):
+    body = ''.join(f'<script src="/wp-content/plugins/p{i:02d}/x.js?ver=1.0.{i}"></script>'
+                   f'<script src="/wp-content/plugins/p{i:02d}/y.js?ver=1.0.{i}"></script>' for i in range(n))
+    latest = {f'p{i:02d}': {'status': 'ok', 'version': f'1.0.{i}' if i not in outdated else '9.0.0', 'error': None}
+              for i in range(n)}
+    return {BASE: (200, HOME_HEADERS, _wp_home(GENERATOR.format(LATEST), body))}, latest
 
 
 def test_capped_plugin_list_is_a_gap(monkeypatch):
-    body = ''.join(f'<script src="/wp-content/plugins/p{i:02d}/x.js?ver=1.0.{i}"></script>'
-                   f'<script src="/wp-content/plugins/p{i:02d}/y.js?ver=1.0.{i}"></script>' for i in range(30))
-    latest = {f'p{i:02d}': {'status': 'ok', 'version': f'1.0.{i}', 'error': None} for i in range(30)}
-    _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home(GENERATOR.format(LATEST), body))}, core=CORE_LATEST,
-          plugins=latest)
+    pages, latest = _many_plugins(30)
+    _site(monkeypatch, pages, core=CORE_LATEST, plugins=latest)
     result = wordpress.check_wordpress_external(BASE)
     assert {p['status'] for p in result['plugins']} == {'current'}
-    plugins = next(c for c in result['checked'] if c['item'] == 'plugins')
-    assert plugins['status'] == 'not_checked'
-    assert str(wordpress.MAX_PLUGINS) in plugins['detail']
+    assert _item(result, 'plugins')['status'] == 'ok'
+    versions = _item(result, 'plugin_versions')
+    assert versions['status'] == 'not_checked' and str(wordpress.MAX_PLUGINS) in versions['detail']
+
+
+# review #59 pass 2 (3): a finding about one plugin does not hide the gaps about others
+
+def test_outdated_and_unjudged_plugins_show_both(monkeypatch):
+    _site(monkeypatch, _plugin_pages(), core=CORE_LATEST, plugins=PLUGIN_LATEST)   # elementor outdated, premium-thing unknown
+    result = wordpress.check_wordpress_external(BASE)
+    assert 'WP-PLG-001:elementor' in _ids(result)
+    assert result['verdict'] == 'warn'
+    assert _item(result, 'plugins')['status'] == 'problem'
+    versions = _item(result, 'plugin_versions')
+    assert versions['status'] == 'not_checked' and 'premium-thing' in versions['detail']
+    assert 'plugin_versions' in result['score']['not_checked']
+
+
+def test_outdated_plugin_in_a_capped_list_shows_both(monkeypatch):
+    pages, latest = _many_plugins(30, outdated={3})
+    _site(monkeypatch, pages, core=CORE_LATEST, plugins=latest)
+    result = wordpress.check_wordpress_external(BASE)
+    assert _item(result, 'plugins')['status'] == 'problem'
+    assert 'plugin_versions' in result['score']['not_checked']
+
+
+# review #59 pass 2 (1): detection without an answer is not "not WordPress"
+
+@pytest.mark.parametrize('status', [500, 502, 429])
+def test_detection_without_an_answer_is_not_checked(monkeypatch, status):
+    _site(monkeypatch, {BASE: (200, HOME_HEADERS, PLAIN), BASE + '?rest_route=/': (status, {}, 'busy')})
+    result = wordpress.check_wordpress_external(BASE)
+    assert result['wordpress'] is None
+    assert result['verdict'] == 'incomplete'
+    assert 'score' not in result
+    [gap] = result['findings']
+    assert gap['severity'] == 'info' and gap.get('requires_manual_verification')
+    assert f'HTTP {status}' in gap['detail']
+
+
+def test_static_page_with_a_rest_404_is_still_not_wordpress(monkeypatch):
+    _site(monkeypatch, {BASE: (200, HOME_HEADERS, PLAIN), BASE + '?rest_route=/': (404, {}, 'Not Found')})
+    assert wordpress.check_wordpress_external(BASE)['verdict'] == 'not_wp'
+
+
+# review #59 pass 2 (2): only a redirect of this site to https proves the redirect
+
+def test_http_redirect_to_another_https_site_is_not_proof(monkeypatch):
+    pages = _home_latest()
+    pages['http://blog.test/'] = (302, {'Location': 'https://other.test/'}, '')
+    _site(monkeypatch, pages, core=CORE_LATEST)
+    result = wordpress.check_wordpress_external(BASE)
+    item = _item(result, 'http_redirect')
+    assert item['status'] == 'not_checked' and 'other.test' in item['detail']
+
+
+def test_http_redirect_that_stays_on_http_is_a_problem(monkeypatch):
+    pages = _home_latest()
+    pages['http://blog.test/'] = (302, {'Location': '/home'}, '')
+    pages['http://blog.test/home'] = (200, {}, PLAIN)
+    _site(monkeypatch, pages, core=CORE_LATEST)
+    result = wordpress.check_wordpress_external(BASE)
+    assert _item(result, 'http_redirect')['status'] == 'problem'
+    assert 'WP-TLS-002' in _ids(result)
+
+
+def test_http_redirect_chain_that_reaches_https_is_fine(monkeypatch):
+    pages = _home_latest()
+    pages['http://blog.test/'] = (302, {'Location': '/start'}, '')
+    pages['http://blog.test/start'] = (301, {'Location': 'https://www.blog.test/'}, '')
+    pages['https://www.blog.test/'] = (200, {}, PLAIN)
+    _site(monkeypatch, pages, core=CORE_LATEST)
+    assert _item(wordpress.check_wordpress_external(BASE), 'http_redirect')['status'] == 'ok'
+
+
+def test_http_without_a_redirect_or_a_page_is_not_proof(monkeypatch):
+    pages = _home_latest()
+    pages['http://blog.test/'] = (403, {}, 'Forbidden')
+    _site(monkeypatch, pages, core=CORE_LATEST)
+    item = _item(wordpress.check_wordpress_external(BASE), 'http_redirect')
+    assert item['status'] == 'not_checked' and '403' in item['detail']
+
+
+# the same rule for the core version: a feed that did not answer is named
+
+def test_hidden_core_names_a_feed_error(monkeypatch):
+    _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home()), BASE + '?feed=rss2': (503, {}, 'busy')})
+    core = _item(wordpress.check_wordpress_external(BASE), 'core')
+    assert core['status'] == 'not_checked' and 'HTTP 503' in core['detail']
 
 
 # (4) a redirect never leaves the site: checked before each hop, through the real _fetch
