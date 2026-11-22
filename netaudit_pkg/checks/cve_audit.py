@@ -56,7 +56,7 @@ from datetime import datetime, timedelta
 
 import httpx
 
-from .. import storage
+from .. import storage, wordpress_org
 from ..findings import subject_id
 from ..registry import register
 from ..ssh import HostKeyMismatchError, SSHExecutor
@@ -737,6 +737,31 @@ def fetch_vuln_details(vuln_id: str) -> dict:
     }
 
 
+def _wordpress_core_finding(p: dict) -> dict:
+    """The WordPress core status from wordpress.org stable-check (shared
+    with wordpress_external). Without an answer it is a collection gap,
+    never 'ok'."""
+    version = p['version']
+    status = wordpress_org.core_status(version)
+    base = {'package': p['name'], 'version': version, 'cve': None}
+    latest = status['latest']
+    if status['status'] == 'insecure':
+        return {**base, 'severity': 'high', 'id': 'CVE-WP-001',
+                'title': f'WordPress {version} is insecure (wordpress.org) — later releases fix security issues',
+                'fixed_versions': [latest] if latest else [],
+                'references': [wordpress_org.STABLE_CHECK_URL]}
+    if status['status'] == 'outdated':
+        return {**base, 'severity': 'low', 'id': 'CVE-WP-002',
+                'title': f'WordPress {version} is not the latest release (wordpress.org: outdated, not insecure)',
+                'fixed_versions': [latest] if latest else [],
+                'references': [wordpress_org.STABLE_CHECK_URL]}
+    if status['status'] == 'latest':
+        return {**base, 'severity': 'ok', 'title': f'WordPress {version} is the latest release (wordpress.org)'}
+    return {**base, 'severity': 'info', 'requires_manual_verification': True,
+            'title': 'WordPress could not be checked against wordpress.org — this does NOT mean no CVEs were found',
+            'detail': status['error'] or f'{version} is not in the wordpress.org release list'}
+
+
 # ===========================================================================
 # Combined check
 # ===========================================================================
@@ -791,7 +816,11 @@ def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> 
     # _dpkg_version()'s docstring), and querying OSV with it would just
     # push the same false-PASS risk one function further down the call
     # chain instead of actually closing it.
-    queryable = [p for p in packages if p.get('version_collection_ok', True)]
+    # WordPress never goes to OSV either: OSV accepts the 'WordPress'
+    # ecosystem name but has no data in it, so every version came back
+    # "no known CVEs found" (W0, docs/research/wordpress_audit.md).
+    queryable = [p for p in packages
+                 if p.get('version_collection_ok', True) and p.get('ecosystem') != 'WordPress']
     vuln_ids_by_pkg, collection_errors = query_osv(queryable, os_id, version_id)
 
     findings = []
@@ -799,6 +828,11 @@ def check_cve_audit(host='', user='root', port=22, key_path='', password='') -> 
               'not_supported': 0, 'third_party_repo': 0, 'collection_error': 0}
 
     for p in packages:
+        if p.get('ecosystem') == 'WordPress':
+            finding = _wordpress_core_finding(p)
+            counts['collection_error' if finding.get('requires_manual_verification') else finding['severity']] += 1
+            findings.append(finding)
+            continue
         if not p.get('version_collection_ok', True):
             # dpkg-query's completion couldn't be confirmed for this
             # package (SSH channel drop, timeout - see _dpkg_version()) -

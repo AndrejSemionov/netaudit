@@ -60,9 +60,14 @@ def test_check_runs_through_the_existing_stream_api():
 
 def test_result_view_escapes_and_is_shared_with_the_audit_tab():
     js = _script()
-    body = _functions(js)['renderWordPress']
-    assert re.search(r'^\s*r = escDeep\(r\);', body.split('{', 1)[1], re.MULTILINE)
+    functions = _functions(js)
+    # the tab escapes the raw result once; the Audit tab passes renderReport()'s
+    # display copy, which is already escaped - so one view, wordPressHtml(),
+    # and no double escaping
+    assert re.search(r'^\s*r = escDeep\(r\);\s*return wordPressHtml\(r\);',
+                     functions['renderWordPress'].split('{', 1)[1], re.MULTILINE)
+    assert 'out.innerHTML = renderWordPress(result);' in functions['runWordPressCheck']
+    view = functions['wordPressHtml']
     for part in ('r.verdict', 'r.checked', 'r.findings', 'r.plugins'):
-        assert part in body, part
-    # the Audit tab shows the same view for this check
-    assert "id === 'wordpress_external'" in _functions(js)['renderResult']
+        assert part in view, part
+    assert "if (id === 'wordpress_external') return { html: wordPressHtml(r) };" in functions['renderResult']

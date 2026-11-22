@@ -160,6 +160,8 @@ subject and stability rules as above).
 | Control id | Severities | Subject | Control |
 |---|---|---|---|
 | CVE-VULN-001 | critical, high, medium, low | package, vulnerability id | a known vulnerability affects an installed package |
+| CVE-WP-001 | high | — | WordPress core is insecure (wordpress.org stable-check) |
+| CVE-WP-002 | low | — | WordPress core is outdated, not insecure (wordpress.org stable-check) |
 
 ## log_discovery
 
@@ -199,3 +201,18 @@ subject and stability rules as above).
 | SQLI-SCAN-002 | low | — | sqlmap found no parameters to test |
 | SQLI-SCAN-003 | low | — | sqlmap finished with no clear verdict |
 | SQLI-SCAN-004 | low | — | sqlmap is unavailable |
+
+## wordpress_external
+
+Contract: `docs/research/wordpress_audit.md` (C2).
+
+| Control id | Severities | Subject | Control |
+|---|---|---|---|
+| WP-CORE-001 | high | — | the WordPress version is insecure (wordpress.org stable-check) |
+| WP-CORE-002 | low | — | the WordPress version is outdated, not insecure |
+| WP-PLG-001 | medium | plugin slug | a plugin visible from outside is older than its wordpress.org release |
+| WP-USR-001 | medium | — | author usernames are public (REST API, author redirect, users sitemap) |
+| WP-XMLRPC-001 | low | — | XML-RPC is enabled |
+| WP-FILE-001 | high | — | the WordPress debug log is public |
+| WP-FILE-002 | critical | — | a copy of wp-config.php is public |
+| WP-FILE-003 | low | — | directory listing is on in uploads |

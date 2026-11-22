@@ -24,4 +24,5 @@ from . import (
     ssh_hardening,  # noqa: F401
     system,  # noqa: F401
     systemd_hardening,  # noqa: F401
+    wordpress,  # noqa: F401
 )
