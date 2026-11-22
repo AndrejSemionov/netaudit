@@ -167,6 +167,25 @@ ok within the check / not enough data / not applicable / error.
 - **C1. Category `wordpress`.** `cat.wordpress` (RU «WordPress», EN
   "WordPress"), shown as its own group in the Web check list and in
   `netaudit list`; RU texts covered by `tests/test_i18n_checks_ru.py`.
+- **C1a. WordPress tab in the Web** (USER 2026-11-22: «в web окно для ввода
+  сайта и он проверит», like the reference). A top-level tab «WordPress»
+  next to «Аудит»: one field «Адрес сайта» (accepts `site.com` and adds
+  `https://`; other schemes refused, as the `url` format already does) and
+  a «Проверить» button. It runs `wordpress_external` through the existing
+  `/api/stream/start` (no new API); the report is saved to history and
+  trends like any run. The result view:
+  - a verdict banner: OK / есть замечания / опасно / не WordPress / сайт не
+    открывается;
+  - "what was checked": site opens, core version, plugins, usernames,
+    public files — each with its own status, including "not checked" and
+    why (for example no Wordfence key);
+  - findings with title, detail and how to fix — the full report, nothing
+    hidden behind a contact form;
+  - a plugins table: plugin, version, latest, status, vulnerabilities, with
+    the note that only plugins visible from outside are listed.
+  The tab is for the NetAudit operator, behind the existing Web login. A
+  public page where anyone checks any site (the reference's lead form) is
+  not in this contract: it would make the NetAudit server an open scanner.
 - **C2. `wordpress_external`** (PASSIVE, param `url`, GET requests only):
   §4 signals; core status from stable-check, outdated plugins from
   plugins/info; one sensitive-path list shared with `web_security_external`;
@@ -183,10 +202,17 @@ ok within the check / not enough data / not applicable / error.
   stand with the official `wordpress` image in GitHub Actions.
 - Monitoring needs no new code: `setup-timer` + `run --notify --job`.
 
-Questions for USER:
+Questions for USER, with the recommended answer first:
 1. Wordfence needs a free wordfence.com account and key per NetAudit user.
-   Accept this, or ship without plugin vulnerabilities for now?
-2. One PR per C-item (C1+C2 → C3 → C4 → C5), or URL first and SSH later?
-3. W0: drop WordPress from `cve_audit`, or check core there via stable-check?
-4. Live check: name a WordPress site you own and allow about ten GET
-   requests to it, or rely on the CI stand only?
+   Recommended: yes, an optional key in Settings; without it the tab says
+   plugin vulnerabilities were not checked. Alternative: no plugin
+   vulnerabilities for now.
+2. Order. Recommended: PR 1 = C1 + C1a + C2 + C5 (the tab works, core
+   status and outdated plugins), PR 2 = C3 (vulnerabilities), PR 3 = C4
+   (SSH). Alternative: everything in one PR.
+3. W0. Recommended: `cve_audit` takes core status from stable-check (one
+   shared function with C2), so SSH users keep a real answer. Alternative:
+   drop WordPress from `cve_audit`.
+4. Live check. Recommended: the CI stand only; USER tries the tab on own
+   sites after merge. Alternative: name a site you own and allow about ten
+   GET requests to it now.
