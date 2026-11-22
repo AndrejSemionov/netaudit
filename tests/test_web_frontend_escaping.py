@@ -47,6 +47,7 @@ HTML_WRITERS = {
     'loadSavedTargetsDatalist': 'escapes',
     'loadTrendUnits': 'escapes',
     'renderTrendUnit': 'escapes',
+    'renderWordPress': 'escapes',  # the WordPress tab and the Audit tab (docs/research/wordpress_audit.md)
 }
 
 # Interpolations allowed inside inline on*="..." handlers: check/tool ids from
