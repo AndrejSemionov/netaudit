@@ -8,10 +8,12 @@ The verdict follows the project's outcomes (result_reliability_audit.md):
 - 'not_wp'      - no sign of WordPress: not applicable, nothing else probed;
 - 'danger' / 'warn' - critical/high, or medium/low findings;
 - 'incomplete'  - nothing bad found, but a part could not be checked (a
-                  hidden core version, a failed request): never "ok";
+                  hidden core version, a failed request, a server error, a
+                  plugin that could not be judged): never "ok";
 - 'ok'          - every part was checked and nothing was found.
 Known plugin vulnerabilities need a vulnerability database (contract C3):
-until then they are reported as not checked, never as "none".
+until then they are reported as not checked, never as "none" - and the
+verdict stays 'incomplete' (review #59 pass 1).
 
 Every part is its own item in 'checked' (USER 2026-11-22 asked for a report
 more detailed than the reference's): HTTPS, the http redirect, the
@@ -102,19 +104,44 @@ class Page:
     text: str         # at most MAX_BODY bytes, decoded
 
 
+class OffSiteRedirect(httpx.HTTPError):
+    """A redirect to another host or scheme: not followed (review #59 pass 1),
+    the request is not answered by this site."""
+
+
+_TRANSPORT = None   # tests put an httpx.MockTransport here
+
+
 def _fetch(url: str, follow: bool = True) -> Page:
     """The one request seam of this check: a GET, the start of the body.
-    Transport errors raise httpx.HTTPError."""
-    with (httpx.Client(timeout=TIMEOUT, follow_redirects=follow, max_redirects=MAX_REDIRECTS,
-                       headers={'User-Agent': wordpress_org.USER_AGENT}) as client,
-          client.stream('GET', url) as resp):
-        body = bytearray()
-        for chunk in resp.iter_bytes():
-            body += chunk
-            if len(body) >= MAX_BODY:
-                break
-        text = bytes(body[:MAX_BODY]).decode(resp.charset_encoding or 'utf-8', errors='replace')
-        return Page(resp.status_code, str(resp.url), {k.lower(): v for k, v in resp.headers.items()}, text)
+    Redirects are followed by hand, each one checked before it is sent: the
+    same site only (http -> https, the name with or without www), at most
+    MAX_REDIRECTS. Transport errors raise httpx.HTTPError."""
+    start = url
+    with httpx.Client(timeout=TIMEOUT, follow_redirects=False, transport=_TRANSPORT,
+                      headers={'User-Agent': wordpress_org.USER_AGENT}) as client:
+        for _ in range(MAX_REDIRECTS + 1):
+            try:
+                with client.stream('GET', url) as resp:
+                    if follow and resp.status_code in _REDIRECTS and 'location' in resp.headers:
+                        target = urljoin(url, resp.headers['location'])
+                        if urlparse(target).scheme not in ('http', 'https') or not _same_site(target, start):
+                            raise OffSiteRedirect(
+                                f'redirected to another site: {urlparse(target).hostname or target}')
+                        url = target
+                        continue
+                    body = bytearray()
+                    for chunk in resp.iter_bytes():
+                        body += chunk
+                        if len(body) >= MAX_BODY:
+                            break
+                    text = bytes(body[:MAX_BODY]).decode(resp.charset_encoding or 'utf-8', errors='replace')
+                    return Page(resp.status_code, url, {k.lower(): v for k, v in resp.headers.items()}, text)
+            except httpx.InvalidURL as e:
+                # httpx parses Location even when it does not follow it: a site's
+                # "javascript:..." must not crash the check (InvalidURL is no HTTPError)
+                raise OffSiteRedirect(f'redirected to an address that is not a web page: {e}') from e
+    raise httpx.TooManyRedirects(f'more than {MAX_REDIRECTS} redirects from {start}')
 
 
 def _base_url(url: str) -> str | None:
@@ -138,9 +165,12 @@ def _same_site(url: str, base: str) -> bool:
 
 def _fetch_twice(url: str, follow: bool = True) -> Page:
     """_fetch, once more after a transport error: a single network blip
-    should not turn a part of the report into "not checked"."""
+    should not turn a part of the report into "not checked". A redirect off
+    the site is an answer, not a blip: not tried again."""
     try:
         return _fetch(url, follow)
+    except OffSiteRedirect:
+        raise
     except httpx.HTTPError:
         return _fetch(url, follow)
 
@@ -150,6 +180,16 @@ def _try(url: str, follow: bool = True) -> Page | None:
         return _fetch_twice(url, follow)
     except httpx.HTTPError:
         return None
+
+
+def _answered(page: Page | None) -> bool:
+    """Whether the site gave an answer to judge by. A server error, a rate
+    limit or a timeout is none: "not checked", never "closed"."""
+    return page is not None and page.status < 500 and page.status not in (408, 429)
+
+
+def _why(page: Page | None) -> str:
+    return 'the request failed' if page is None else f'HTTP {page.status}'
 
 
 def _cert_not_after(host: str, port: int) -> datetime:
@@ -198,8 +238,8 @@ def _check_transport(home: Page, base: str, findings: list, checked: list) -> di
         checked.append({'item': 'https', 'status': 'ok', 'detail': 'the site opens over HTTPS'})
         plain_url = f'http://{parsed.hostname}{parsed.path}'
         plain = _try(plain_url, follow=False)
-        if plain is None:
-            checked.append({'item': 'http_redirect', 'status': 'not_checked', 'detail': 'the request failed'})
+        if not _answered(plain):
+            checked.append({'item': 'http_redirect', 'status': 'not_checked', 'detail': _why(plain)})
         elif plain.status in _REDIRECTS and plain.headers.get('location', '').startswith('https://'):
             checked.append({'item': 'http_redirect', 'status': 'ok', 'detail': 'http redirects to https'})
         elif 200 <= plain.status < 300:
@@ -389,11 +429,19 @@ def _check_plugins(home: Page, base: str, core_version: str | None, findings: li
                                      confidence=confidence, id=subject_id('WP-PLG-001', p['slug']),
                                      recommendation=f'Update {p["slug"]} to {p["latest"]}.'))
     outdated = [p['slug'] for p in plugins if p['status'] == 'outdated']
+    # a plugin without a known version or latest is a gap, and so are the
+    # plugins past the cap (review #59 pass 1)
+    gaps = []
+    unjudged = [p['slug'] for p in plugins if p['status'] in ('unknown', 'not_checked')]
+    if unjudged:
+        gaps.append(f'could not be judged: {", ".join(unjudged)}')
+    if truncated:
+        gaps.append(f'only the first {MAX_PLUGINS} plugins were checked')
     if outdated:
-        checked.append({'item': 'plugins', 'status': 'problem', 'detail': f'outdated: {", ".join(outdated)}'})
-    elif any(p['status'] == 'not_checked' for p in plugins):
-        checked.append({'item': 'plugins', 'status': 'not_checked',
-                        'detail': 'wordpress.org did not answer for some plugins'})
+        checked.append({'item': 'plugins', 'status': 'problem',
+                        'detail': '; '.join([f'outdated: {", ".join(outdated)}', *gaps])})
+    elif gaps:
+        checked.append({'item': 'plugins', 'status': 'not_checked', 'detail': '; '.join(gaps)})
     else:
         checked.append({'item': 'plugins', 'status': 'ok', 'detail': f'{len(plugins)} visible from outside'})
     checked.append({'item': 'plugin_vulns', 'status': 'not_checked',
@@ -412,7 +460,7 @@ def _author_slugs(urls: list[str], base: str) -> list[str]:
 
 
 def _check_users(base: str, findings: list, checked: list) -> dict:
-    exposed, sources, failed = [], [], False
+    exposed, sources, failed = [], [], []
 
     def add(source, slugs):
         new = [s for s in slugs if s and s not in exposed]
@@ -421,8 +469,8 @@ def _check_users(base: str, findings: list, checked: list) -> dict:
         exposed.extend(new)
 
     rest = _try(base + '?rest_route=/wp/v2/users')
-    if rest is None:
-        failed = True
+    if not _answered(rest):
+        failed.append(f'REST API: {_why(rest)}')
     elif rest.status == 200:
         try:
             data = json.loads(rest.text)
@@ -430,14 +478,16 @@ def _check_users(base: str, findings: list, checked: list) -> dict:
             data = None
         if isinstance(data, list):
             add('rest', [str(u['slug'])[:60] for u in data if isinstance(u, dict) and u.get('slug')])
+        else:
+            failed.append('REST API: the answer is not a user list')
     author = _try(base + '?author=1', follow=False)
-    if author is None:
-        failed = True
-    elif author.status in (301, 302, 303, 307, 308):
+    if not _answered(author):
+        failed.append(f'author redirect: {_why(author)}')
+    elif author.status in _REDIRECTS:
         add('author', _author_slugs([author.headers.get('location', '')], base))
     sitemap = _try(base + '?sitemap=users&paged=1')
-    if sitemap is None:
-        failed = True
+    if not _answered(sitemap):
+        failed.append(f'users sitemap: {_why(sitemap)}')
     elif sitemap.status == 200:
         add('sitemap', _author_slugs(_LOC.findall(sitemap.text), base))
 
@@ -450,7 +500,7 @@ def _check_users(base: str, findings: list, checked: list) -> dict:
                                                 'with a public author name.'))
         checked.append({'item': 'users', 'status': 'problem', 'detail': f'{len(exposed)} public'})
     elif failed:
-        checked.append({'item': 'users', 'status': 'not_checked', 'detail': 'a request failed'})
+        checked.append({'item': 'users', 'status': 'not_checked', 'detail': '; '.join(failed)})
     else:
         checked.append({'item': 'users', 'status': 'ok', 'detail': 'not listed for visitors'})
     return {'exposed': exposed, 'sources': sources}
@@ -458,8 +508,8 @@ def _check_users(base: str, findings: list, checked: list) -> dict:
 
 def _check_xmlrpc(base: str, findings: list, checked: list) -> None:
     page = _try(base + 'xmlrpc.php')
-    if page is None:
-        checked.append({'item': 'xmlrpc', 'status': 'not_checked', 'detail': 'the request failed'})
+    if not _answered(page):
+        checked.append({'item': 'xmlrpc', 'status': 'not_checked', 'detail': _why(page)})
     elif _XMLRPC_GET in page.text:
         # a GET cannot tell whether WordPress turned the login methods off
         # (the xmlrpc_enabled filter): the endpoint is there, pingbacks too
@@ -476,12 +526,12 @@ def _check_xmlrpc(base: str, findings: list, checked: list) -> None:
 
 def _check_files(base: str, findings: list, checked: list) -> None:
     pages = {path: _try(base + path) for path in PUBLIC_FILES}
-    unchecked = [path for path, page in pages.items() if page is None]
+    unchecked = {path: _why(page) for path, page in pages.items() if not _answered(page)}
 
     def public(path, rx):
         page = pages[path]
         # only the verdict is kept: a config copy holds the database password
-        return page is not None and page.status == 200 and bool(rx.search(page.text))
+        return path not in unchecked and page.status == 200 and bool(rx.search(page.text))
 
     log = public(LOG_FILE, _LOG_LINE)
     configs = [path for path in CONFIG_COPIES if public(path, _CONFIG_DEFINE)]
@@ -508,14 +558,17 @@ def _check_files(base: str, findings: list, checked: list) -> None:
                                                 'the site runs WordPress.'))
     if unchecked:
         findings.append(_finding('info', f'{len(unchecked)} file(s) could not be checked',
-                                 'the request failed twice (timeout or connection error), not confirmed '
-                                 'absent: ' + ', '.join(unchecked), requires_manual_verification=True))
+                                 'no answer to judge by (a failed request, a server error or a rate limit), '
+                                 'not confirmed absent: '
+                                 + ', '.join(f'{path} ({why})' for path, why in unchecked.items()),
+                                 requires_manual_verification=True))
 
     def item(name, paths, found, ok_detail):
         if found:
             checked.append({'item': name, 'status': 'problem', 'detail': ', '.join(found)})
         elif any(path in unchecked for path in paths):
-            checked.append({'item': name, 'status': 'not_checked', 'detail': 'the request failed'})
+            checked.append({'item': name, 'status': 'not_checked',
+                            'detail': ', '.join(sorted({unchecked[path] for path in paths if path in unchecked}))})
         else:
             checked.append({'item': name, 'status': 'ok', 'detail': ok_detail})
 
@@ -545,7 +598,7 @@ def _verdict(findings: list, checked: list) -> str:
         return 'danger'
     if severities & {'medium', 'low'}:
         return 'warn'
-    if any(c['status'] == 'not_checked' for c in checked if c['item'] != 'plugin_vulns'):
+    if any(c['status'] == 'not_checked' for c in checked):
         return 'incomplete'
     return 'ok'
 

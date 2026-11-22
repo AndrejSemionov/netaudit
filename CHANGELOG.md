@@ -14,9 +14,12 @@
   on wordpress.org, author usernames shown by the REST API, the author
   redirect or the users sitemap, `xmlrpc.php`, a public `debug.log`, public
   copies of `wp-config.php`, directory listing in uploads, `readme.html`
-  and `license.txt`. A hidden version or a failed request is "not
-  checked", never "fine", and the score names what it could not count;
-  known plugin vulnerabilities are not checked yet and say so.
+  and `license.txt`. A hidden version, a failed request, a server error or
+  a rate limit, and a plugin whose version or latest release is unknown are
+  "not checked", never "fine"; the verdict says "not everything was
+  checked" and the score names what it could not count. Known plugin
+  vulnerabilities are not checked yet and say so. Redirects are followed
+  only within the site (http to https, with or without www).
 - `cve_audit` no longer says "no known CVEs found" for WordPress: the
   vulnerability database it uses (OSV) has no WordPress data, so every
   version, however old, looked clean. The WordPress status now comes from
