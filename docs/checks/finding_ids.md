@@ -216,3 +216,10 @@ Contract: `docs/research/wordpress_audit.md` (C2).
 | WP-FILE-001 | high | — | the WordPress debug log is public |
 | WP-FILE-002 | critical | — | a copy of wp-config.php is public |
 | WP-FILE-003 | low | — | directory listing is on in uploads |
+| WP-FILE-004 | low | — | readme.html or license.txt is public |
+| WP-TLS-001 | high | — | the site does not use HTTPS |
+| WP-TLS-002 | medium | — | http does not redirect to https |
+| WP-TLS-003 | medium | — | the certificate ends in less than 14 days |
+| WP-HDR-001 | low | — | HSTS is off |
+| WP-HDR-002 | low | — | X-Content-Type-Options: nosniff is missing |
+| WP-HDR-003 | low | — | no protection from framing (X-Frame-Options / CSP frame-ancestors) |

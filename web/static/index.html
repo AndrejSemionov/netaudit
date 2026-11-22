@@ -134,6 +134,12 @@
   .wp-checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
   .wp-finding { padding: 10px 0; border-top: 1px solid var(--border); }
   .wp-finding:first-of-type { border-top: 0; }
+  .wp-head { display: flex; gap: 28px; align-items: center; flex-wrap: wrap; }
+  .wp-score { font-size: 56px; font-weight: 700; line-height: 1; font-family: var(--mono); }
+  .wp-score small { font-size: 18px; color: var(--muted); }
+  .wp-score.ok { color: var(--ok); } .wp-score.warn { color: var(--warn); } .wp-score.bad { color: var(--bad); }
+  .wp-facts { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 10px; font-size: 14px; }
+  .wp-facts div span { display: block; color: var(--muted); font-size: 12px; }
   .settings-group { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin-bottom: 18px; }
   .settings-group h2 { margin: 0 0 4px; font-size: 17px; }
   .settings-group .hint { color: var(--muted); font-size: 14px; margin: 0 0 14px; }
@@ -1751,37 +1757,56 @@ const WP_VERDICT_PILL = { ok: 'ok', warn: 'warn', danger: 'bad', incomplete: 'wa
 const WP_STATUS_PILL = { ok: 'ok', problem: 'bad', not_checked: 'warn' };
 const WP_SEVERITY_PILL = { critical: 'bad', high: 'bad', medium: 'warn', low: 'warn', info: '', ok: 'ok' };
 const WP_PLUGIN_PILL = { current: 'ok', outdated: 'warn', unknown: '', not_checked: 'warn' };
+const WP_SOURCE_KEY = { 'generator': 'wp.src.generator', 'readme.txt': 'wp.src.readme', 'asset ver': 'wp.src.asset' };
 
 function wordPressHtml(r) {
   const verdict = Object.hasOwn(WP_VERDICT_PILL, r.verdict) ? r.verdict : 'unreachable';
   const pillClass = WP_VERDICT_PILL[verdict];
-  const core = r.core && r.core.version ? ` · WordPress ${r.core.version}` : '';
-  let html = `<div class="card"><h2><span class="pill ${pillClass}">${t('wp.verdict.' + verdict)}</span></h2>
-    <div class="timing">${r.url || ''}${core}</div>${r.error ? `<p class="timing">${r.error}</p>` : ''}</div>`;
-  if (Array.isArray(r.checked) && r.checked.length) {
-    html += `<div class="card"><h2>${t('wp.checked')}</h2><div class="wp-checks">` + r.checked.map(c => {
-      const pillClass = WP_STATUS_PILL[c.status] || '';
-      return `<div><span class="pill ${pillClass}">${t('wp.status.' + c.status)}</span> ${t('wp.item.' + c.item)}
-        <div class="timing">${c.detail || ''}</div></div>`;
-    }).join('') + '</div></div>';
+  const checked = Array.isArray(r.checked) ? r.checked : [];
+  // the head: the score, the verdict and the facts behind them
+  let head = '';
+  if (r.score && Number.isFinite(r.score.value)) {
+    const value = Math.round(r.score.value);
+    const scoreClass = value >= 80 ? 'ok' : value >= 50 ? 'warn' : 'bad';
+    head = `<div><div class="timing">${t('wp.score')}</div><div class="wp-score ${scoreClass}">${value}<small>/100</small></div></div>`;
   }
+  const gaps = r.score && Array.isArray(r.score.not_checked) ? r.score.not_checked : [];
+  const version = r.core ? (r.core.version ? `WordPress ${r.core.version}` : t('wp.version_hidden')) : '—';
+  const cert = r.certificate ? `${r.certificate.not_after} (${r.certificate.days_left} ${t('wp.days')})` : '—';
+  let html = `<div class="card"><div class="wp-head">${head}<div>
+      <h2><span class="pill ${pillClass}">${t('wp.verdict.' + verdict)}</span></h2>
+      ${gaps.length ? `<div class="timing">${t('wp.score_partial')}: ${gaps.map(g => t('wp.item.' + g)).join(', ')}</div>` : ''}
+      ${r.error ? `<p class="timing">${r.error}</p>` : ''}
+      <div class="wp-facts"><div><span>${t('wp.address')}</span>${r.url || ''}</div>
+        <div><span>WordPress</span>${version}</div><div><span>${t('wp.item.certificate')}</span>${cert}</div></div>
+    </div></div></div>`;
+  // problems first, with how to fix them
   const findings = (r.findings || []).filter(f => f.severity !== 'ok');
   if (findings.length) {
-    html += `<div class="card"><h2>${t('wp.findings')}</h2>` + findings.map(f => {
+    html += `<div class="card"><h2>${t('wp.findings')}: ${findings.length}</h2>` + findings.map(f => {
       const pillClass = WP_SEVERITY_PILL[f.severity] || '';
       return `<div class="wp-finding"><span class="pill ${pillClass}">${t('wp.sev.' + f.severity)}</span> <b>${f.title}</b>
         ${f.detail ? `<div class="timing">${f.detail}</div>` : ''}
         ${f.recommendation ? `<div>${t('wp.fix')}: ${f.recommendation}</div>` : ''}</div>`;
     }).join('') + '</div>';
   }
+  // then what could not be checked, then what is fine
+  for (const [status, title] of [['not_checked', t('wp.not_checked')], ['ok', t('wp.fine')]]) {
+    const items = checked.filter(c => c.status === status);
+    if (!items.length) continue;
+    const pillClass = WP_STATUS_PILL[status];
+    html += `<div class="card"><h2>${title}: ${items.length}</h2><div class="wp-checks">` + items.map(c =>
+      `<div><span class="pill ${pillClass}">${t('wp.status.' + status)}</span> ${t('wp.item.' + c.item)}
+        <div class="timing">${c.detail || ''}</div></div>`).join('') + '</div></div>';
+  }
   if (Array.isArray(r.plugins) && r.plugins.length) {
     const rows = r.plugins.map(p => {
       const pillClass = WP_PLUGIN_PILL[p.status] || '';
-      return `<tr><td>${p.slug}</td><td>${p.version || '—'}</td><td>${p.latest || '—'}</td>
-        <td><span class="pill ${pillClass}">${t('wp.pstatus.' + p.status)}</span></td></tr>`;
+      return `<tr><td>${p.slug}</td><td>${p.version || '—'}</td><td class="timing">${p.version_source ? t(WP_SOURCE_KEY[p.version_source] || 'wp.src.asset') : '—'}</td>
+        <td>${p.latest || '—'}</td><td><span class="pill ${pillClass}">${t('wp.pstatus.' + p.status)}</span></td></tr>`;
     }).join('');
     html += `<div class="card"><h2>${t('wp.plugins')}: ${r.plugins.length}</h2>
-      <table><tr><th>${t('wp.col.plugin')}</th><th>${t('wp.col.version')}</th><th>${t('wp.col.latest')}</th><th>${t('wp.col.status')}</th></tr>${rows}</table>
+      <table><tr><th>${t('wp.col.plugin')}</th><th>${t('wp.col.version')}</th><th>${t('wp.col.source')}</th><th>${t('wp.col.latest')}</th><th>${t('wp.col.status')}</th></tr>${rows}</table>
       <p class="timing">${t('wp.plugins_note')}${r.plugins_truncated ? ' ' + t('wp.truncated') : ''}</p></div>`;
   }
   return html;

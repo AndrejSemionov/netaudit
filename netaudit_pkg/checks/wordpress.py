@@ -12,14 +12,23 @@ The verdict follows the project's outcomes (result_reliability_audit.md):
 - 'ok'          - every part was checked and nothing was found.
 Known plugin vulnerabilities need a vulnerability database (contract C3):
 until then they are reported as not checked, never as "none".
+
+Every part is its own item in 'checked' (USER 2026-11-22 asked for a report
+more detailed than the reference's): HTTPS, the http redirect, the
+certificate, three headers, the core, plugins, usernames, XML-RPC and five
+kinds of public files. The score is 100 minus PENALTY per finding; it names
+the items it could not count.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import socket
+import ssl
 from dataclasses import dataclass
-from urllib.parse import unquote, urljoin, urlparse
+from datetime import UTC, datetime
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import httpx
 
@@ -41,11 +50,18 @@ LOG_FILE = 'wp-content/debug.log'
 CONFIG_COPIES = ('wp-config.php.bak', 'wp-config.php~', 'wp-config.php.save', 'wp-config.php.old',
                  'wp-config.php.orig', 'wp-config.bak', 'wp-config.txt')
 UPLOADS = 'wp-content/uploads/'
-PUBLIC_FILES = (LOG_FILE, *CONFIG_COPIES, UPLOADS)
+README = 'readme.html'
+LICENSE = 'license.txt'
+PUBLIC_FILES = (LOG_FILE, *CONFIG_COPIES, UPLOADS, README, LICENSE)
+CERT_WARN_DAYS = 14
+PENALTY = {'critical': 40, 'high': 25, 'medium': 10, 'low': 3}
+_REDIRECTS = (301, 302, 303, 307, 308)
 
 _LOG_LINE = re.compile(r'PHP (?:Fatal error|Parse error|Warning|Notice|Deprecated)|WordPress database error')
 _CONFIG_DEFINE = re.compile(r'''define\s*\(\s*['"]DB_(?:NAME|USER|PASSWORD|HOST)['"]''')
 _DIR_LISTING = re.compile(r'<title>\s*Index of /', re.IGNORECASE)
+_README = re.compile(r'<title>\s*WordPress\s*(?:&#8250;|\u203a)\s*ReadMe', re.IGNORECASE)  # readme.html
+_LICENSE = re.compile(r'WordPress - Web publishing software')                          # license.txt
 _XMLRPC_GET = 'XML-RPC server accepts POST requests only'   # wp-includes/IXR/class-IXR-server.php
 
 _VERSION = r'([0-9][0-9A-Za-z.\-]{0,19})'
@@ -59,6 +75,23 @@ _PLUGIN_PATH = re.compile(r'^(/(?:[^/]+/)*?wp-content/plugins/)([A-Za-z0-9_-]{1,
 _STABLE_TAG = re.compile(r'^[ \t]*stable tag:[ \t]*(\S+)', re.IGNORECASE | re.MULTILINE)
 _AUTHOR_PATH = re.compile(r'/author/([^/?#]{1,60})(?:/|$)')
 _LOC = re.compile(r'<loc>\s*([^<\s]+)\s*</loc>', re.IGNORECASE)
+_META_GENERATOR = (
+    re.compile(r'<meta\s[^>]*name=["\']generator["\'][^>]*content=["\']([^"\']{1,200})["\']', re.IGNORECASE),
+    re.compile(r'<meta\s[^>]*content=["\']([^"\']{1,200})["\'][^>]*name=["\']generator["\']', re.IGNORECASE),
+)
+# plugins that print their own version in a generator tag, as seen on a real site
+_PLUGIN_GENERATORS = (
+    ('elementor', re.compile(r'^Elementor\s+([0-9]+(?:\.[0-9]+)+)\b')),
+    ('sitepress-multilingual-cms', re.compile(r'^WPML ver:([0-9]+(?:\.[0-9]+)+)\b')),
+)
+_DOTTED = re.compile(r'[0-9]+(?:\.[0-9]+)+')
+# where a plugin's version was read, weakest last: ?ver= is set by whoever
+# enqueues the file, and a bundled library carries its own
+VERSION_SOURCES = {
+    'generator': ('medium', "the plugin's own generator tag"),
+    'readme.txt': ('medium', "the plugin's public readme.txt"),
+    'asset ver': ('low', "the ?ver= of the plugin's files on the page"),
+}
 
 
 @dataclass
@@ -103,11 +136,109 @@ def _same_site(url: str, base: str) -> bool:
     return a.removeprefix('www.') == b.removeprefix('www.')
 
 
-def _try(url: str, follow: bool = True) -> Page | None:
+def _fetch_twice(url: str, follow: bool = True) -> Page:
+    """_fetch, once more after a transport error: a single network blip
+    should not turn a part of the report into "not checked"."""
     try:
         return _fetch(url, follow)
     except httpx.HTTPError:
+        return _fetch(url, follow)
+
+
+def _try(url: str, follow: bool = True) -> Page | None:
+    try:
+        return _fetch_twice(url, follow)
+    except httpx.HTTPError:
         return None
+
+
+def _cert_not_after(host: str, port: int) -> datetime:
+    """When the site's certificate ends."""
+    context = ssl.create_default_context()
+    with (socket.create_connection((host, port), timeout=TIMEOUT) as sock,
+          context.wrap_socket(sock, server_hostname=host) as tls):
+        cert = tls.getpeercert()
+    return datetime.fromtimestamp(ssl.cert_time_to_seconds(cert['notAfter']), tz=UTC)
+
+
+def _check_certificate(host: str, port: int, findings: list, checked: list) -> dict | None:
+    try:
+        not_after = _cert_not_after(host, port)
+    except (OSError, ValueError, KeyError) as e:
+        checked.append({'item': 'certificate', 'status': 'not_checked', 'detail': f'could not read it: {e}'})
+        return None
+    days = (not_after - datetime.now(UTC)).days
+    until = not_after.strftime('%Y-%m-%d')
+    detail = f'valid until {until}, {days} days left'
+    if days < CERT_WARN_DAYS:
+        findings.append(_finding('medium', f'the certificate ends in {days} days', f'valid until {until}',
+                                 id='WP-TLS-003',
+                                 recommendation='Renew it now and make sure automatic renewal works '
+                                                '(certbot renew --dry-run).'))
+        checked.append({'item': 'certificate', 'status': 'problem', 'detail': detail})
+    else:
+        checked.append({'item': 'certificate', 'status': 'ok', 'detail': detail})
+    return {'not_after': until, 'days_left': days}
+
+
+def _check_transport(home: Page, base: str, findings: list, checked: list) -> dict | None:
+    """HTTPS, the http -> https redirect, the certificate and three headers.
+    Returns the certificate's end date and days left when it was read."""
+    parsed = urlparse(base)
+    https = parsed.scheme == 'https'
+    cert = None
+    if not https:
+        findings.append(_finding('high', 'the site does not use HTTPS',
+                                 f'{base} opens over plain http: logins and cookies travel unencrypted',
+                                 id='WP-TLS-001',
+                                 recommendation="Get a certificate (Let's Encrypt is free) and redirect "
+                                                'http to https.'))
+        checked.append({'item': 'https', 'status': 'problem', 'detail': 'plain http'})
+    else:
+        checked.append({'item': 'https', 'status': 'ok', 'detail': 'the site opens over HTTPS'})
+        plain_url = f'http://{parsed.hostname}{parsed.path}'
+        plain = _try(plain_url, follow=False)
+        if plain is None:
+            checked.append({'item': 'http_redirect', 'status': 'not_checked', 'detail': 'the request failed'})
+        elif plain.status in _REDIRECTS and plain.headers.get('location', '').startswith('https://'):
+            checked.append({'item': 'http_redirect', 'status': 'ok', 'detail': 'http redirects to https'})
+        elif 200 <= plain.status < 300:
+            findings.append(_finding('medium', 'http does not redirect to https',
+                                     f'{plain_url} answers {plain.status} with the page itself',
+                                     id='WP-TLS-002',
+                                     recommendation='Redirect every http request to https (301).'))
+            checked.append({'item': 'http_redirect', 'status': 'problem', 'detail': f'http answers {plain.status}'})
+        else:
+            checked.append({'item': 'http_redirect', 'status': 'ok',
+                            'detail': f'http answers {plain.status}: the site is not served over it'})
+        cert = _check_certificate(parsed.hostname, parsed.port or 443, findings, checked)
+
+    headers = home.headers
+    if https:
+        if 'strict-transport-security' in headers:
+            checked.append({'item': 'hsts', 'status': 'ok', 'detail': headers['strict-transport-security'][:80]})
+        else:
+            findings.append(_finding('low', 'HSTS is off',
+                                     'no Strict-Transport-Security header: a browser may still try http first',
+                                     id='WP-HDR-001',
+                                     recommendation='Send Strict-Transport-Security: max-age=31536000.'))
+            checked.append({'item': 'hsts', 'status': 'problem', 'detail': 'no Strict-Transport-Security'})
+    if headers.get('x-content-type-options', '').strip().lower() == 'nosniff':
+        checked.append({'item': 'nosniff', 'status': 'ok', 'detail': 'X-Content-Type-Options: nosniff'})
+    else:
+        findings.append(_finding('low', 'X-Content-Type-Options: nosniff is missing',
+                                 'a browser may guess a file\'s type and run an uploaded file as a script',
+                                 id='WP-HDR-002', recommendation='Send X-Content-Type-Options: nosniff.'))
+        checked.append({'item': 'nosniff', 'status': 'problem', 'detail': 'no X-Content-Type-Options: nosniff'})
+    if 'x-frame-options' in headers or 'frame-ancestors' in headers.get('content-security-policy', '').lower():
+        checked.append({'item': 'framing', 'status': 'ok', 'detail': 'X-Frame-Options or CSP frame-ancestors'})
+    else:
+        findings.append(_finding('low', 'no protection from framing (clickjacking)',
+                                 'neither X-Frame-Options nor CSP frame-ancestors: another site can show this '
+                                 'one in a frame and trick a click', id='WP-HDR-003',
+                                 recommendation="Send X-Frame-Options: SAMEORIGIN or CSP frame-ancestors 'self'."))
+        checked.append({'item': 'framing', 'status': 'problem', 'detail': 'no X-Frame-Options, no frame-ancestors'})
+    return cert
 
 
 def _is_wordpress(home: Page, base: str) -> bool:
@@ -173,33 +304,68 @@ def _check_core(home: Page, base: str, findings: list, checked: list) -> dict:
     return core
 
 
-def _visible_plugins(home: Page, base: str) -> tuple[list[tuple[str, str]], bool]:
-    """[(slug, readme URL)] for plugins whose files this site's pages load,
-    capped at MAX_PLUGINS, and whether the cap was hit."""
+def _asset_version(vers: list[str], core_version: str | None) -> str | None:
+    """The ?ver= most of a plugin's files agree on: at least two files and
+    more than half of the dotted values. Not the core version: WordPress
+    puts its own on a file registered without one."""
+    dotted = [v for v in vers if _DOTTED.fullmatch(v)]
+    if not dotted:
+        return None
+    best = max(set(dotted), key=dotted.count)
+    if dotted.count(best) < 2 or dotted.count(best) * 2 <= len(dotted) or best == core_version:
+        return None
+    return best
+
+
+def _visible_plugins(home: Page, base: str, core_version: str | None) -> tuple[list[dict], bool]:
+    """Plugins whose files this site's pages load or whose generator tag is
+    on the page, capped at MAX_PLUGINS, and whether the cap was hit:
+    [{'slug', 'readme', 'generator', 'asset'}] (the last two are versions)."""
     origin = '{0.scheme}://{0.netloc}'.format(urlparse(base))
-    found: dict[str, str] = {}
+    found: dict[str, dict] = {}
     for raw in _ASSET.findall(home.text):
         url = urljoin(base, raw)
         if not _same_site(url, base):
             continue
-        m = _PLUGIN_PATH.match(urlparse(url).path)
-        if m and m.group(2) not in found:
-            found[m.group(2)] = f'{origin}{m.group(1)}{m.group(2)}/readme.txt'
-    slugs = list(found)
-    return [(s, found[s]) for s in slugs[:MAX_PLUGINS]], len(slugs) > MAX_PLUGINS
+        parsed = urlparse(url)
+        m = _PLUGIN_PATH.match(parsed.path)
+        if not m:
+            continue
+        entry = found.setdefault(m.group(2), {'slug': m.group(2), 'generator': None, 'vers': [],
+                                              'readme': f'{origin}{m.group(1)}{m.group(2)}/readme.txt'})
+        entry['vers'] += parse_qs(parsed.query).get('ver', [])
+    for rx in _META_GENERATOR:
+        for content in rx.findall(home.text):
+            for slug, plugin_rx in _PLUGIN_GENERATORS:
+                m = plugin_rx.match(content.strip())
+                if m:
+                    found.setdefault(slug, {'slug': slug, 'vers': [],
+                                            'readme': f'{base}wp-content/plugins/{slug}/readme.txt'})
+                    found[slug]['generator'] = m.group(1)
+    plugins = [{'slug': e['slug'], 'readme': e['readme'], 'generator': e.get('generator'),
+                'asset': _asset_version(e['vers'], core_version)} for e in found.values()]
+    return plugins[:MAX_PLUGINS], len(plugins) > MAX_PLUGINS
 
 
-def _plugin(slug: str, readme_url: str) -> dict:
-    version = None
-    readme = _try(readme_url)
-    if readme is not None and readme.status == 200:
-        m = _STABLE_TAG.search(readme.text)
-        if m and wordpress_org.version_tuple(m.group(1)):
-            version = m.group(1)
-    entry = {'slug': slug, 'version': version, 'version_source': 'readme.txt' if version else None,
+def _readme_version(url: str) -> str | None:
+    readme = _try(url)
+    if readme is None or readme.status != 200:
+        return None
+    m = _STABLE_TAG.search(readme.text)
+    return m.group(1) if m and wordpress_org.version_tuple(m.group(1)) else None
+
+
+def _plugin(seen: dict) -> dict:
+    version, source = seen['generator'], 'generator'
+    if version is None:
+        version, source = _readme_version(seen['readme']), 'readme.txt'
+    if version is None:
+        version, source = seen['asset'], 'asset ver'
+    entry = {'slug': seen['slug'], 'version': version, 'version_source': source if version else None,
              'latest': None, 'status': 'unknown'}
     if version is None:
         return entry
+    slug = seen['slug']
     latest = wordpress_org.plugin_latest(slug)
     if latest['status'] == 'error':
         entry['status'] = 'not_checked'
@@ -210,15 +376,17 @@ def _plugin(slug: str, readme_url: str) -> dict:
     return entry
 
 
-def _check_plugins(home: Page, base: str, findings: list, checked: list) -> tuple[list, bool]:
-    visible, truncated = _visible_plugins(home, base)
-    plugins = sorted((_plugin(slug, readme) for slug, readme in visible), key=lambda p: p['slug'])
+def _check_plugins(home: Page, base: str, core_version: str | None, findings: list,
+                   checked: list) -> tuple[list, bool]:
+    visible, truncated = _visible_plugins(home, base, core_version)
+    plugins = sorted((_plugin(seen) for seen in visible), key=lambda p: p['slug'])
     for p in plugins:
         if p['status'] == 'outdated':
+            confidence, where = VERSION_SOURCES[p['version_source']]
             findings.append(_finding('medium', f'plugin {p["slug"]} {p["version"]} is outdated',
                                      f'the latest version on wordpress.org is {p["latest"]}; the installed '
-                                     'version is read from the plugin\'s public readme.txt',
-                                     confidence='medium', id=subject_id('WP-PLG-001', p['slug']),
+                                     f'version is read from {where}',
+                                     confidence=confidence, id=subject_id('WP-PLG-001', p['slug']),
                                      recommendation=f'Update {p["slug"]} to {p["latest"]}.'))
     outdated = [p['slug'] for p in plugins if p['status'] == 'outdated']
     if outdated:
@@ -307,21 +475,18 @@ def _check_xmlrpc(base: str, findings: list, checked: list) -> None:
 
 
 def _check_files(base: str, findings: list, checked: list) -> None:
-    log, configs, listing, unchecked = False, [], False, []
-    for path in PUBLIC_FILES:
-        page = _try(base + path)
-        if page is None:
-            unchecked.append(path)
-            continue
-        if page.status != 200:
-            continue
+    pages = {path: _try(base + path) for path in PUBLIC_FILES}
+    unchecked = [path for path, page in pages.items() if page is None]
+
+    def public(path, rx):
+        page = pages[path]
         # only the verdict is kept: a config copy holds the database password
-        if path == LOG_FILE and _LOG_LINE.search(page.text):
-            log = True
-        elif path in CONFIG_COPIES and _CONFIG_DEFINE.search(page.text):
-            configs.append(path)
-        elif path == UPLOADS and _DIR_LISTING.search(page.text):
-            listing = True
+        return page is not None and page.status == 200 and bool(rx.search(page.text))
+
+    log = public(LOG_FILE, _LOG_LINE)
+    configs = [path for path in CONFIG_COPIES if public(path, _CONFIG_DEFINE)]
+    listing = public(UPLOADS, _DIR_LISTING)
+    info_files = [path for path, rx in ((README, _README), (LICENSE, _LICENSE)) if public(path, rx)]
     if configs:
         findings.append(_finding('critical', 'a copy of wp-config.php is public', ', '.join(configs),
                                  id='WP-FILE-002',
@@ -336,17 +501,29 @@ def _check_files(base: str, findings: list, checked: list) -> None:
         findings.append(_finding('low', 'directory listing is on in uploads', UPLOADS, id='WP-FILE-003',
                                  recommendation='Turn directory listing off in the web server '
                                                 '(nginx autoindex off, Apache Options -Indexes).'))
+    if info_files:
+        findings.append(_finding('low', 'WordPress service files are public', ', '.join(info_files),
+                                 id='WP-FILE-004',
+                                 recommendation='Delete them or deny them in the web server: they tell a bot '
+                                                'the site runs WordPress.'))
     if unchecked:
         findings.append(_finding('info', f'{len(unchecked)} file(s) could not be checked',
-                                 'the request failed (timeout or connection error), not confirmed absent: '
-                                 + ', '.join(unchecked), requires_manual_verification=True))
-    if configs or log or listing:
-        checked.append({'item': 'files', 'status': 'problem',
-                        'detail': ', '.join(configs + ([LOG_FILE] if log else []) + ([UPLOADS] if listing else []))})
-    elif unchecked:
-        checked.append({'item': 'files', 'status': 'not_checked', 'detail': ', '.join(unchecked)})
-    else:
-        checked.append({'item': 'files', 'status': 'ok', 'detail': 'nothing public'})
+                                 'the request failed twice (timeout or connection error), not confirmed '
+                                 'absent: ' + ', '.join(unchecked), requires_manual_verification=True))
+
+    def item(name, paths, found, ok_detail):
+        if found:
+            checked.append({'item': name, 'status': 'problem', 'detail': ', '.join(found)})
+        elif any(path in unchecked for path in paths):
+            checked.append({'item': name, 'status': 'not_checked', 'detail': 'the request failed'})
+        else:
+            checked.append({'item': name, 'status': 'ok', 'detail': ok_detail})
+
+    item('debug_log', [LOG_FILE], [LOG_FILE] if log else [], 'not public')
+    item('config_copies', CONFIG_COPIES, configs, 'no copy of wp-config.php is public')
+    item('uploads_listing', [UPLOADS], [UPLOADS] if listing else [], 'no directory listing')
+    item('readme_html', [README], [README] if README in info_files else [], 'not public')
+    item('license_txt', [LICENSE], [LICENSE] if LICENSE in info_files else [], 'not public')
 
 
 def _summary(findings: list) -> dict:
@@ -354,6 +531,12 @@ def _summary(findings: list) -> dict:
     for f in findings:
         counts[f['severity']] += 1
     return counts
+
+
+def _score(findings: list, checked: list) -> dict:
+    gaps = [c['item'] for c in checked if c['status'] == 'not_checked']
+    value = max(0, 100 - sum(PENALTY.get(f['severity'], 0) for f in findings))
+    return {'value': value, 'complete': not gaps, 'not_checked': gaps}
 
 
 def _verdict(findings: list, checked: list) -> str:
@@ -380,7 +563,7 @@ def check_wordpress_external(url='https://example.com') -> dict:
     if base is None:
         return {'url': url, 'verdict': 'unreachable', 'error': f'could not parse URL: {url}'}
     try:
-        home = _fetch(base)
+        home = _fetch_twice(base)
     except httpx.HTTPError as e:
         return {'url': base, 'verdict': 'unreachable', 'error': f'could not open {base}: {e}'}
     if not 200 <= home.status < 300:
@@ -395,9 +578,10 @@ def check_wordpress_external(url='https://example.com') -> dict:
                 'summary': _summary(findings)}
 
     findings: list = []
-    checked = [{'item': 'site', 'status': 'ok', 'detail': base}]
+    checked: list = []
+    cert = _check_transport(home, base, findings, checked)
     core = _check_core(home, base, findings, checked)
-    plugins, truncated = _check_plugins(home, base, findings, checked)
+    plugins, truncated = _check_plugins(home, base, core['version'], findings, checked)
     users = _check_users(base, findings, checked)
     _check_xmlrpc(base, findings, checked)
     _check_files(base, findings, checked)
@@ -405,6 +589,6 @@ def check_wordpress_external(url='https://example.com') -> dict:
     verdict = _verdict(findings, checked)
     if verdict == 'ok':
         findings.append(_finding('ok', 'no issues seen from outside'))
-    return {'url': base, 'wordpress': True, 'verdict': verdict, 'core': core, 'plugins': plugins,
-            'plugins_truncated': truncated, 'users': users, 'checked': checked,
-            'findings': findings, 'summary': _summary(findings)}
+    return {'url': base, 'wordpress': True, 'verdict': verdict, 'score': _score(findings, checked),
+            'core': core, 'certificate': cert, 'plugins': plugins, 'plugins_truncated': truncated,
+            'users': users, 'checked': checked, 'findings': findings, 'summary': _summary(findings)}

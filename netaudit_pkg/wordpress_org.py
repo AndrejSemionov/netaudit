@@ -39,6 +39,14 @@ def _get_json(url: str, params: dict | None = None) -> tuple[int, object]:
     return resp.status_code, data
 
 
+def _ask(url: str, params: dict | None = None) -> tuple[int, object]:
+    """_get_json, once more after a transport error (a network blip)."""
+    try:
+        return _get_json(url, params)
+    except httpx.HTTPError:
+        return _get_json(url, params)
+
+
 def normalize_core_version(version: str) -> str:
     """'4.7.0' -> '4.7': stable-check lists the first release of a branch
     without its '.0' (it has '4.7' and '6.0', never '4.7.0')."""
@@ -53,7 +61,7 @@ def core_status(version: str) -> dict:
     'unknown': the version is not a release wordpress.org knows (a
     pre-release, a typo, a fork) - not checked, not clean."""
     try:
-        code, data = _get_json(STABLE_CHECK_URL)
+        code, data = _ask(STABLE_CHECK_URL)
     except httpx.HTTPError as e:
         return {'status': 'error', 'latest': None, 'error': f'wordpress.org stable-check: {e}'}
     if code != 200:
@@ -72,7 +80,7 @@ def plugin_latest(slug: str) -> dict:
     params = {'action': 'plugin_information', 'request[slug]': slug,
               'request[fields][sections]': '0', 'request[fields][versions]': '0'}
     try:
-        code, data = _get_json(PLUGIN_INFO_URL, params)
+        code, data = _ask(PLUGIN_INFO_URL, params)
     except httpx.HTTPError as e:
         return {'status': 'error', 'version': None, 'error': f'wordpress.org plugins: {e}'}
     if code == 404:
