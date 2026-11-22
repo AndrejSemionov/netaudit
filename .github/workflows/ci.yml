@@ -99,6 +99,35 @@ jobs:
           docker logs stand 2>&1 | tail -40
           docker logs stand2 2>&1 | tail -20
 
+  e2e-wordpress:
+    # WordPress stand (docs/research/wordpress_audit.md, contract C6): two
+    # sites from the official image, the ground truth for wordpress_external.
+    # The passwords are made per run.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install runtime + dev dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+      - name: Start the WordPress stand
+        run: bash tests/e2e_wordpress/setup.sh
+      - name: E2E tests
+        env:
+          NETAUDIT_E2E_WP1: http://127.0.0.1:8081/
+          NETAUDIT_E2E_WP2: http://127.0.0.1:8082/
+        run: python -m pytest tests/e2e_wordpress -v
+      - name: Stand log
+        if: always()
+        run: |
+          docker logs wp1 2>&1 | tail -30
+          docker logs wp2 2>&1 | tail -20
+
   security:
     runs-on: ubuntu-latest
     steps:

@@ -37,6 +37,7 @@ from netaudit_pkg.checks import (
     server_security,
     sqli,
     systemd_hardening,
+    wordpress,
 )
 from netaudit_pkg.findings import subject_id
 
@@ -62,11 +63,13 @@ IN_SCOPE = {
     lynis_audit: None,
     rootkit_check: None,
     sqli: None,
+    # docs/research/wordpress_audit.md
+    wordpress: None,
 }
 # severities a finding may have without being a problem the trend counts
 NOT_PROBLEMS = ('ok', 'info', 'not_supported', 'third_party_repo')
 NEW_PREFIXES = {'F2B', 'FW', 'SQL', 'WEB', 'DCK', 'SYS', 'BKP', 'DNS',
-                'AIDE', 'CT', 'CVE', 'LOG', 'LYN', 'RKT', 'SQLI'}
+                'AIDE', 'CT', 'CVE', 'LOG', 'LYN', 'RKT', 'SQLI', 'WP'}
 
 
 def _catalogue() -> dict[str, set[str]]:

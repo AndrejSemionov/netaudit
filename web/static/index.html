@@ -129,6 +129,17 @@
   .tab-page { display: none; }
   .tab-page.active { display: block; }
   .settings-wrap { max-width: 760px; padding: 24px; }
+  .wp-form { display: flex; gap: 10px; flex-wrap: wrap; }
+  .wp-form input { flex: 1; min-width: 220px; }
+  .wp-checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+  .wp-finding { padding: 10px 0; border-top: 1px solid var(--border); }
+  .wp-finding:first-of-type { border-top: 0; }
+  .wp-head { display: flex; gap: 28px; align-items: center; flex-wrap: wrap; }
+  .wp-score { font-size: 56px; font-weight: 700; line-height: 1; font-family: var(--mono); }
+  .wp-score small { font-size: 18px; color: var(--muted); }
+  .wp-score.ok { color: var(--ok); } .wp-score.warn { color: var(--warn); } .wp-score.bad { color: var(--bad); }
+  .wp-facts { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 10px; font-size: 14px; }
+  .wp-facts div span { display: block; color: var(--muted); font-size: 12px; }
   .settings-group { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin-bottom: 18px; }
   .settings-group h2 { margin: 0 0 4px; font-size: 17px; }
   .settings-group .hint { color: var(--muted); font-size: 14px; margin: 0 0 14px; }
@@ -164,6 +175,7 @@
   <span class="sub" data-i18n="app.sub">универсальный сетевой аудит</span>
   <nav class="tabs-nav">
     <button class="tab-btn active" data-tab="audit" onclick="switchTab('audit')" data-i18n="tab.audit">Аудит</button>
+    <button class="tab-btn" data-tab="wordpress" onclick="switchTab('wordpress')" data-i18n="tab.wordpress">WordPress</button>
     <button class="tab-btn" data-tab="trends" onclick="switchTab('trends')" data-i18n="tab.trends">Динамика</button>
     <button class="tab-btn" data-tab="settings" onclick="switchTab('settings')" data-i18n="tab.settings">Настройки</button>
     <button class="tab-btn" data-tab="help" onclick="switchTab('help')" data-i18n="tab.help">Помощь</button>
@@ -223,6 +235,22 @@
     <div id="results"><div class="empty" data-i18n="report.here">Здесь появится отчёт</div></div>
   </main>
 </div>
+</div>
+
+<div class="tab-page" id="tab-wordpress">
+  <div class="settings-wrap" style="max-width:900px">
+    <div class="settings-group">
+      <h2 data-i18n="wp.title">Проверка сайта на WordPress</h2>
+      <p class="hint" data-i18n="wp.hint">Только то, что видит любой посетитель: версия WordPress, плагины, открытые имена авторов, XML-RPC и служебные файлы. Без входа и подбора паролей, только GET-запросы.</p>
+      <label for="wpUrl" class="hint" data-i18n="wp.address">Адрес сайта</label>
+      <div class="wp-form">
+        <input id="wpUrl" type="text" placeholder="mysite.com" list="savedTargets" onkeydown="if (event.key === 'Enter') runWordPressCheck()">
+        <button id="wpBtn" onclick="runWordPressCheck()" data-i18n="wp.check">Проверить</button>
+      </div>
+      <div class="status" id="wpStatus"></div>
+    </div>
+    <div id="wpResult"></div>
+  </div>
 </div>
 
 <div class="tab-page" id="tab-trends">
@@ -890,7 +918,7 @@ async function loadChecks() {
 function renderCheckList() {
   const byCat = {};
   CHECKS.forEach(c => { (byCat[c.category] ||= []).push(c); });
-  const catNames = { network: t('cat.network'), site: t('cat.site'), security: t('cat.security'), performance: t('cat.performance'), server: t('cat.server'), capture: t('cat.capture'), hardening: t('cat.hardening') };
+  const catNames = { network: t('cat.network'), site: t('cat.site'), security: t('cat.security'), performance: t('cat.performance'), server: t('cat.server'), capture: t('cat.capture'), hardening: t('cat.hardening'), wordpress: t('cat.wordpress') };
 
   const container = document.getElementById('checkList');
   container.innerHTML = '';
@@ -1325,6 +1353,8 @@ function baseOpts(extra) {
 }
 
 function renderResult(id, r, canvasId) {
+  // the same view as the WordPress tab; r is already the escaped display copy
+  if (id === 'wordpress_external') return { html: wordPressHtml(r) };
   if (r.error) return { html: `<span class="pill bad">${t('run.error')}</span> <span class="timing">${r.error}</span>` };
 
   // --- mtr: таблица + график потерь по хопам ---
@@ -1718,6 +1748,116 @@ document.addEventListener('click', (e) => {
   const popup = document.getElementById('donatePopup');
   if (popup && e.target === popup) popup.style.display = 'none';
 });
+
+// ---- WordPress (docs/research/wordpress_audit.md, contract C1a) ----
+// One view of a wordpress_external result for the WordPress tab and the Audit
+// tab. wordPressHtml() takes the escaped display copy: everything in the
+// result comes from the scanned site.
+const WP_VERDICT_PILL = { ok: 'ok', warn: 'warn', danger: 'bad', incomplete: 'warn', not_wp: 'warn', unreachable: 'bad' };
+const WP_STATUS_PILL = { ok: 'ok', problem: 'bad', not_checked: 'warn' };
+const WP_SEVERITY_PILL = { critical: 'bad', high: 'bad', medium: 'warn', low: 'warn', info: '', ok: 'ok' };
+const WP_PLUGIN_PILL = { current: 'ok', outdated: 'warn', unknown: '', not_checked: 'warn' };
+const WP_SOURCE_KEY = { 'generator': 'wp.src.generator', 'readme.txt': 'wp.src.readme', 'asset ver': 'wp.src.asset' };
+
+function wordPressHtml(r) {
+  const verdict = Object.hasOwn(WP_VERDICT_PILL, r.verdict) ? r.verdict : 'unreachable';
+  const pillClass = WP_VERDICT_PILL[verdict];
+  const checked = Array.isArray(r.checked) ? r.checked : [];
+  // the head: the score, the verdict and the facts behind them
+  let head = '';
+  if (r.score && Number.isFinite(r.score.value)) {
+    const value = Math.round(r.score.value);
+    // the colour and the word say the same: 80+ good (green), 50-79 medium (orange), below 50 bad (red);
+    // what was not checked is said next to the verdict, not by the colour (USER 2026-11-22)
+    const grade = value >= 80 ? 'good' : value >= 50 ? 'medium' : 'bad';
+    const scoreClass = { good: 'ok', medium: 'warn', bad: 'bad' }[grade];
+    head = `<div><div class="timing">${t('wp.score')}</div><div class="wp-score ${scoreClass}">${value}<small>/100</small></div>
+      <span class="pill ${scoreClass}">${t('wp.grade.' + grade)}</span></div>`;
+  }
+  const gaps = r.score && Array.isArray(r.score.not_checked) ? r.score.not_checked : [];
+  const version = r.core ? (r.core.version ? `WordPress ${r.core.version}` : t('wp.version_hidden')) : '—';
+  const cert = r.certificate ? `${r.certificate.not_after} (${r.certificate.days_left} ${t('wp.days')})` : '—';
+  let html = `<div class="card"><div class="wp-head">${head}<div>
+      <h2><span class="pill ${pillClass}">${t('wp.verdict.' + verdict)}</span></h2>
+      ${gaps.length ? `<div class="timing">${t('wp.score_partial')}: ${gaps.map(g => t('wp.item.' + g)).join(', ')}</div>` : ''}
+      ${r.error ? `<p class="timing">${r.error}</p>` : ''}
+      <div class="wp-facts"><div><span>${t('wp.address')}</span>${r.url || ''}</div>
+        <div><span>WordPress</span>${version}</div><div><span>${t('wp.item.certificate')}</span>${cert}</div></div>
+    </div></div></div>`;
+  // problems first, with how to fix them
+  const findings = (r.findings || []).filter(f => f.severity !== 'ok');
+  if (findings.length) {
+    html += `<div class="card"><h2>${t('wp.findings')}: ${findings.length}</h2>` + findings.map(f => {
+      const pillClass = WP_SEVERITY_PILL[f.severity] || '';
+      return `<div class="wp-finding"><span class="pill ${pillClass}">${t('wp.sev.' + f.severity)}</span> <b>${f.title}</b>
+        ${f.detail ? `<div class="timing">${f.detail}</div>` : ''}
+        ${f.recommendation ? `<div>${t('wp.fix')}: ${f.recommendation}</div>` : ''}</div>`;
+    }).join('') + '</div>';
+  }
+  // then what could not be checked, then what is fine
+  for (const [status, title] of [['not_checked', t('wp.not_checked')], ['ok', t('wp.fine')]]) {
+    const items = checked.filter(c => c.status === status);
+    if (!items.length) continue;
+    const pillClass = WP_STATUS_PILL[status];
+    html += `<div class="card"><h2>${title}: ${items.length}</h2><div class="wp-checks">` + items.map(c =>
+      `<div><span class="pill ${pillClass}">${t('wp.status.' + status)}</span> ${t('wp.item.' + c.item)}
+        <div class="timing">${c.detail || ''}</div></div>`).join('') + '</div></div>';
+  }
+  if (Array.isArray(r.plugins) && r.plugins.length) {
+    const rows = r.plugins.map(p => {
+      const pillClass = WP_PLUGIN_PILL[p.status] || '';
+      return `<tr><td>${p.slug}</td><td>${p.version || '—'}</td><td class="timing">${p.version_source ? t(WP_SOURCE_KEY[p.version_source] || 'wp.src.asset') : '—'}</td>
+        <td>${p.latest || '—'}</td><td><span class="pill ${pillClass}">${t('wp.pstatus.' + p.status)}</span></td></tr>`;
+    }).join('');
+    html += `<div class="card"><h2>${t('wp.plugins')}: ${r.plugins.length}</h2>
+      <table><tr><th>${t('wp.col.plugin')}</th><th>${t('wp.col.version')}</th><th>${t('wp.col.source')}</th><th>${t('wp.col.latest')}</th><th>${t('wp.col.status')}</th></tr>${rows}</table>
+      <p class="timing">${t('wp.plugins_note')}${r.plugins_truncated ? ' ' + t('wp.truncated') : ''}</p></div>`;
+  }
+  return html;
+}
+
+function renderWordPress(r) {
+  r = escDeep(r);
+  return wordPressHtml(r);
+}
+
+async function runWordPressCheck() {
+  const status = document.getElementById('wpStatus');
+  const out = document.getElementById('wpResult');
+  const btn = document.getElementById('wpBtn');
+  let url = document.getElementById('wpUrl').value.trim();
+  if (!url) { status.textContent = t('wp.empty'); return; }
+  // a bare address gets https://, as the reference page accepts "mysite.com"
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  btn.disabled = true;
+  out.textContent = '';
+  status.textContent = t('wp.running');
+  const res = await fetch('/api/stream/start', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ checks: [{ id: 'wordpress_external', params: { url } }] })
+  });
+  const started = await res.json().catch(() => ({}));
+  if (!res.ok || !started.task_id) {
+    btn.disabled = false;
+    status.textContent = t('run.error') + ': ' + (started.detail || t('run.unknown'));
+    return;
+  }
+  const es = new EventSource('/api/stream/' + started.task_id);
+  es.onmessage = (e) => {
+    const ev = JSON.parse(e.data);
+    if (ev.type === 'all_done' || ev.type === 'stopped' || ev.type === 'error') {
+      es.close();
+      btn.disabled = false;
+      const result = ev.report && ev.report.results && ev.report.results.wordpress_external;
+      if (result) {
+        status.textContent = '';
+        out.innerHTML = renderWordPress(result);
+      } else {
+        status.textContent = t('run.error') + ': ' + (ev.message || t('run.unknown'));
+      }
+    }
+  };
+}
 
 // ---- Вкладки ----
 function switchTab(name) {
