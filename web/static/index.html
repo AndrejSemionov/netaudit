@@ -1767,9 +1767,12 @@ function wordPressHtml(r) {
   let head = '';
   if (r.score && Number.isFinite(r.score.value)) {
     const value = Math.round(r.score.value);
-    // an incomplete score is never green: what was not checked may be the problem
-    const scoreClass = value >= 80 && r.score.complete ? 'ok' : value >= 50 ? 'warn' : 'bad';
-    head = `<div><div class="timing">${t('wp.score')}</div><div class="wp-score ${scoreClass}">${value}<small>/100</small></div></div>`;
+    // the colour and the word say the same: 80+ good (green), 50-79 medium (orange), below 50 bad (red);
+    // what was not checked is said next to the verdict, not by the colour (USER 2026-11-22)
+    const grade = value >= 80 ? 'good' : value >= 50 ? 'medium' : 'bad';
+    const scoreClass = { good: 'ok', medium: 'warn', bad: 'bad' }[grade];
+    head = `<div><div class="timing">${t('wp.score')}</div><div class="wp-score ${scoreClass}">${value}<small>/100</small></div>
+      <span class="pill ${scoreClass}">${t('wp.grade.' + grade)}</span></div>`;
   }
   const gaps = r.score && Array.isArray(r.score.not_checked) ? r.score.not_checked : [];
   const version = r.core ? (r.core.version ? `WordPress ${r.core.version}` : t('wp.version_hidden')) : '—';

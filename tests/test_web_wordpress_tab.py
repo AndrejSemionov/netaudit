@@ -71,3 +71,15 @@ def test_result_view_escapes_and_is_shared_with_the_audit_tab():
     for part in ('r.verdict', 'r.checked', 'r.findings', 'r.plugins'):
         assert part in view, part
     assert "if (id === 'wordpress_external') return { html: wordPressHtml(r) };" in functions['renderResult']
+
+
+def test_score_colour_and_word_follow_the_value():
+    # USER: "if it is good it must be green, medium orange, bad red"
+    view = _functions(_script())['wordPressHtml']
+    assert "const grade = value >= 80 ? 'good' : value >= 50 ? 'medium' : 'bad';" in view
+    assert "const scoreClass = { good: 'ok', medium: 'warn', bad: 'bad' }[grade];" in view
+    assert "${t('wp.grade.' + grade)}" in view
+    for lang, words in (('ru', ('хорошо', 'средне', 'плохо')), ('en', ('good', 'medium', 'bad'))):
+        block = _lang_block(lang)
+        for grade, word in zip(('good', 'medium', 'bad'), words):
+            assert f"'wp.grade.{grade}': '{word}'" in block, (lang, grade)
