@@ -24,6 +24,7 @@ from urllib.parse import unquote
 
 import pytest
 
+from netaudit_pkg import webprobe
 from netaudit_pkg.checks import (
     aide_check,
     backup_check,
@@ -31,6 +32,7 @@ from netaudit_pkg.checks import (
     cve_audit,
     dns_audit,
     docker_audit,
+    laravel,
     log_discovery_audit,
     lynis_audit,
     rootkit_check,
@@ -65,11 +67,14 @@ IN_SCOPE = {
     sqli: None,
     # docs/research/wordpress_audit.md
     wordpress: None,
+    # docs/research/laravel_audit.md: the shared web probe names each check's ids
+    webprobe: None,
+    laravel: None,
 }
 # severities a finding may have without being a problem the trend counts
 NOT_PROBLEMS = ('ok', 'info', 'not_supported', 'third_party_repo')
 NEW_PREFIXES = {'F2B', 'FW', 'SQL', 'WEB', 'DCK', 'SYS', 'BKP', 'DNS',
-                'AIDE', 'CT', 'CVE', 'LOG', 'LYN', 'RKT', 'SQLI', 'WP'}
+                'AIDE', 'CT', 'CVE', 'LOG', 'LYN', 'RKT', 'SQLI', 'WP', 'LV'}
 
 
 def _catalogue() -> dict[str, set[str]]:
@@ -227,6 +232,19 @@ def test_literal_ids_are_catalogued_with_compatible_severity():
         if sev is not None and sev not in controls[control]:
             problems.append(f'{mod}.{fn}:{call.lineno} {control} severity {sev} not in {controls[control]}')
     assert problems == []
+
+
+# the severity webprobe.check_transport gives each key of a check's TRANSPORT_IDS
+TRANSPORT_SEVERITY = {'no_https': 'high', 'no_redirect': 'medium', 'cert': 'medium',
+                      'hsts': 'low', 'nosniff': 'low', 'framing': 'low'}
+
+
+@pytest.mark.parametrize('module', [wordpress, laravel])
+def test_transport_ids_are_catalogued_with_the_shared_severity(module):
+    controls = _catalogue()
+    assert set(module.TRANSPORT_IDS) == set(TRANSPORT_SEVERITY)
+    for key, control in module.TRANSPORT_IDS.items():
+        assert TRANSPORT_SEVERITY[key] in controls[control], (key, control)
 
 
 def test_catalogue_and_code_name_the_same_controls():
