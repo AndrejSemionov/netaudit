@@ -262,3 +262,18 @@ still UNKNOWN (no key here); the design does not depend on it.
   report carries the data source, its date and the Defiant and MITRE
   notices with their licence texts, shown under the report (licence terms,
   §3).
+
+**Review #61 pass 1 (GPT/Codex), folded in.** A feed is used only when it
+is plausible: at least one record with software to index, and not less
+than half the records of the index it replaces; otherwise the previous
+index stays. A missing range, bound or inclusive flag is "unknown", never
+"any". The key passes a format check (printable ASCII, no space, 8-512
+characters) before it reaches a header; download errors are fixed reasons,
+never a library's text. One refresh at a time (a file lock, then the age is
+checked again); after a failure the next try waits an hour, six after a
+rate limit; the stale window is compared in seconds. Versions and bounds
+are compared only when they are dotted numbers or a lone `*` (`2.0-rc1`
+and `1.*` are unknown). Nothing with a known version is "not checked"; a
+plugin with ranges that could not be compared shows `?` (or `2 + ?`), not
+0. The record's link is the feed's own (`http` made `https`), never made
+up, and is a hyperlink in the tab.

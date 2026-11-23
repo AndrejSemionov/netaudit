@@ -1800,7 +1800,8 @@ function wordPressHtml(r) {
       const pillClass = WP_SEVERITY_PILL[f.severity] || '';
       return `<div class="wp-finding"><span class="pill ${pillClass}">${t('wp.sev.' + f.severity)}</span> <b>${f.title}</b>
         ${f.detail ? `<div class="timing">${f.detail}</div>` : ''}
-        ${f.recommendation ? `<div>${t('wp.fix')}: ${f.recommendation}</div>` : ''}</div>`;
+        ${f.recommendation ? `<div>${t('wp.fix')}: ${f.recommendation}</div>` : ''}
+        ${f.link ? `<div><a href="${f.link}" target="_blank" rel="noopener noreferrer">${t('wp.vuln_record')}</a></div>` : ''}</div>`;
     }).join('') + '</div>';
   }
   // then what could not be checked, then what is fine
@@ -1815,7 +1816,9 @@ function wordPressHtml(r) {
   if (Array.isArray(r.plugins) && r.plugins.length) {
     const rows = r.plugins.map(p => {
       const pillClass = WP_PLUGIN_PILL[p.status] || '';
-      const vulns = p.vulns === null || p.vulns === undefined ? '—' : p.vulns;
+      // a count that could not be complete says so: "?" or "2 + ?"
+      const counted = p.vulns !== null && p.vulns !== undefined;
+      const vulns = (counted ? p.vulns : (p.vulns_unclear ? '?' : '—')) + (counted && p.vulns_unclear ? ' + ?' : '');
       return `<tr><td>${p.slug}</td><td>${p.version || '—'}</td><td class="timing">${p.version_source ? t(WP_SOURCE_KEY[p.version_source] || 'wp.src.asset') : '—'}</td>
         <td>${p.latest || '—'}</td><td><span class="pill ${pillClass}">${t('wp.pstatus.' + p.status)}</span></td><td>${vulns}</td></tr>`;
     }).join('');

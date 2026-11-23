@@ -8,8 +8,10 @@
   the plugins table counts them. It needs a free Wordfence API key (an
   account on wordfence.com, Integrations), set in Settings and never shown
   again. The feed is downloaded at most once a day and read as a stream into
-  a private index next to the database (`~/.netaudit/wordfence.db`); a
-  failed download keeps the previous data for up to 7 days and says so.
+  a private index next to the database (`~/.netaudit/wordfence.db`), one
+  download at a time; an empty or suspiciously small feed never replaces
+  the previous data, a failed download keeps it for up to 7 days and says
+  so, and the next try waits an hour (six after a rate limit).
   Without a key or the data, vulnerabilities are "not checked", never
   "none"; with them, a site where everything was checked can be "fine".
 

@@ -495,6 +495,11 @@ def _check_vulns(core: dict, plugins: list, findings: list, checked: list) -> di
     items += [('plugin', p['slug'], p['version']) for p in plugins if p['version']]
     for p in plugins:
         p['vulns'] = None
+    if not items:
+        # nothing was compared: not "none known for 0" (review #61 pass 1)
+        checked.append({'item': 'vulns', 'status': 'not_checked',
+                        'detail': 'no version of the core or a plugin is known: nothing to compare'})
+        return None
     data = wordfence.vulnerabilities(items, _wordfence_key())
     if data['status'] != 'ok':
         checked.append({'item': 'vulns', 'status': 'not_checked', 'detail': data['error']})
@@ -504,21 +509,26 @@ def _check_vulns(core: dict, plugins: list, findings: list, checked: list) -> di
     for type_, slug, version in items:
         index_key = 'core' if type_ == 'core' else f'plugin:{slug.lower()}'
         vulns = data['matches'].get(index_key, [])
-        if data['uncertain'].get(index_key):
+        unclear_here = len(data['uncertain'].get(index_key, []))
+        if unclear_here:
             unclear.append(slug)
         if type_ == 'plugin':
-            rows[slug]['vulns'] = len(vulns)
+            # a count that could not be complete is not a 0 (review #61 pass 1)
+            rows[slug]['vulns'] = len(vulns) if vulns or not unclear_here else None
+            rows[slug]['vulns_unclear'] = unclear_here
         for v in vulns:
             found += 1
             patched = v.get('patched_versions') or []
             score = v.get('score')
             detail = ' · '.join([v.get('cve') or 'no CVE', *([f'CVSS {score}'] if score is not None else []),
-                                 f'fixed in {", ".join(patched)}' if patched else 'no fix released', v['link']])
+                                 f'fixed in {", ".join(patched)}' if patched else 'no fix released'])
             fix = v.get('remediation') or (f'Update {slug} to {patched[0]}.' if patched
                                            else f'No fix is released: remove or replace {slug}.')
+            # the record's own page, a hyperlink in the tab (Wordfence licence terms)
             findings.append(_finding(_VULN_SEVERITY.get(v.get('rating'), 'medium'),
                                      f'{slug} {version}: {v["title"]}', detail,
-                                     id=subject_id('WP-VULN-001', slug, v['id']), recommendation=fix))
+                                     id=subject_id('WP-VULN-001', slug, v['id']), recommendation=fix,
+                                     extra={'link': v['link']} if v.get('link') else {}))
     when = f'Wordfence data of {data["fetched_at"][:10]}'
     if data.get('stale'):
         when += f' (refresh failed: {data["refresh_error"]})'
