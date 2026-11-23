@@ -56,7 +56,7 @@ TRANSPORT_IDS = {'no_https': 'LV-TLS-001', 'no_redirect': 'LV-TLS-002', 'cert': 
 
 _ENCRYPTED = 'eyJpdiI6'      # base64 of '{"iv":' - Laravel's EncryptCookies
 _ENV_KEY = re.compile(r'^[ \t]*(APP_KEY|DB_PASSWORD)[ \t]*=', re.MULTILINE)
-_DEBUGBAR = re.compile(r'<!-- Laravel Debugbar Widget -->|new PhpDebugBar\.DebugBar\(')
+_DEBUGBAR = re.compile(r'<!-- Laravel Debugbar Widget -->|new PhpDebugBar\.\w*DebugBar\(')
 _TELESCOPE = re.compile(r'<title>\s*Telescope\b|<div id="telescope"', re.IGNORECASE)
 _HORIZON = re.compile(r'<title>\s*Horizon\b|<div id="horizon"', re.IGNORECASE)
 # Monolog's line format: [2026-11-23 10:00:00] production.ERROR: ...
