@@ -211,6 +211,7 @@ Contract: `docs/research/wordpress_audit.md` (C2).
 | WP-CORE-001 | high | — | the WordPress version is insecure (wordpress.org stable-check) |
 | WP-CORE-002 | low | — | the WordPress version is outdated, not insecure |
 | WP-PLG-001 | medium | plugin slug | a plugin visible from outside is older than its wordpress.org release |
+| WP-VULN-001 | critical, high, medium, low | slug, Wordfence vulnerability id | a known vulnerability (Wordfence Intelligence) affects the core or a plugin's version |
 | WP-USR-001 | medium | — | author usernames are public (REST API, author redirect, users sitemap) |
 | WP-XMLRPC-001 | low | — | xmlrpc.php is reachable |
 | WP-FILE-001 | high | — | the WordPress debug log is public |

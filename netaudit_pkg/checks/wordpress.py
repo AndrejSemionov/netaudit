@@ -11,9 +11,10 @@ The verdict follows the project's outcomes (result_reliability_audit.md):
                   hidden core version, a failed request, a server error, a
                   plugin that could not be judged): never "ok";
 - 'ok'          - every part was checked and nothing was found.
-Known plugin vulnerabilities need a vulnerability database (contract C3):
-until then they are reported as not checked, never as "none" - and the
-verdict stays 'incomplete' (review #59 pass 1).
+Known vulnerabilities of the core and the plugins come from the Wordfence
+feed (contract C3, wordfence.py) with the user's key; without a key or the
+data they are "not checked", never "none", and the verdict stays
+'incomplete' (review #59 pass 1).
 
 Every part is its own item in 'checked' (USER 2026-11-22 asked for a report
 more detailed than the reference's): HTTPS, the http redirect, the
@@ -34,7 +35,7 @@ from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import httpx
 
-from .. import wordpress_org
+from .. import storage, wordfence, wordpress_org
 from ..findings import finding as _finding
 from ..findings import subject_id
 from ..registry import register
@@ -475,9 +476,76 @@ def _check_plugins(home: Page, base: str, core_version: str | None, findings: li
     else:
         checked.append({'item': 'plugin_versions', 'status': 'ok',
                         'detail': f'all {len(plugins)} judged' if plugins else 'no plugins visible from outside'})
-    checked.append({'item': 'plugin_vulns', 'status': 'not_checked',
-                    'detail': 'no vulnerability database is connected'})
     return plugins, truncated
+
+
+# CVSS rating -> severity; no rating is "medium", not downplayed (like cve_audit)
+_VULN_SEVERITY = {'Critical': 'critical', 'High': 'high', 'Medium': 'medium', 'Low': 'low', 'None': 'low'}
+
+
+def _wordfence_key() -> str:
+    return storage.setting_get('wordfence_api_key') or ''
+
+
+def _check_vulns(core: dict, plugins: list, findings: list, checked: list) -> dict | None:
+    """Known vulnerabilities of the core and the plugins with a known
+    version, from Wordfence (contract C3, research §9). Returns the data's
+    source, date and licence notices, or None when there is no data."""
+    items = [('core', 'wordpress', core['version'])] if core['version'] else []
+    items += [('plugin', p['slug'], p['version']) for p in plugins if p['version']]
+    for p in plugins:
+        p['vulns'] = None
+    if not items:
+        # nothing was compared: not "none known for 0" (review #61 pass 1)
+        checked.append({'item': 'vulns', 'status': 'not_checked',
+                        'detail': 'no version of the core or a plugin is known: nothing to compare'})
+        return None
+    data = wordfence.vulnerabilities(items, _wordfence_key())
+    if data['status'] != 'ok':
+        checked.append({'item': 'vulns', 'status': 'not_checked', 'detail': data['error']})
+        return None
+    found, unclear = 0, []
+    rows = {p['slug']: p for p in plugins}
+    for type_, slug, version in items:
+        index_key = 'core' if type_ == 'core' else f'plugin:{slug.lower()}'
+        vulns = data['matches'].get(index_key, [])
+        unclear_here = len(data['uncertain'].get(index_key, []))
+        if unclear_here:
+            unclear.append(slug)
+        if type_ == 'plugin':
+            # a count that could not be complete is not a 0 (review #61 pass 1)
+            rows[slug]['vulns'] = len(vulns) if vulns or not unclear_here else None
+            rows[slug]['vulns_unclear'] = unclear_here
+        for v in vulns:
+            found += 1
+            patched = v.get('patched_versions') or []
+            score = v.get('score')
+            detail = ' · '.join([v.get('cve') or 'no CVE', *([f'CVSS {score}'] if score is not None else []),
+                                 f'fixed in {", ".join(patched)}' if patched else 'no fix released'])
+            fix = v.get('remediation') or (f'Update {slug} to {patched[0]}.' if patched
+                                           else f'No fix is released: remove or replace {slug}.')
+            # the record's own page, a hyperlink in the tab (Wordfence licence terms)
+            findings.append(_finding(_VULN_SEVERITY.get(v.get('rating'), 'medium'),
+                                     f'{slug} {version}: {v["title"]}', detail,
+                                     id=subject_id('WP-VULN-001', slug, v['id']), recommendation=fix,
+                                     extra={'link': v['link']} if v.get('link') else {}))
+    when = f'Wordfence data of {data["fetched_at"][:10]}'
+    if data.get('stale'):
+        when += f' (refresh failed: {data["refresh_error"]})'
+    if unclear:
+        note = f'version ranges that could not be compared for: {", ".join(unclear)}'
+    if found:
+        checked.append({'item': 'vulns', 'status': 'problem', 'detail': f'{found} known; {when}'})
+        if unclear:
+            # kept apart, so the finding never hides the gap (review #59 pass 2, the same rule)
+            checked.append({'item': 'vuln_ranges', 'status': 'not_checked', 'detail': f'{note}; {when}'})
+    elif unclear:
+        checked.append({'item': 'vulns', 'status': 'not_checked', 'detail': f'{note}; {when}'})
+    else:
+        checked.append({'item': 'vulns', 'status': 'ok',
+                        'detail': f'none known for {len(items)} item(s) with a version; {when}'})
+    return {'source': data['source'], 'fetched_at': data['fetched_at'], 'stale': data['stale'],
+            'notices': data['notices']}
 
 
 def _author_slugs(urls: list[str], base: str) -> list[str]:
@@ -672,6 +740,7 @@ def check_wordpress_external(url='https://example.com') -> dict:
     cert = _check_transport(home, base, findings, checked)
     core = _check_core(home, base, findings, checked)
     plugins, truncated = _check_plugins(home, base, core['version'], findings, checked)
+    vuln_data = _check_vulns(core, plugins, findings, checked)
     users = _check_users(base, findings, checked)
     _check_xmlrpc(base, findings, checked)
     _check_files(base, findings, checked)
@@ -679,6 +748,9 @@ def check_wordpress_external(url='https://example.com') -> dict:
     verdict = _verdict(findings, checked)
     if verdict == 'ok':
         findings.append(_finding('ok', 'no issues seen from outside'))
-    return {'url': base, 'wordpress': True, 'verdict': verdict, 'score': _score(findings, checked),
-            'core': core, 'certificate': cert, 'plugins': plugins, 'plugins_truncated': truncated,
-            'users': users, 'checked': checked, 'findings': findings, 'summary': _summary(findings)}
+    result = {'url': base, 'wordpress': True, 'verdict': verdict, 'score': _score(findings, checked),
+              'core': core, 'certificate': cert, 'plugins': plugins, 'plugins_truncated': truncated,
+              'users': users, 'checked': checked, 'findings': findings, 'summary': _summary(findings)}
+    if vuln_data:
+        result['vuln_data'] = vuln_data
+    return result

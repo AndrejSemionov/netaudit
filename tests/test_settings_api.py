@@ -16,7 +16,7 @@ from web.app import app
 
 MARK = 'SETTINGS-TEST-MARKER'
 PUBLIC = {'sync_threshold_sec', 'ema_alpha', 'ai_language', 'telegram_chat'}
-SECRETS = {'anthropic_api_key', 'telegram_token', 'hibp_api_key'}
+SECRETS = {'anthropic_api_key', 'telegram_token', 'hibp_api_key', 'wordfence_api_key'}
 EXPECTED_KEYS = PUBLIC | SECRETS | {'web_auth_user', 'web_auth_configured'}
 FOREIGN = ['web_auth_password_hash', 'web_auth_salt', 'web_auth_user', 'history_capture_password',
            'history_capture_target_ip', 'history_capture_router', 'x_secret_token']
@@ -105,3 +105,13 @@ def test_history_capture_keeps_its_own_ip_check(isolated_db, client):
     r = client.post('/api/history_capture/settings', json={'target_ip': '1.2.3.4"; /system reboot; "'})
     assert r.status_code == 400
     assert storage.setting_get('history_capture_target_ip') in (None, '')
+
+
+def test_wordfence_key_is_a_secret(isolated_db, client):
+    # docs/research/wordpress_audit.md §9: set from the Settings page, never sent back
+    r = client.post('/api/settings', json={'settings': {'wordfence_api_key': 'WF-SECRET-123'}})
+    assert r.status_code == 200
+    assert storage.setting_get('wordfence_api_key') == 'WF-SECRET-123'
+    got = client.get('/api/settings').json()
+    assert got['wordfence_api_key'] == {'set': True}
+    assert 'WF-SECRET-123' not in client.get('/api/settings').text

@@ -17,7 +17,7 @@ import httpx
 import pytest
 
 import netaudit_pkg.checks  # noqa: F401 - registers every check
-from netaudit_pkg import wordpress_org
+from netaudit_pkg import wordfence, wordpress_org
 from netaudit_pkg.checks import wordpress
 from netaudit_pkg.registry import registry
 
@@ -82,6 +82,7 @@ def _site(monkeypatch, pages, *, core=None, plugins=None, cert_days=90):
                         lambda v: core.get(v, {'status': 'unknown', 'latest': LATEST, 'error': None}))
     monkeypatch.setattr(wordpress_org, 'plugin_latest',
                         lambda slug: plugins.get(slug, {'status': 'not_found', 'version': None, 'error': None}))
+    monkeypatch.setattr(wordpress, '_wordfence_key', lambda: '')
     return requested
 
 
@@ -241,10 +242,10 @@ def test_visible_plugins_with_versions_and_the_latest(monkeypatch):
     plugins = {p['slug']: p for p in result['plugins']}
     assert sorted(plugins) == ['contact-form-7', 'elementor', 'premium-thing']   # another host's plugin is not this site's
     assert plugins['contact-form-7'] == {'slug': 'contact-form-7', 'version': '6.2.5', 'version_source': 'readme.txt',
-                                         'latest': '6.2.5', 'status': 'current'}
+                                         'latest': '6.2.5', 'status': 'current', 'vulns': None}   # no Wordfence key
     assert plugins['elementor']['status'] == 'outdated'
     assert plugins['premium-thing'] == {'slug': 'premium-thing', 'version': None, 'version_source': None,
-                                        'latest': None, 'status': 'unknown'}
+                                        'latest': None, 'status': 'unknown', 'vulns': None}
     outdated = _by_id(result, 'WP-PLG-001:elementor')
     assert outdated['severity'] == 'medium'
     assert outdated['confidence'] == 'medium'    # the version comes from readme.txt
@@ -379,11 +380,14 @@ def test_a_generator_tag_alone_is_enough_to_list_the_plugin(monkeypatch):
     assert sorted(plugins) == ['elementor', 'sitepress-multilingual-cms']
 
 
-def test_plugin_vulnerabilities_are_reported_as_not_checked(monkeypatch):
-    # no vulnerability database in this PR (contract C3): never "no vulnerabilities"
+def test_without_a_wordfence_key_vulnerabilities_are_not_checked(monkeypatch):
+    # never "no vulnerabilities" without the database (contract C3)
     _site(monkeypatch, _plugin_pages(), core=CORE_LATEST, plugins=PLUGIN_LATEST)
     result = wordpress.check_wordpress_external(BASE)
-    assert _checked(result)['plugin_vulns'] == 'not_checked'
+    item = next(c for c in result['checked'] if c['item'] == 'vulns')
+    assert item['status'] == 'not_checked'
+    assert 'no Wordfence API key' in item['detail']
+    assert all(p['vulns'] is None for p in result['plugins'])
 
 
 # --- usernames ----------------------------------------------------------------
@@ -511,11 +515,11 @@ def test_clean_site_is_incomplete_while_plugin_vulnerabilities_are_not_checked(m
     statuses = _checked(result)
     assert statuses == {
         'https': 'ok', 'http_redirect': 'ok', 'certificate': 'ok', 'hsts': 'ok', 'nosniff': 'ok', 'framing': 'ok',
-        'core': 'ok', 'plugins': 'ok', 'plugin_versions': 'ok', 'plugin_vulns': 'not_checked', 'users': 'ok',
+        'core': 'ok', 'plugins': 'ok', 'plugin_versions': 'ok', 'vulns': 'not_checked', 'users': 'ok',
         'xmlrpc': 'ok',
         'debug_log': 'ok', 'config_copies': 'ok', 'uploads_listing': 'ok', 'readme_html': 'ok', 'license_txt': 'ok'}
     # the score says what it could not count
-    assert result['score'] == {'value': 100, 'complete': False, 'not_checked': ['plugin_vulns']}
+    assert result['score'] == {'value': 100, 'complete': False, 'not_checked': ['vulns']}
 
 
 def test_only_the_site_itself_is_requested(monkeypatch):
@@ -626,7 +630,7 @@ def test_not_wordpress_and_unreachable_have_no_score(monkeypatch):
 def test_score_counts_what_was_not_checked(monkeypatch):
     _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home())})   # the version is hidden
     result = wordpress.check_wordpress_external(BASE)
-    assert result['score'] == {'value': 100, 'complete': False, 'not_checked': ['core', 'plugin_vulns']}
+    assert result['score'] == {'value': 100, 'complete': False, 'not_checked': ['core', 'vulns']}
 
 
 def test_a_request_that_fails_once_is_tried_again(monkeypatch):
@@ -691,7 +695,7 @@ def test_plugin_without_a_known_version_is_a_gap(monkeypatch):
     assert _item(result, 'plugins')['status'] == 'not_checked'
     versions = _item(result, 'plugin_versions')
     assert versions['status'] == 'not_checked' and 'mystery' in versions['detail']
-    assert result['score']['not_checked'] == ['plugins', 'plugin_versions', 'plugin_vulns']
+    assert result['score']['not_checked'] == ['plugins', 'plugin_versions', 'vulns']
 
 
 def test_plugin_missing_from_wordpress_org_is_a_gap(monkeypatch):
@@ -883,3 +887,132 @@ def test_home_redirect_to_another_site_is_unreachable(monkeypatch):
     result = wordpress.check_wordpress_external(BASE)
     assert result['verdict'] == 'unreachable'
     assert 'other.test' in result['error']
+
+
+# --- known vulnerabilities (contract C3, docs/research/wordpress_audit.md §9) ----------
+
+WF_KEY = 'wf-key-not-in-any-report'
+NOTICES = [{'name': 'defiant', 'notice': 'Copyright 2012-2026 Defiant Inc.', 'license': 'Defiant grants.',
+            'license_url': 'https://www.wordfence.com/wordfence-intelligence-terms-and-conditions/'}]
+
+
+def _vuln(uid, rating='High', score=8.1, cve='CVE-2026-0001', patched=('9.9.9',), title='SQL Injection'):
+    return {'id': uid, 'title': title, 'cve': cve, 'rating': rating, 'score': score,
+            'patched_versions': list(patched), 'remediation': f'Update to version {patched[0]}' if patched else '',
+            'link': f'https://www.wordfence.com/threat-intel/vulnerabilities/id/{uid}'}
+
+
+def _wordfence(monkeypatch, *, matches=None, uncertain=None, error=None, stale=False, refresh_error=None):
+    """Fakes the key and wordfence.vulnerabilities; returns the items it was asked about."""
+    asked = []
+
+    def vulnerabilities(items, key):
+        asked.extend(items)
+        assert key == WF_KEY
+        if error:
+            return {'status': 'error', 'error': error, 'matches': {}, 'uncertain': {}}
+        keys = ['core' if t == 'core' else f'plugin:{s.lower()}' for t, s, _ in items]
+        return {'status': 'ok', 'error': None, 'source': 'Wordfence Intelligence',
+                'fetched_at': '2026-11-23T10:00:00Z', 'stale': stale, 'refresh_error': refresh_error,
+                'matches': {k: (matches or {}).get(k, []) for k in keys},
+                'uncertain': {k: (uncertain or {}).get(k, []) for k in keys}, 'notices': NOTICES}
+
+    monkeypatch.setattr(wordpress, '_wordfence_key', lambda: WF_KEY)
+    monkeypatch.setattr(wordfence, 'vulnerabilities', vulnerabilities)
+    return asked
+
+
+def test_only_items_with_a_known_version_are_looked_up(monkeypatch):
+    _site(monkeypatch, _plugin_pages(), core=CORE_LATEST, plugins=PLUGIN_LATEST)
+    asked = _wordfence(monkeypatch)
+    wordpress.check_wordpress_external(BASE)
+    # premium-thing has no version: it stays a plugin_versions gap, never "no vulnerabilities"
+    assert asked == [('core', 'wordpress', LATEST), ('plugin', 'contact-form-7', '6.2.5'),
+                     ('plugin', 'elementor', '4.1.0')]
+
+
+def test_known_vulnerabilities_are_findings(monkeypatch):
+    _site(monkeypatch, _plugin_pages(), core=CORE_LATEST, plugins=PLUGIN_LATEST)
+    _wordfence(monkeypatch, matches={
+        'plugin:elementor': [_vuln('e-1', rating='Critical', score=9.8, cve='CVE-2024-1111', patched=('4.0.2',)),
+                             _vuln('e-2', rating=None, score=None, cve=None, patched=())],
+        'core': [_vuln('c-1', rating='Low', score=3.1, cve='CVE-2024-2222', title='Core XSS')]})
+    result = wordpress.check_wordpress_external(BASE)
+    crit = _by_id(result, 'WP-VULN-001:elementor:e-1')
+    assert crit['severity'] == 'critical'
+    assert 'elementor 4.1.0' in crit['title'] and 'SQL Injection' in crit['title']
+    assert 'CVE-2024-1111' in crit['detail'] and 'CVSS 9.8' in crit['detail'] and '4.0.2' in crit['detail']
+    assert crit['link'] == 'https://www.wordfence.com/threat-intel/vulnerabilities/id/e-1'   # its own field, a hyperlink in the tab
+    assert crit['recommendation'] == 'Update to version 4.0.2'
+    assert _by_id(result, 'WP-VULN-001:elementor:e-2')['severity'] == 'medium'    # no rating: not downplayed
+    assert _by_id(result, 'WP-VULN-001:wordpress:c-1')['severity'] == 'low'
+    rows = {p['slug']: p['vulns'] for p in result['plugins']}
+    assert rows == {'contact-form-7': 0, 'elementor': 2, 'premium-thing': None}
+    assert _checked(result)['vulns'] == 'problem'
+    assert result['verdict'] == 'danger'
+    assert result['vuln_data']['source'] == 'Wordfence Intelligence'
+    assert result['vuln_data']['notices'] == NOTICES
+    assert WF_KEY not in json.dumps(result)
+
+
+def test_no_known_vulnerabilities_lets_a_site_be_ok(monkeypatch):
+    _site(monkeypatch, _home_latest(), core=CORE_LATEST)
+    _wordfence(monkeypatch)
+    result = wordpress.check_wordpress_external(BASE)
+    item = next(c for c in result['checked'] if c['item'] == 'vulns')
+    assert item['status'] == 'ok' and '2026-11-23' in item['detail']
+    assert result['verdict'] == 'ok'
+    assert result['score'] == {'value': 100, 'complete': True, 'not_checked': []}
+
+
+def test_vulnerability_data_error_is_not_checked(monkeypatch):
+    _site(monkeypatch, _home_latest(), core=CORE_LATEST)
+    _wordfence(monkeypatch, error='the Wordfence key was rejected (HTTP 401)')
+    result = wordpress.check_wordpress_external(BASE)
+    item = next(c for c in result['checked'] if c['item'] == 'vulns')
+    assert item['status'] == 'not_checked' and 'HTTP 401' in item['detail']
+    assert result['verdict'] == 'incomplete'
+    assert 'vuln_data' not in result
+
+
+def test_bounds_that_could_not_be_compared_are_not_checked(monkeypatch):
+    _site(monkeypatch, _plugin_pages(), core=CORE_LATEST, plugins=PLUGIN_LATEST)
+    _wordfence(monkeypatch, uncertain={'plugin:contact-form-7': ['x-1']})
+    result = wordpress.check_wordpress_external(BASE)
+    item = next(c for c in result['checked'] if c['item'] == 'vulns')
+    assert item['status'] == 'not_checked' and 'contact-form-7' in item['detail']
+
+
+def test_stale_vulnerability_data_says_how_old(monkeypatch):
+    _site(monkeypatch, _home_latest(), core=CORE_LATEST)
+    _wordfence(monkeypatch, stale=True, refresh_error='Wordfence rate limit (HTTP 429)')
+    result = wordpress.check_wordpress_external(BASE)
+    item = next(c for c in result['checked'] if c['item'] == 'vulns')
+    assert item['status'] == 'ok'
+    assert '2026-11-23' in item['detail'] and 'HTTP 429' in item['detail']
+    assert result['vuln_data']['stale'] is True
+
+
+
+# --- review #61 pass 1 (4): no comparison is not "none known" -------------------------
+
+def test_nothing_with_a_known_version_is_not_checked(monkeypatch):
+    _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home())})       # core hidden, no plugins
+    asked = _wordfence(monkeypatch)
+    result = wordpress.check_wordpress_external(BASE)
+    item = next(c for c in result['checked'] if c['item'] == 'vulns')
+    assert item['status'] == 'not_checked' and 'no version' in item['detail']
+    assert asked == []                                                # nothing to look up: no download
+
+
+def test_a_plugin_whose_ranges_could_not_be_compared_is_not_a_zero(monkeypatch):
+    _site(monkeypatch, _plugin_pages(), core=CORE_LATEST, plugins=PLUGIN_LATEST)
+    _wordfence(monkeypatch, matches={'plugin:elementor': [_vuln('e-1')]},
+               uncertain={'plugin:contact-form-7': ['x-1'], 'plugin:elementor': ['x-2']})
+    result = wordpress.check_wordpress_external(BASE)
+    rows = {p['slug']: p for p in result['plugins']}
+    assert rows['contact-form-7']['vulns'] is None and rows['contact-form-7']['vulns_unclear'] == 1
+    assert rows['elementor']['vulns'] == 1 and rows['elementor']['vulns_unclear'] == 1
+    assert _checked(result)['vulns'] == 'problem'
+    gap = next(c for c in result['checked'] if c['item'] == 'vuln_ranges')
+    assert gap['status'] == 'not_checked' and 'contact-form-7' in gap['detail'] and 'elementor' in gap['detail']

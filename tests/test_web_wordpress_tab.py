@@ -83,3 +83,40 @@ def test_score_colour_and_word_follow_the_value():
         block = _lang_block(lang)
         for grade, word in zip(('good', 'medium', 'bad'), words):
             assert f"'wp.grade.{grade}': '{word}'" in block, (lang, grade)
+
+
+
+def test_wordfence_key_in_settings():
+    # the field, its status and saving it - like the HIBP key
+    page = INDEX[INDEX.index('id="tab-settings"'):]
+    assert re.search(r'<input type="password" id="wordfenceApiKey"', page)
+    assert 'id="wordfenceKeyStatus"' in page
+    functions = _functions(_script())
+    assert "settings.wordfence_api_key = wf" in functions['saveSettings']
+    assert "s.wordfence_api_key" in functions['loadSettings']
+    for lang in ('ru', 'en'):
+        block = _lang_block(lang)
+        for key in ('settings.wordfence.title', 'settings.wordfence.hint', 'settings.wordfence.key.label'):
+            assert f"'{key}':" in block, (lang, key)
+
+
+def test_vulnerability_data_shown_with_its_source_and_licence():
+    view = _functions(_script())['wordPressHtml']
+    assert 'r.vuln_data' in view
+    for part in ('.source', '.fetched_at', '.notices', '.license_url', '.license'):
+        assert part in view, part
+    assert 'p.vulns' in view          # the plugins table has a vulnerabilities column
+    for lang in ('ru', 'en'):
+        block = _lang_block(lang)
+        for key in ('wp.item.vulns', 'wp.col.vulns', 'wp.vuln_source', 'wp.vuln_stale'):
+            assert f"'{key}':" in block, (lang, key)
+
+
+
+def test_vulnerability_record_link_and_unclear_counts_are_shown():
+    # review #61 pass 1: the record is a hyperlink; a count that could not be complete says so
+    view = _functions(_script())['wordPressHtml']
+    assert 'href="${f.link}"' in view and 'rel="noopener noreferrer"' in view
+    assert 'p.vulns_unclear' in view
+    for lang in ('ru', 'en'):
+        assert "'wp.vuln_record':" in _lang_block(lang), lang

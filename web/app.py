@@ -347,7 +347,7 @@ def api_analyze(req: AnalyzeRequest) -> dict:
 # and a key added later must not leak through here by default.
 PUBLIC_SETTINGS = ('sync_threshold_sec', 'ema_alpha', 'ai_language', 'telegram_chat')
 # never sent back in the clear, only a set/not-set flag
-SECRET_KEYS = frozenset({'anthropic_api_key', 'telegram_token', 'hibp_api_key'})
+SECRET_KEYS = frozenset({'anthropic_api_key', 'telegram_token', 'hibp_api_key', 'wordfence_api_key'})
 WRITABLE_SETTINGS = frozenset(PUBLIC_SETTINGS) | SECRET_KEYS
 
 

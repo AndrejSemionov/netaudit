@@ -301,6 +301,15 @@
     </div>
 
     <div class="settings-group">
+      <h2 data-i18n="settings.wordfence.title">Wordfence Intelligence</h2>
+      <p class="hint" data-i18n="settings.wordfence.hint">Бесплатный ключ для вкладки WordPress: известные уязвимости ядра и плагинов. Получить: аккаунт на wordfence.com → Integrations → API key. Без ключа уязвимости не проверяются.</p>
+      <div class="field">
+        <label><span data-i18n="settings.wordfence.key.label">Wordfence API-ключ</span> <span id="wordfenceKeyStatus" class="key-status"></span></label>
+        <input type="password" id="wordfenceApiKey" data-i18n="settings.hibp.key.placeholder" placeholder="оставь пустым, чтобы не менять">
+      </div>
+    </div>
+
+    <div class="settings-group">
       <h2 data-i18n="settings.webauth.title">Доступ к веб-интерфейсу</h2>
       <p class="hint" data-i18n="settings.webauth.hint">Если веб-интерфейс запущен не только на localhost (например, --host 0.0.0.0), для входа обязательно требуется логин и пароль. Если их не задать заранее, при первом запуске NetAudit сам сгенерирует пароль и покажет его один раз в консоли/логе — рекомендуется сразу задать здесь свой. Чтобы сохранить новый пароль, нужно быть уже залогиненным текущим (браузер спросит его сам при первом заходе).</p>
       <div id="webAuthStatus" class="hint" style="margin-bottom:10px"></div>
@@ -1791,7 +1800,8 @@ function wordPressHtml(r) {
       const pillClass = WP_SEVERITY_PILL[f.severity] || '';
       return `<div class="wp-finding"><span class="pill ${pillClass}">${t('wp.sev.' + f.severity)}</span> <b>${f.title}</b>
         ${f.detail ? `<div class="timing">${f.detail}</div>` : ''}
-        ${f.recommendation ? `<div>${t('wp.fix')}: ${f.recommendation}</div>` : ''}</div>`;
+        ${f.recommendation ? `<div>${t('wp.fix')}: ${f.recommendation}</div>` : ''}
+        ${f.link ? `<div><a href="${f.link}" target="_blank" rel="noopener noreferrer">${t('wp.vuln_record')}</a></div>` : ''}</div>`;
     }).join('') + '</div>';
   }
   // then what could not be checked, then what is fine
@@ -1806,12 +1816,21 @@ function wordPressHtml(r) {
   if (Array.isArray(r.plugins) && r.plugins.length) {
     const rows = r.plugins.map(p => {
       const pillClass = WP_PLUGIN_PILL[p.status] || '';
+      // a count that could not be complete says so: "?" or "2 + ?"
+      const counted = p.vulns !== null && p.vulns !== undefined;
+      const vulns = (counted ? p.vulns : (p.vulns_unclear ? '?' : '—')) + (counted && p.vulns_unclear ? ' + ?' : '');
       return `<tr><td>${p.slug}</td><td>${p.version || '—'}</td><td class="timing">${p.version_source ? t(WP_SOURCE_KEY[p.version_source] || 'wp.src.asset') : '—'}</td>
-        <td>${p.latest || '—'}</td><td><span class="pill ${pillClass}">${t('wp.pstatus.' + p.status)}</span></td></tr>`;
+        <td>${p.latest || '—'}</td><td><span class="pill ${pillClass}">${t('wp.pstatus.' + p.status)}</span></td><td>${vulns}</td></tr>`;
     }).join('');
     html += `<div class="card"><h2>${t('wp.plugins')}: ${r.plugins.length}</h2>
-      <table><tr><th>${t('wp.col.plugin')}</th><th>${t('wp.col.version')}</th><th>${t('wp.col.source')}</th><th>${t('wp.col.latest')}</th><th>${t('wp.col.status')}</th></tr>${rows}</table>
+      <table><tr><th>${t('wp.col.plugin')}</th><th>${t('wp.col.version')}</th><th>${t('wp.col.source')}</th><th>${t('wp.col.latest')}</th><th>${t('wp.col.status')}</th><th>${t('wp.col.vulns')}</th></tr>${rows}</table>
       <p class="timing">${t('wp.plugins_note')}${r.plugins_truncated ? ' ' + t('wp.truncated') : ''}</p></div>`;
+  }
+  if (r.vuln_data) {
+    const vd = r.vuln_data;
+    const notices = (vd.notices || []).map(n =>
+      `<details><summary>${n.notice}</summary><p class="timing">${n.license} ${n.license_url}</p></details>`).join('');
+    html += `<div class="card"><p class="timing">${t('wp.vuln_source')}: ${vd.source} · ${(vd.fetched_at || '').slice(0, 10)}${vd.stale ? ' · ' + t('wp.vuln_stale') : ''}</p>${notices}</div>`;
   }
   return html;
 }
@@ -1984,6 +2003,9 @@ async function loadSettings() {
   document.getElementById('tgStatus').style.color = (s.telegram_token && s.telegram_token.set) ? 'var(--ok)' : 'var(--muted)';
   document.getElementById('hibpKeyStatus').textContent = (s.hibp_api_key && s.hibp_api_key.set) ? t('key.set') : t('key.unset');
   document.getElementById('hibpKeyStatus').style.color = (s.hibp_api_key && s.hibp_api_key.set) ? 'var(--ok)' : 'var(--muted)';
+  const wfSet = Boolean(s.wordfence_api_key && s.wordfence_api_key.set);
+  document.getElementById('wordfenceKeyStatus').textContent = wfSet ? t('key.set') : t('key.unset');
+  document.getElementById('wordfenceKeyStatus').style.color = wfSet ? 'var(--ok)' : 'var(--muted)';
   document.getElementById('webAuthUser').value = s.web_auth_user || '';
   const waStatus = document.getElementById('webAuthStatus');
   waStatus.textContent = s.web_auth_configured ? t('settings.webauth.configured').replace('{user}', s.web_auth_user || '') : t('settings.webauth.not_configured');
@@ -2130,6 +2152,8 @@ async function saveSettings() {
   if (tg) settings.telegram_token = tg;
   const hibp = document.getElementById('hibpApiKey').value;
   if (hibp) settings.hibp_api_key = hibp;
+  const wf = document.getElementById('wordfenceApiKey').value;
+  if (wf) settings.wordfence_api_key = wf;
 
   await fetch('/api/settings', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ settings }) });
   const el = document.getElementById('settingsSaved');
@@ -2137,6 +2161,7 @@ async function saveSettings() {
   document.getElementById('apiKey').value = '';
   document.getElementById('telegramToken').value = '';
   document.getElementById('hibpApiKey').value = '';
+  document.getElementById('wordfenceApiKey').value = '';
   setTimeout(() => { el.textContent = ''; loadSettings(); }, 1500);
 }
 
