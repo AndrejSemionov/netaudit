@@ -942,7 +942,7 @@ def test_known_vulnerabilities_are_findings(monkeypatch):
     assert crit['severity'] == 'critical'
     assert 'elementor 4.1.0' in crit['title'] and 'SQL Injection' in crit['title']
     assert 'CVE-2024-1111' in crit['detail'] and 'CVSS 9.8' in crit['detail'] and '4.0.2' in crit['detail']
-    assert 'https://www.wordfence.com/threat-intel/vulnerabilities/id/e-1' in crit['detail']
+    assert crit['link'] == 'https://www.wordfence.com/threat-intel/vulnerabilities/id/e-1'   # its own field, a hyperlink in the tab
     assert crit['recommendation'] == 'Update to version 4.0.2'
     assert _by_id(result, 'WP-VULN-001:elementor:e-2')['severity'] == 'medium'    # no rating: not downplayed
     assert _by_id(result, 'WP-VULN-001:wordpress:c-1')['severity'] == 'low'
@@ -991,3 +991,28 @@ def test_stale_vulnerability_data_says_how_old(monkeypatch):
     assert item['status'] == 'ok'
     assert '2026-11-23' in item['detail'] and 'HTTP 429' in item['detail']
     assert result['vuln_data']['stale'] is True
+
+
+
+# --- review #61 pass 1 (4): no comparison is not "none known" -------------------------
+
+def test_nothing_with_a_known_version_is_not_checked(monkeypatch):
+    _site(monkeypatch, {BASE: (200, HOME_HEADERS, _wp_home())})       # core hidden, no plugins
+    asked = _wordfence(monkeypatch)
+    result = wordpress.check_wordpress_external(BASE)
+    item = next(c for c in result['checked'] if c['item'] == 'vulns')
+    assert item['status'] == 'not_checked' and 'no version' in item['detail']
+    assert asked == []                                                # nothing to look up: no download
+
+
+def test_a_plugin_whose_ranges_could_not_be_compared_is_not_a_zero(monkeypatch):
+    _site(monkeypatch, _plugin_pages(), core=CORE_LATEST, plugins=PLUGIN_LATEST)
+    _wordfence(monkeypatch, matches={'plugin:elementor': [_vuln('e-1')]},
+               uncertain={'plugin:contact-form-7': ['x-1'], 'plugin:elementor': ['x-2']})
+    result = wordpress.check_wordpress_external(BASE)
+    rows = {p['slug']: p for p in result['plugins']}
+    assert rows['contact-form-7']['vulns'] is None and rows['contact-form-7']['vulns_unclear'] == 1
+    assert rows['elementor']['vulns'] == 1 and rows['elementor']['vulns_unclear'] == 1
+    assert _checked(result)['vulns'] == 'problem'
+    gap = next(c for c in result['checked'] if c['item'] == 'vuln_ranges')
+    assert gap['status'] == 'not_checked' and 'contact-form-7' in gap['detail'] and 'elementor' in gap['detail']

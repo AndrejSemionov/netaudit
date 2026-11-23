@@ -110,3 +110,13 @@ def test_vulnerability_data_shown_with_its_source_and_licence():
         block = _lang_block(lang)
         for key in ('wp.item.vulns', 'wp.col.vulns', 'wp.vuln_source', 'wp.vuln_stale'):
             assert f"'{key}':" in block, (lang, key)
+
+
+
+def test_vulnerability_record_link_and_unclear_counts_are_shown():
+    # review #61 pass 1: the record is a hyperlink; a count that could not be complete says so
+    view = _functions(_script())['wordPressHtml']
+    assert 'href="${f.link}"' in view and 'rel="noopener noreferrer"' in view
+    assert 'p.vulns_unclear' in view
+    for lang in ('ru', 'en'):
+        assert "'wp.vuln_record':" in _lang_block(lang), lang
