@@ -303,6 +303,8 @@ def test_download_errors_name_the_reason_not_the_key(monkeypatch, status, words)
         list(wordfence._download(KEY))
     assert words in str(e.value)
     assert KEY not in str(e.value)
+    assert e.value.auth_failed is (status in (401, 403))
+    assert e.value.rate_limited is (status == 429)
 
 
 def test_download_has_a_size_cap(monkeypatch):
@@ -466,3 +468,110 @@ def test_no_record_link_is_no_link(downloads):
     downloads.feed = _feed_text(feed)
     [hit] = wordfence.vulnerabilities([('plugin', 'unlinked', '1.0')], KEY)['matches']['plugin:unlinked']
     assert hit['link'] is None
+
+
+# --- review #61 pass 2 ----------------------------------------------------------------
+# (1) a damaged record: unknown component -> the whole new feed is refused;
+# known component -> its broken ranges are "unknown"; no shape crashes
+
+def _two_records():
+    return {'aaaa-1': FEED['aaaa-1'], 'aaaa-3': FEED['aaaa-3']}
+
+
+@pytest.mark.parametrize('damage', [
+    lambda r: r.update(software=None),
+    lambda r: r.update(software=5),
+    lambda r: r.update(software='plugin'),
+    lambda r: r.update(software=[5]),
+    lambda r: r['software'][0].update(type=7),
+    lambda r: r['software'][0].pop('slug'),
+    lambda r: r['software'][0].update(slug=['x']),
+])
+def test_a_record_of_an_unknown_component_refuses_the_whole_feed(downloads, damage):
+    downloads.feed = _feed_text(_two_records())
+    wordfence.refresh(KEY)
+    before = wordfence.index_path().read_bytes()
+    damaged = json.loads(_feed_text(_two_records()))
+    damage(damaged['aaaa-1'])
+    downloads.feed = json.dumps(damaged)
+    with pytest.raises(wordfence.FeedError, match='unexpected'):
+        wordfence.refresh(KEY)
+    assert wordfence.index_path().read_bytes() == before
+    later = time.time() + wordfence.MAX_AGE_SEC + 60
+    result = wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY, now=later)
+    assert result['stale'] is True
+    assert [v['id'] for v in result['matches']['plugin:learnpress']] == ['aaaa-1']
+
+
+@pytest.mark.parametrize('affected', [
+    {'ok': {'from_version': '9.0', 'from_inclusive': True, 'to_version': '9.1', 'to_inclusive': True}, 'bad': None},
+    {'ok': {'from_version': '9.0', 'from_inclusive': True, 'to_version': '9.1', 'to_inclusive': True}, 'bad': 'x'},
+    ['not', 'a', 'map'],
+    {},
+])
+def test_broken_ranges_of_a_known_component_are_unknown(downloads, affected):
+    feed = dict(FEED)
+    feed['dddd-1'] = _record('dddd-1', 'mixed', [_range('9.0', '9.1')])
+    feed['dddd-1']['software'][0]['affected_versions'] = affected
+    downloads.feed = _feed_text(feed)
+    result = wordfence.vulnerabilities([('plugin', 'mixed', '1.0')], KEY)
+    assert result['status'] == 'ok'
+    assert result['matches']['plugin:mixed'] == []
+    assert result['uncertain']['plugin:mixed'] == ['dddd-1']
+
+
+def test_odd_shapes_of_other_fields_do_not_crash(downloads):
+    feed = dict(FEED)
+    odd = _record('eeee-1', 'oddfields', [_range('*', '2.0')])
+    odd.update(cvss='high', references='http://www.wordfence.com/threat-intel/vulnerabilities/x',
+               copyrights=['not', 'a', 'map'], informational='no', title=12)
+    odd['software'][0].update(patched_versions='2.1', remediation=None)
+    feed['eeee-1'] = odd
+    downloads.feed = _feed_text(feed)
+    result = wordfence.vulnerabilities([('plugin', 'oddfields', '1.0')], KEY)
+    [hit] = result['matches']['plugin:oddfields']
+    assert hit['rating'] is None and hit['score'] is None and hit['link'] is None
+    assert hit['patched_versions'] == [] and hit['title'] == '12'
+
+
+def test_an_unknown_software_type_is_skipped_not_refused(downloads):
+    # a positive control: a new kind of software Wordfence may add later is not ours to judge
+    feed = dict(FEED)
+    feed['ffff-1'] = _record('ffff-1', 'somelib', [_range('*', '2.0')], type_='library')
+    downloads.feed = _feed_text(feed)
+    assert wordfence.refresh(KEY)['records'] == 5
+    result = wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY)
+    assert len(result['matches']['plugin:learnpress']) == 2
+
+
+# (2) a rejected key pauses only itself; a rate limit pauses everyone
+
+def test_a_new_key_is_tried_at_once_after_a_rejected_one(downloads):
+    downloads.error = wordfence.FeedError('the Wordfence key was rejected (HTTP 401): check it in Settings',
+                                          auth_failed=True)
+    now = time.time()
+    wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY, now=now)
+    again = wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY, now=now + 1)
+    assert downloads == [KEY] and 'next try' in again['error']             # the same key waits
+    downloads.error = None
+    new_key = 'wf-new-key-9876543210'
+    result = wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], new_key, now=now + 2)
+    assert downloads == [KEY, new_key]
+    assert result['status'] == 'ok'
+    assert KEY not in wordfence._failure_path().read_text() if wordfence._failure_path().exists() else True
+
+
+def test_a_rate_limit_pauses_a_new_key_too(downloads):
+    downloads.error = wordfence.FeedError('Wordfence rate limit (HTTP 429): try again later', rate_limited=True)
+    now = time.time()
+    wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY, now=now)
+    wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], 'wf-new-key-9876543210', now=now + 2)
+    assert downloads == [KEY]
+
+
+def test_the_pause_file_never_holds_the_key(downloads):
+    downloads.error = wordfence.FeedError('the Wordfence key was rejected (HTTP 401): check it in Settings',
+                                          auth_failed=True)
+    wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY)
+    text = wordfence._failure_path().read_text()
+    assert KEY not in text
