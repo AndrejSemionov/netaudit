@@ -576,3 +576,24 @@ def test_the_pause_file_never_holds_the_key(downloads):
     wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY)
     text = wordfence._failure_path().read_text()
     assert KEY not in text
+
+
+# --- review #61 pass 3 (USER allowed a narrow pass 4) -------------------------------------
+# an empty or blank type cannot tell the component either: the feed is refused,
+# like a numeric type; an explicitly named other type is still skipped
+
+@pytest.mark.parametrize('blank', ['', '   ', '\t'])
+def test_a_blank_software_type_refuses_the_whole_feed(downloads, blank):
+    downloads.feed = _feed_text(_two_records())
+    wordfence.refresh(KEY)
+    before = wordfence.index_path().read_bytes()
+    damaged = json.loads(_feed_text(_two_records()))
+    damaged['aaaa-1']['software'][0]['type'] = blank
+    downloads.feed = json.dumps(damaged)
+    with pytest.raises(wordfence.FeedError, match='unexpected'):
+        wordfence.refresh(KEY)
+    assert wordfence.index_path().read_bytes() == before
+    later = time.time() + wordfence.MAX_AGE_SEC + 60
+    result = wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY, now=later)
+    assert result['stale'] is True
+    assert [v['id'] for v in result['matches']['plugin:learnpress']] == ['aaaa-1']
