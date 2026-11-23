@@ -1,0 +1,299 @@
+"""
+Wordfence Intelligence v3 feed -> a local index -> known vulnerabilities of
+the WordPress core and plugins (docs/research/wordpress_audit.md §9, C3).
+No network: the one download seam, wordfence._download, yields text chunks
+or raises FeedError; the index lives next to the isolated test database.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import stat
+import time
+
+import pytest
+
+from netaudit_pkg import storage, wordfence
+
+KEY = 'wf-test-key-0123456789'
+DEFIANT = {'notice': 'Copyright 2012-2026 Defiant Inc.', 'license': 'Defiant hereby grants you a licence.',
+           'license_url': 'https://www.wordfence.com/wordfence-intelligence-terms-and-conditions/'}
+MITRE = {'notice': 'Copyright 1999-2026 The MITRE Corporation', 'license': 'CVE Usage: MITRE grants.',
+         'license_url': 'https://www.cve.org/Legal/TermsOfUse'}
+
+
+def _range(frm, to, fi=True, ti=True):
+    return {f'{frm} - {to}': {'from_version': frm, 'from_inclusive': fi, 'to_version': to, 'to_inclusive': ti}}
+
+
+def _record(uid, slug, ranges, *, type_='plugin', cve='CVE-2026-0001', rating='High', score=8.1,
+            patched=('9.9.9',), informational=False, title='Example hole'):
+    affected = {}
+    for r in ranges:
+        affected.update(r)
+    return {
+        'id': uid, 'title': title, 'informational': informational,
+        'software': [{'type': type_, 'name': slug.title(), 'slug': slug, 'affected_versions': affected,
+                      'patched': bool(patched), 'patched_versions': list(patched),
+                      'remediation': f'Update to version {patched[0]}' if patched else 'No known patch'}],
+        'references': [f'https://www.wordfence.com/threat-intel/vulnerabilities/id/{uid}?source=api-prod'],
+        'cve': cve, 'cvss': {'vector': 'CVSS:3.1/AV:N', 'score': score, 'rating': rating} if rating else None,
+        'copyrights': {'message': 'subject to copyright', 'defiant': DEFIANT, **({'mitre': MITRE} if cve else {})},
+    }
+
+
+FEED = {
+    'aaaa-1': _record('aaaa-1', 'learnpress', [_range('*', '4.2.6')], cve='CVE-2024-1111', rating='Critical', score=9.8,
+                      patched=('4.2.7',), title='SQL Injection'),
+    'aaaa-2': _record('aaaa-2', 'learnpress', [_range('4.0.0', '4.5.0', ti=False)], cve=None, rating='Medium', score=5.3,
+                      patched=('4.5.0',), title='Missing Authorization "x" {y}'),
+    'aaaa-3': _record('aaaa-3', 'elementor', [_range('3.0.0', '3.20.2')], rating='High', patched=('3.20.3',)),
+    'aaaa-4': _record('aaaa-4', 'elementor', [_range('*', '*')], informational=True, title='Info only'),
+    'aaaa-5': _record('aaaa-5', 'WordPress', [_range('6.4.0', '6.4.3')], type_='core', cve='CVE-2024-2222',
+                      rating='Medium', patched=('6.4.4',), title='Core XSS'),
+    'aaaa-6': _record('aaaa-6', 'oddplugin', [_range('beta', 'trunk')], rating=None, patched=()),
+}
+
+
+def _feed_text(feed=None, indent=None):
+    return json.dumps(FEED if feed is None else feed, indent=indent)
+
+
+def _chunks(text, size):
+    return [text[i:i + size] for i in range(0, len(text), size)]
+
+
+class _Calls(list):
+    feed: str
+    error: Exception | None
+
+
+@pytest.fixture
+def downloads(monkeypatch, isolated_db):
+    """Replaces the download; returns the list of keys it was called with.
+    Set .feed (a str) or .error (a FeedError) on the returned list."""
+    calls = _Calls()
+    calls.feed = _feed_text()
+    calls.error = None
+
+    def download(key):
+        calls.append(key)
+        if calls.error is not None:
+            raise calls.error
+        return iter(_chunks(calls.feed, 4096))
+
+    monkeypatch.setattr(wordfence, '_download', download)
+    return calls
+
+
+# --- the stream parser --------------------------------------------------------
+
+@pytest.mark.parametrize('size', [1, 2, 3, 7, 64, 100000])
+def test_records_come_out_whole_at_any_chunk_size(size):
+    text = _feed_text(indent=2)
+    records = list(wordfence.iter_records(_chunks(text, size)))
+    assert [uid for uid, _ in records] == list(FEED)
+    assert dict(records) == FEED
+
+
+def test_empty_feed_has_no_records():
+    assert list(wordfence.iter_records(['  {', ' } '])) == []
+
+
+@pytest.mark.parametrize('text', ['[1, 2]', '{"a": {"id": 1}', '{"a" {"id": 1}}', '{"a": {"id": 1}} trailing',
+                                  'not json'])
+def test_broken_feed_is_an_error(text):
+    with pytest.raises(wordfence.FeedError):
+        list(wordfence.iter_records(_chunks(text, 3)))
+
+
+# --- version ranges -------------------------------------------------------------
+
+@pytest.mark.parametrize('version, expected', [
+    ('4.2.6', True), ('4.2.7', False), ('1.0', True),          # * - 4.2.6 inclusive
+])
+def test_open_lower_bound(version, expected):
+    assert wordfence.affects([['*', True, '4.2.6', True]], version) is expected
+
+
+@pytest.mark.parametrize('version, expected', [
+    ('4.0.0', True), ('4.0', True), ('4.4.9', True), ('4.5.0', False), ('4.5', False), ('3.9.9', False),
+])
+def test_bounds_and_inclusive_flags(version, expected):
+    assert wordfence.affects([['4.0.0', True, '4.5.0', False]], version) is expected
+
+
+def test_exclusive_lower_bound():
+    assert wordfence.affects([['4.0.0', False, '*', True]], '4.0.0') is False
+    assert wordfence.affects([['4.0.0', False, '*', True]], '4.0.1') is True
+
+
+def test_any_version():
+    assert wordfence.affects([['*', True, '*', True]], '1.2.3') is True
+
+
+def test_version_suffix_compares_by_its_numbers():
+    assert wordfence.affects([['*', True, '6.4.3', True]], '6.4.3-RC2') is True
+
+
+@pytest.mark.parametrize('ranges', [[['beta', True, 'trunk', True]], [['1.0', True, 'dev', True]]])
+def test_a_bound_that_is_not_a_version_is_unknown(ranges):
+    assert wordfence.affects(ranges, '1.2.0') is None
+
+
+def test_one_matching_range_is_enough():
+    assert wordfence.affects([['1.0', True, '1.1', True], ['2.0', True, '2.1', True]], '2.0.5') is True
+
+
+def test_a_version_that_is_not_a_version_is_unknown():
+    assert wordfence.affects([['*', True, '*', True]], 'trunk') is None
+
+
+# --- the index and its cache --------------------------------------------------------
+
+def test_refresh_builds_a_private_index_next_to_the_database(downloads):
+    meta = wordfence.refresh(KEY)
+    path = wordfence.index_path()
+    assert path.parent == storage.DB_PATH.parent
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert meta['records'] == 5                                 # the informational one is skipped
+    assert downloads == [KEY]
+    text = path.read_bytes()
+    assert KEY.encode() not in text                             # the key is never stored
+
+
+def test_lookup_by_core_and_plugin_slug(downloads):
+    result = wordfence.vulnerabilities([('core', 'wordpress', '6.4.3'), ('plugin', 'LearnPress', '4.2.6'),
+                                        ('plugin', 'elementor', '3.20.3')], KEY)
+    assert result['status'] == 'ok'
+    assert [v['id'] for v in result['matches']['core']] == ['aaaa-5']
+    assert sorted(v['id'] for v in result['matches']['plugin:learnpress']) == ['aaaa-1', 'aaaa-2']
+    assert result['matches']['plugin:elementor'] == []          # 3.20.3 is fixed; aaaa-4 informational
+    hole = next(v for v in result['matches']['plugin:learnpress'] if v['id'] == 'aaaa-1')
+    assert hole['cve'] == 'CVE-2024-1111' and hole['rating'] == 'Critical' and hole['score'] == 9.8
+    assert hole['patched_versions'] == ['4.2.7']
+    assert hole['remediation'] == 'Update to version 4.2.7'
+    assert hole['link'] == 'https://www.wordfence.com/threat-intel/vulnerabilities/id/aaaa-1?source=api-prod'
+
+
+def test_notices_for_the_licence(downloads):
+    result = wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY)
+    notices = {n['notice']: n for n in result['notices']}
+    assert notices[DEFIANT['notice']]['license_url'] == DEFIANT['license_url']
+    assert MITRE['notice'] in notices
+    assert result['source'] == 'Wordfence Intelligence'
+
+
+def test_unknown_bounds_are_reported_not_dropped(downloads):
+    result = wordfence.vulnerabilities([('plugin', 'oddplugin', '1.2.0')], KEY)
+    assert result['matches']['plugin:oddplugin'] == []
+    assert result['uncertain']['plugin:oddplugin'] == ['aaaa-6']
+
+
+def test_a_fresh_index_is_not_downloaded_again(downloads):
+    wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY)
+    wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY)
+    assert downloads == [KEY]
+
+
+def test_an_index_older_than_a_day_is_refreshed(downloads):
+    wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY)
+    later = time.time() + wordfence.MAX_AGE_SEC + 60
+    result = wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY, now=later)
+    assert downloads == [KEY, KEY]
+    assert result['stale'] is False
+
+
+@pytest.mark.parametrize('error, words', [
+    (wordfence.FeedError('the Wordfence key was rejected (HTTP 401)'), 'rejected'),
+    (wordfence.FeedError('Wordfence rate limit (HTTP 429)'), '429'),
+    (wordfence.FeedError('could not download the Wordfence feed: timed out'), 'timed out'),
+])
+def test_no_index_and_a_failed_download_is_an_error(downloads, error, words):
+    downloads.error = error
+    result = wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY)
+    assert result['status'] == 'error'
+    assert words in result['error']
+    assert KEY not in json.dumps(result)
+    assert not wordfence.index_path().exists()
+
+
+def test_a_failed_refresh_keeps_a_recent_index_and_says_so(downloads):
+    wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY)
+    downloads.error = wordfence.FeedError('Wordfence rate limit (HTTP 429)')
+    later = time.time() + 2 * 86400
+    result = wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY, now=later)
+    assert result['status'] == 'ok'
+    assert result['stale'] is True
+    assert '429' in result['refresh_error']
+    assert len(result['matches']['plugin:learnpress']) == 2
+
+
+def test_an_index_too_old_to_trust_is_an_error(downloads):
+    wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY)
+    downloads.error = wordfence.FeedError('could not download the Wordfence feed: timed out')
+    later = time.time() + (wordfence.MAX_STALE_DAYS + 1) * 86400
+    result = wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY, now=later)
+    assert result['status'] == 'error'
+    assert 'days old' in result['error']
+
+
+def test_a_broken_download_never_replaces_a_good_index(downloads):
+    wordfence.refresh(KEY)
+    before = wordfence.index_path().read_bytes()
+    downloads.feed = _feed_text()[:-200]                        # cut in the middle
+    with pytest.raises(wordfence.FeedError):
+        wordfence.refresh(KEY)
+    assert wordfence.index_path().read_bytes() == before
+    assert [p.name for p in wordfence.index_path().parent.iterdir() if p.name.startswith('wordfence')] == ['wordfence.db']
+
+
+def test_no_key_is_not_a_download(downloads):
+    result = wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], '')
+    assert result['status'] == 'error'
+    assert 'no Wordfence API key' in result['error']
+    assert downloads == []
+
+
+# --- the real download, its errors and the key ----------------------------------------
+
+def _transport(monkeypatch, status, body=b'{}', seen=None):
+    import httpx
+
+    def handler(request):
+        if seen is not None:
+            seen.append(request)
+        return httpx.Response(status, content=body)
+
+    monkeypatch.setattr(wordfence, '_TRANSPORT', httpx.MockTransport(handler))
+
+
+def test_download_sends_the_key_as_a_bearer_token(monkeypatch):
+    seen = []
+    _transport(monkeypatch, 200, b'{"a": {"id": "a"}}', seen)
+    assert ''.join(wordfence._download(KEY)) == '{"a": {"id": "a"}}'
+    [request] = seen
+    assert str(request.url) == wordfence.FEED_URL
+    assert request.headers['authorization'] == f'Bearer {KEY}'
+
+
+@pytest.mark.parametrize('status, words', [(401, 'rejected'), (403, 'rejected'), (429, '429'), (500, 'HTTP 500')])
+def test_download_errors_name_the_reason_not_the_key(monkeypatch, status, words):
+    _transport(monkeypatch, status, b'{"message": "nope"}')
+    with pytest.raises(wordfence.FeedError) as e:
+        list(wordfence._download(KEY))
+    assert words in str(e.value)
+    assert KEY not in str(e.value)
+
+
+def test_download_has_a_size_cap(monkeypatch):
+    monkeypatch.setattr(wordfence, 'MAX_FEED_BYTES', 10)
+    _transport(monkeypatch, 200, b'{"a": {"id": "aaaaaaaaaaaaaaaa"}}')
+    with pytest.raises(wordfence.FeedError, match='larger than'):
+        list(wordfence._download(KEY))
+
+
+def test_index_directory_stays_private(downloads):
+    wordfence.refresh(KEY)
+    assert not stat.S_IMODE(os.stat(wordfence.index_path().parent).st_mode) & 0o077
