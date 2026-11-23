@@ -216,3 +216,49 @@ Questions for USER, with the recommended answer first:
 4. Live check. Recommended: the CI stand only; USER tries the tab on own
    sites after merge. Alternative: name a site you own and allow about ten
    GET requests to it now.
+
+## 9. C3 design: known vulnerabilities via Wordfence (PR 2)
+
+USER 2026-11-23: «Да, Wordfence». Facts from §3: v3 production feed,
+`GET https://www.wordfence.com/api/intelligence/v3/vulnerabilities/production`,
+`Authorization: Bearer <key>`, the whole feed in one answer (no per-slug
+query), 429 on too many requests; records keyed by UUID with `software[]`
+(`type` core/plugin/theme, `slug`, `affected_versions` ranges with
+`from_version`/`from_inclusive`/`to_version`/`to_inclusive`, `*` = any,
+`patched_versions`, `remediation`), `cve`, `cvss.score/rating`,
+`references`, `informational`, `copyrights` (Defiant, MITRE). Feed size:
+still UNKNOWN (no key here); the design does not depend on it.
+
+- **Key.** Setting `wordfence_api_key`, a secret like `hibp_api_key`: the
+  settings API returns only "set / not set", never the value; it goes only
+  into the `Authorization` header of the feed request — never into the
+  report, an error text, a log line or the AI prompt.
+- **Feed → index.** Downloaded at most once a day, parsed as a stream, one
+  record at a time (the feed is never held in memory whole), into an index
+  `wordfence.db` (SQLite) next to `netaudit.db`, mode 0600 in the 0700
+  directory. It is written to a temporary file and moved into place only
+  when complete: a failed or partial download never replaces a good index.
+  Informational records are skipped. Indexed per `core` (any slug) or
+  `plugin:<slug>`: id, title, CVE, CVSS score and rating, ranges, patched
+  versions, remediation, the record's link on wordfence.com, and the
+  copyright notices once per index.
+- **Refresh failures.** No key → "not checked: no Wordfence key in
+  Settings". Key rejected (401/403), rate limit (429), other HTTP or network
+  error → the index is kept; an index up to 7 days old is used and its date
+  is shown; with no index, or an older one → "not checked" with the reason.
+- **Matching.** Only items with a known version: the core (when its version
+  was read) and each plugin with a version from §4. A version is compared
+  by its leading dotted numbers (`6.4.3`, `4.5.0`). A vulnerability whose
+  ranges cannot be compared for that version (a bound that is not a
+  version) makes the item "not checked", not "none".
+- **Result.** Each match is a finding `WP-VULN-001:<slug>:<wordfence-id>`:
+  severity from the CVSS rating (critical/high/medium/low; no rating →
+  medium, not downplayed), title with the plugin and version, detail with
+  CVE, CVSS, fixed versions and the record's link, the remediation as the
+  fix. The checklist item `vulns` ("known vulnerabilities, core and
+  plugins") is a problem, fine (none known for N items with a version), or
+  not checked with the reason; unknown plugin versions stay in
+  `plugin_versions`. Each plugin row gets its vulnerability count. The
+  report carries the data source, its date and the Defiant and MITRE
+  notices with their licence texts, shown under the report (licence terms,
+  §3).
