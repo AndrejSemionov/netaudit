@@ -279,7 +279,8 @@ def _components(uid: str, record: dict) -> list[tuple[str, dict]]:
         raise _unexpected(uid, 'no software list')
     out = []
     for item in software:
-        if not isinstance(item, dict) or not isinstance(item.get('type'), str):
+        # a blank type cannot tell the component either (review #61 pass 3)
+        if not isinstance(item, dict) or not isinstance(item.get('type'), str) or not item['type'].strip():
             raise _unexpected(uid, 'a software entry without a type')
         if item['type'] == 'core':
             out.append(('core', item))
