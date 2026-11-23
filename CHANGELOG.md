@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.2.0 — 2026-11-23
+
 - WordPress: a new tab in the Web and a `wordpress` category with the check
   `wordpress_external` (also `netaudit run wordpress_external --url …`). It
   checks a site the way any visitor sees it, with GET requests only, and
