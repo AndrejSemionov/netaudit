@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Laravel: a new **Laravel** tab next to WordPress and the check
+  `laravel_external`, by site address, GET requests only. It tells Laravel
+  by its cookies (or an open Laravel file) and looks for what a visitor can
+  reach by mistake: a public `.env` or a copy of it (only the names of the
+  keys are reported, never their values), Ignition's debug page, the
+  Debugbar, Telescope and Horizon, `storage/logs/laravel.log`, composer
+  files, `.git`; the session cookie's Secure, HttpOnly and SameSite; HTTPS,
+  the http redirect, the certificate and three headers, as for WordPress.
+  A Laravel site does not show its version: when `composer.lock` or
+  `vendor/composer/installed.json` is public, its versions are checked —
+  whether the Laravel release still gets security fixes (endoflife.date) and
+  the known vulnerabilities of every package (OSV.dev, GitHub Advisory
+  Database), each a finding with its CVE, the fixed version and a link.
+  Otherwise the version and the vulnerabilities are "not checked", never
+  "none". The same score and verdicts as the WordPress tab; ids `LV-*` in
+  `docs/checks/finding_ids.md`. The WordPress check's request and transport
+  code is now shared (`netaudit_pkg/webprobe.py`); its results are as before.
+
 - WordPress: known vulnerabilities of the core and of every plugin whose
   version is known, from Wordfence Intelligence. Each one is a finding with
   its CVE, CVSS score, the fixed version, the record's link and what to do;

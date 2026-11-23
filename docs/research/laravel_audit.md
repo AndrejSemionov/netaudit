@@ -1,8 +1,9 @@
 # Laravel section: research and draft contract
 
-Status: research, MODE: MANUAL (USER 2026-11-23: «Да, research»). The
-contract below is a draft for USER approval; no RED/GREEN before that.
-Researcher: Claude. Reviewer: GPT/Codex.
+Status: contract approved, MODE: MANUAL (USER 2026-11-23: «Да, research»,
+then «Утверждаю, делайте» with the recommended answers: PR 1 = L1 + L2 +
+L3 + L5, PR 2 = L4 as a separate `laravel_server`, the live check on the
+CI stand only). Researcher and executor: Claude. Reviewer: GPT/Codex.
 Base: `main` @ `b5f00cf`. Dates and versions are as of 2026-11-23.
 
 USER asked for a Laravel check like the WordPress one. The difference
@@ -127,9 +128,12 @@ Laravel project copied in.
 
 ## 8. Not checked yet
 
-- No live Laravel site was probed (USER's sites unknown here).
-- Telescope/Horizon page markers and the Laravel 12 built-in debug page
-  markers: to be fixed on the stand.
+- No live Laravel site was probed (USER: the CI stand only).
+- Telescope (`<title>Telescope`, `<div id="telescope"`), Horizon
+  (`<title>Horizon`, `<div id="horizon"`), the Debugbar marker and
+  Ignition's `health-check` route are read from the package sources
+  (2026-11-23); they meet a running Laravel on the CI stand (§7), first in
+  the PR's CI run - there is no PHP or Docker on the development machine.
 - The per-package Packagist API vs OSV coverage gap: UNKNOWN, measured on
   the stand's lock file.
 
