@@ -21,7 +21,7 @@ from __future__ import annotations
 import socket
 import ssl
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from urllib.parse import urljoin, urlparse
 
@@ -44,6 +44,7 @@ class Page:
     url: str          # the final URL, after redirects when they were followed
     headers: dict     # lower-case names
     text: str         # at most MAX_BODY bytes, decoded
+    cookies: list = field(default_factory=list)   # each Set-Cookie of the final answer, as sent
 
 
 class OffSiteRedirect(httpx.HTTPError):
@@ -92,7 +93,9 @@ def fetch(url: str, follow: bool = True, *, transport=None) -> Page:
                         if len(body) >= MAX_BODY:
                             break
                     text = bytes(body[:MAX_BODY]).decode(resp.charset_encoding or 'utf-8', errors='replace')
-                    return Page(resp.status_code, url, {k.lower(): v for k, v in resp.headers.items()}, text)
+                    cookies = [v for k, v in resp.headers.multi_items() if k.lower() == 'set-cookie']
+                    return Page(resp.status_code, url, {k.lower(): v for k, v in resp.headers.items()}, text,
+                                cookies)
             except httpx.InvalidURL as e:
                 # httpx parses Location even when it does not follow it: a site's
                 # "javascript:..." must not crash the check (InvalidURL is no HTTPError)

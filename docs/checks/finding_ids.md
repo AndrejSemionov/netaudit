@@ -224,3 +224,29 @@ Contract: `docs/research/wordpress_audit.md` (C2).
 | WP-HDR-001 | low | — | HSTS is off |
 | WP-HDR-002 | low | — | X-Content-Type-Options: nosniff is missing |
 | WP-HDR-003 | low | — | no protection from framing (X-Frame-Options / CSP frame-ancestors) |
+
+## laravel_external
+
+Contract: `docs/research/laravel_audit.md` (L2, L3).
+
+| Control id | Severities | Subject | Control |
+|---|---|---|---|
+| LV-ENV-001 | critical | — | a .env file (or a copy) is public with APP_KEY or DB_PASSWORD |
+| LV-IGN-001 | critical | — | Ignition's health check answers: debug mode with runnable solutions |
+| LV-DBG-001 | high | — | the Laravel debug bar is shown to visitors |
+| LV-TEL-001 | high | — | Telescope is open to anyone |
+| LV-HRZ-001 | high | — | Horizon is open to anyone |
+| LV-FILE-001 | high | — | storage/logs/laravel.log is public |
+| LV-FILE-002 | medium | — | composer.json, composer.lock or vendor/composer/installed.json is public |
+| LV-FILE-003 | high | — | .git/config is public |
+| LV-CKE-001 | medium | — | the session cookie is sent without Secure (HTTPS site) |
+| LV-CKE-002 | medium | — | the session cookie has no HttpOnly |
+| LV-CKE-003 | low | — | the session cookie has no SameSite, or SameSite=None |
+| LV-EOL-001 | high | — | the Laravel release line no longer gets security fixes (endoflife.date) |
+| LV-VULN-001 | critical, high, medium, low | package, OSV id | a known vulnerability (OSV.dev, Packagist) affects a package version in a public composer.lock |
+| LV-TLS-001 | high | — | the site does not use HTTPS |
+| LV-TLS-002 | medium | — | http does not redirect to https |
+| LV-TLS-003 | medium | — | the certificate ends in less than 14 days |
+| LV-HDR-001 | low | — | HSTS is off |
+| LV-HDR-002 | low | — | X-Content-Type-Options: nosniff is missing |
+| LV-HDR-003 | low | — | no protection from framing (X-Frame-Options / CSP frame-ancestors) |

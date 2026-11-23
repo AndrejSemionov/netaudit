@@ -176,6 +176,7 @@
   <nav class="tabs-nav">
     <button class="tab-btn active" data-tab="audit" onclick="switchTab('audit')" data-i18n="tab.audit">Аудит</button>
     <button class="tab-btn" data-tab="wordpress" onclick="switchTab('wordpress')" data-i18n="tab.wordpress">WordPress</button>
+    <button class="tab-btn" data-tab="laravel" onclick="switchTab('laravel')" data-i18n="tab.laravel">Laravel</button>
     <button class="tab-btn" data-tab="trends" onclick="switchTab('trends')" data-i18n="tab.trends">Динамика</button>
     <button class="tab-btn" data-tab="settings" onclick="switchTab('settings')" data-i18n="tab.settings">Настройки</button>
     <button class="tab-btn" data-tab="help" onclick="switchTab('help')" data-i18n="tab.help">Помощь</button>
@@ -250,6 +251,22 @@
       <div class="status" id="wpStatus"></div>
     </div>
     <div id="wpResult"></div>
+  </div>
+</div>
+
+<div class="tab-page" id="tab-laravel">
+  <div class="settings-wrap" style="max-width:900px">
+    <div class="settings-group">
+      <h2 data-i18n="lv.title">Проверка сайта на Laravel</h2>
+      <p class="hint" data-i18n="lv.hint">Только то, что видит любой посетитель: открытый .env, режим отладки, Telescope и Horizon, журнал и файлы проекта, флаги cookie сессии, HTTPS. Версии и уязвимости — только если composer.lock открыт по ошибке. Только GET-запросы, без входа.</p>
+      <label for="lvUrl" class="hint" data-i18n="lv.address">Адрес сайта</label>
+      <div class="wp-form">
+        <input id="lvUrl" type="text" placeholder="mysite.com" list="savedTargets" onkeydown="if (event.key === 'Enter') runLaravelCheck()">
+        <button id="lvBtn" onclick="runLaravelCheck()" data-i18n="lv.check">Проверить</button>
+      </div>
+      <div class="status" id="lvStatus"></div>
+    </div>
+    <div id="lvResult"></div>
   </div>
 </div>
 
@@ -927,7 +944,7 @@ async function loadChecks() {
 function renderCheckList() {
   const byCat = {};
   CHECKS.forEach(c => { (byCat[c.category] ||= []).push(c); });
-  const catNames = { network: t('cat.network'), site: t('cat.site'), security: t('cat.security'), performance: t('cat.performance'), server: t('cat.server'), capture: t('cat.capture'), hardening: t('cat.hardening'), wordpress: t('cat.wordpress') };
+  const catNames = { network: t('cat.network'), site: t('cat.site'), security: t('cat.security'), performance: t('cat.performance'), server: t('cat.server'), capture: t('cat.capture'), hardening: t('cat.hardening'), wordpress: t('cat.wordpress'), laravel: t('cat.laravel') };
 
   const container = document.getElementById('checkList');
   container.innerHTML = '';
@@ -1364,6 +1381,7 @@ function baseOpts(extra) {
 function renderResult(id, r, canvasId) {
   // the same view as the WordPress tab; r is already the escaped display copy
   if (id === 'wordpress_external') return { html: wordPressHtml(r) };
+  if (id === 'laravel_external') return { html: laravelHtml(r) };
   if (r.error) return { html: `<span class="pill bad">${t('run.error')}</span> <span class="timing">${r.error}</span>` };
 
   // --- mtr: таблица + график потерь по хопам ---
@@ -1871,6 +1889,122 @@ async function runWordPressCheck() {
       if (result) {
         status.textContent = '';
         out.innerHTML = renderWordPress(result);
+      } else {
+        status.textContent = t('run.error') + ': ' + (ev.message || t('run.unknown'));
+      }
+    }
+  };
+}
+
+// ---- Laravel (docs/research/laravel_audit.md, contract L1) ----
+// One view of a laravel_external result for the Laravel tab and the Audit
+// tab, built like wordPressHtml(); it takes the escaped display copy.
+// Common words (score, statuses, severities) are the WordPress tab's.
+const LV_VERDICT_PILL = { ok: 'ok', warn: 'warn', danger: 'bad', incomplete: 'warn', not_laravel: 'warn', unreachable: 'bad' };
+
+function laravelHtml(r) {
+  const verdict = Object.hasOwn(LV_VERDICT_PILL, r.verdict) ? r.verdict : 'unreachable';
+  const pillClass = LV_VERDICT_PILL[verdict];
+  const checked = Array.isArray(r.checked) ? r.checked : [];
+  let head = '';
+  if (r.score && Number.isFinite(r.score.value)) {
+    const value = Math.round(r.score.value);
+    // the colour and the word say the same, as on the WordPress tab (USER 2026-11-22)
+    const grade = value >= 80 ? 'good' : value >= 50 ? 'medium' : 'bad';
+    const scoreClass = { good: 'ok', medium: 'warn', bad: 'bad' }[grade];
+    head = `<div><div class="timing">${t('wp.score')}</div><div class="wp-score ${scoreClass}">${value}<small>/100</small></div>
+      <span class="pill ${scoreClass}">${t('wp.grade.' + grade)}</span></div>`;
+  }
+  const gaps = r.score && Array.isArray(r.score.not_checked) ? r.score.not_checked : [];
+  let version = '—';
+  if (r.laravel) {
+    const fw = r.framework;
+    if (!fw) version = t('lv.version_hidden');
+    else {
+      const s = fw.support || {};
+      const support = s.status === 'ended' ? t('lv.support_ended') + (s.eol ? ' ' + s.eol : '')
+        : s.status === 'supported' && s.eol ? t('lv.support_until') + ' ' + s.eol : '';
+      version = `Laravel ${fw.version}${support ? ` <span class="timing">(${support})</span>` : ''}`;
+    }
+  }
+  const cert = r.certificate ? `${r.certificate.not_after} (${r.certificate.days_left} ${t('wp.days')})` : '—';
+  let html = `<div class="card"><div class="wp-head">${head}<div>
+      <h2><span class="pill ${pillClass}">${t('lv.verdict.' + verdict)}</span></h2>
+      ${gaps.length ? `<div class="timing">${t('wp.score_partial')}: ${gaps.map(g => t('lv.item.' + g)).join(', ')}</div>` : ''}
+      ${r.error ? `<p class="timing">${r.error}</p>` : ''}
+      <div class="wp-facts"><div><span>${t('lv.address')}</span>${r.url || ''}</div>
+        <div><span>Laravel</span>${version}</div><div><span>${t('lv.item.certificate')}</span>${cert}</div></div>
+      ${r.detected_by ? `<div class="timing">${t('lv.detected_by')}: ${r.detected_by}</div>` : ''}
+    </div></div></div>`;
+  const findings = (r.findings || []).filter(f => f.severity !== 'ok');
+  if (findings.length) {
+    html += `<div class="card"><h2>${t('wp.findings')}: ${findings.length}</h2>` + findings.map(f => {
+      const pillClass = WP_SEVERITY_PILL[f.severity] || '';
+      return `<div class="wp-finding"><span class="pill ${pillClass}">${t('wp.sev.' + f.severity)}</span> <b>${f.title}</b>
+        ${f.detail ? `<div class="timing">${f.detail}</div>` : ''}
+        ${f.recommendation ? `<div>${t('wp.fix')}: ${f.recommendation}</div>` : ''}
+        ${f.link ? `<div><a href="${f.link}" target="_blank" rel="noopener noreferrer">${t('lv.vuln_record')}</a></div>` : ''}</div>`;
+    }).join('') + '</div>';
+  }
+  for (const [status, title] of [['not_checked', t('wp.not_checked')], ['ok', t('wp.fine')]]) {
+    const items = checked.filter(c => c.status === status);
+    if (!items.length) continue;
+    const pillClass = WP_STATUS_PILL[status];
+    html += `<div class="card"><h2>${title}: ${items.length}</h2><div class="wp-checks">` + items.map(c =>
+      `<div><span class="pill ${pillClass}">${t('wp.status.' + status)}</span> ${t('lv.item.' + c.item)}
+        <div class="timing">${c.detail || ''}</div></div>`).join('') + '</div></div>';
+  }
+  if (r.packages) {
+    const p = r.packages;
+    const vulnerable = Array.isArray(p.vulnerable) ? p.vulnerable : [];
+    const rows = vulnerable.map(v => `<tr><td>${v.name}</td><td>${v.version}</td><td>${v.vulns}</td></tr>`).join('');
+    html += `<div class="card"><h2>${t('lv.packages')}: ${p.count}</h2>
+      ${rows ? `<table><tr><th>${t('lv.col.package')}</th><th>${t('lv.col.version')}</th><th>${t('lv.col.vulns')}</th></tr>${rows}</table>` : ''}
+      <p class="timing">${t('lv.packages_note')} ${p.source}</p></div>`;
+  }
+  if (r.vuln_data) {
+    const notices = (r.vuln_data.notices || []).map(n =>
+      `<details><summary>${n.notice}</summary><p class="timing">${n.license} ${n.license_url}</p></details>`).join('');
+    html += `<div class="card"><p class="timing">${t('lv.vuln_source')}: ${r.vuln_data.source}</p>${notices}</div>`;
+  }
+  return html;
+}
+
+function renderLaravel(r) {
+  r = escDeep(r);
+  return laravelHtml(r);
+}
+
+async function runLaravelCheck() {
+  const status = document.getElementById('lvStatus');
+  const out = document.getElementById('lvResult');
+  const btn = document.getElementById('lvBtn');
+  let url = document.getElementById('lvUrl').value.trim();
+  if (!url) { status.textContent = t('lv.empty'); return; }
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  btn.disabled = true;
+  out.textContent = '';
+  status.textContent = t('lv.running');
+  const res = await fetch('/api/stream/start', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ checks: [{ id: 'laravel_external', params: { url } }] })
+  });
+  const started = await res.json().catch(() => ({}));
+  if (!res.ok || !started.task_id) {
+    btn.disabled = false;
+    status.textContent = t('run.error') + ': ' + (started.detail || t('run.unknown'));
+    return;
+  }
+  const es = new EventSource('/api/stream/' + started.task_id);
+  es.onmessage = (e) => {
+    const ev = JSON.parse(e.data);
+    if (ev.type === 'all_done' || ev.type === 'stopped' || ev.type === 'error') {
+      es.close();
+      btn.disabled = false;
+      const result = ev.report && ev.report.results && ev.report.results.laravel_external;
+      if (result) {
+        status.textContent = '';
+        out.innerHTML = renderLaravel(result);
       } else {
         status.textContent = t('run.error') + ': ' + (ev.message || t('run.unknown'));
       }
