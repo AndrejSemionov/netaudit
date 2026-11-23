@@ -504,3 +504,38 @@ def test_fetch_keeps_each_set_cookie_header(monkeypatch):
     monkeypatch.setattr(laravel, '_TRANSPORT', httpx.MockTransport(handler))
     page = laravel._fetch(BASE)
     assert page.cookies == [XSRF, SESSION]
+
+
+# --- self-review: the probed root, the session cookie picked, Ignition's answer ---------------------------
+
+def test_a_redirect_inside_the_app_does_not_move_the_probed_root(monkeypatch):
+    # "/" -> "/en/" is routing inside the app: the project's files stay at the given path
+    requested = _site(monkeypatch, {BASE: (302, {'Location': '/en/'}, ''),
+                                    f'{BASE}en/': (200, HOME_HEADERS, HOME, [XSRF, SESSION])})
+    result = laravel.check_laravel_external(BASE)
+    assert result['url'] == BASE
+    assert (f'{BASE}.env', True) in requested
+    assert (f'{BASE}en/.env', True) not in requested
+
+
+def test_the_host_and_scheme_still_follow_the_sites_redirect(monkeypatch):
+    requested = _site(monkeypatch, {'http://app.test/': (301, {'Location': 'https://www.app.test/'}, ''),
+                                    'https://www.app.test/': (200, HOME_HEADERS, HOME, [XSRF, SESSION])})
+    result = laravel.check_laravel_external('http://app.test/')
+    assert result['url'] == 'https://www.app.test/'
+    assert ('https://www.app.test/.env', True) in requested
+
+
+def test_the_session_cookie_is_picked_by_its_name_first(monkeypatch):
+    _site(monkeypatch, {}, cookies=[XSRF, 'shop_cart=eyJpdiI6IlhZWiJ9; path=/', SESSION])
+    result = laravel.check_laravel_external(BASE)
+    assert _checked(result)['session_cookie'] == 'ok'
+    assert 'app-session' in _detail(result, 'session_cookie')
+
+
+@pytest.mark.parametrize('value', ['true', 'false'])
+def test_ignition_detail_says_what_it_answered(monkeypatch, value):
+    _site(monkeypatch, {f'{BASE}_ignition/health-check': (200, {}, f'{{"can_execute_commands":{value}}}')})
+    f = _by_id(laravel.check_laravel_external(BASE), 'LV-IGN-001')
+    assert f['severity'] == 'critical'
+    assert f'can_execute_commands: {value}' in f['detail']
