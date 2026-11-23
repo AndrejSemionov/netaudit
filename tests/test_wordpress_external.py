@@ -242,10 +242,10 @@ def test_visible_plugins_with_versions_and_the_latest(monkeypatch):
     plugins = {p['slug']: p for p in result['plugins']}
     assert sorted(plugins) == ['contact-form-7', 'elementor', 'premium-thing']   # another host's plugin is not this site's
     assert plugins['contact-form-7'] == {'slug': 'contact-form-7', 'version': '6.2.5', 'version_source': 'readme.txt',
-                                         'latest': '6.2.5', 'status': 'current'}
+                                         'latest': '6.2.5', 'status': 'current', 'vulns': None}   # no Wordfence key
     assert plugins['elementor']['status'] == 'outdated'
     assert plugins['premium-thing'] == {'slug': 'premium-thing', 'version': None, 'version_source': None,
-                                        'latest': None, 'status': 'unknown'}
+                                        'latest': None, 'status': 'unknown', 'vulns': None}
     outdated = _by_id(result, 'WP-PLG-001:elementor')
     assert outdated['severity'] == 'medium'
     assert outdated['confidence'] == 'medium'    # the version comes from readme.txt
