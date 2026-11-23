@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
+from urllib.parse import urlparse
 
 import httpx
 
@@ -204,7 +205,8 @@ def _check_session_cookie(home: Page, pages: dict, https: bool, findings: list, 
     cookies = [_cookie(raw) for raw in home.cookies]
     if not any(_is_session(c) for c in cookies) and webprobe.answered(login):
         cookies = [_cookie(raw) for raw in login.cookies]
-    session = next((c for c in cookies if _is_session(c)), None)
+    named = (c for c in cookies if c['name'].lower().endswith(('-session', '_session')))
+    session = next(named, None) or next((c for c in cookies if _is_session(c)), None)
     if session is None:
         checked.append({'item': 'session_cookie', 'status': 'not_checked',
                         'detail': 'the pages checked set no session cookie'})
@@ -251,9 +253,11 @@ def _report_exposures(home: Page, pages: dict, seen: dict, findings: list, check
                                                 'then change APP_KEY, the database password and every other '
                                                 'secret in it: anyone could have read them.'))
     if seen['ignition']:
+        runs = json.loads(pages[IGNITION].text).get('can_execute_commands')
         findings.append(_finding('critical', 'Ignition is open: debug mode with runnable solutions',
-                                 f'{IGNITION} answers: APP_DEBUG is on and the error page can run code '
-                                 'on the server (old versions: CVE-2021-3129)', id='LV-IGN-001',
+                                 f'{IGNITION} answers (can_execute_commands: {json.dumps(runs)}): APP_DEBUG '
+                                 'is on and its solutions can be run from the browser (old versions: '
+                                 'CVE-2021-3129)', id='LV-IGN-001',
                                  recommendation='Set APP_DEBUG=false and APP_ENV=production, and keep '
                                                 'IGNITION_ENABLE_RUNNABLE_SOLUTIONS off.'))
     if seen['debugbar']:
@@ -400,7 +404,11 @@ def check_laravel_external(url='https://example.com') -> dict:
         return {'url': base, 'verdict': 'unreachable', 'error': f'could not open {base}: {e}'}
     if not 200 <= home.status < 300:
         return {'url': base, 'verdict': 'unreachable', 'error': f'{base} answered HTTP {home.status}'}
-    base = webprobe.base_url(home.url) or base   # follow the site's own redirect (http -> https, www)
+    # the scheme and host follow the site's redirect (http -> https, www); the
+    # path stays as given: "/" -> "/en/" is routing inside the app, the
+    # project's files are where the user pointed
+    final = urlparse(home.url)
+    base = f'{final.scheme}://{final.netloc}{urlparse(base).path}'
 
     pages = {path: _try(base + path) for path in PROBES}
     seen = _exposures(home, pages)
