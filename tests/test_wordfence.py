@@ -343,7 +343,8 @@ def test_a_much_smaller_feed_never_replaces_a_good_index(downloads):
 
 
 def test_a_first_empty_feed_is_an_error_not_a_clean_index(downloads):
-    downloads.feed = '{"x": {"id": "x", "title": "t"}}'              # no software at all
+    # a record without software is now refused as unexpected (pass 2); an empty feed is this case
+    downloads.feed = '{}'
     result = wordfence.vulnerabilities([('plugin', 'learnpress', '4.2.6')], KEY)
     assert result['status'] == 'error' and 'no vulnerability records' in result['error']
 

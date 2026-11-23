@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import codecs
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -62,9 +63,10 @@ _RECORD_LINK = re.compile(r'https?://www\.wordfence\.com/threat-intel/vulnerabil
 class FeedError(Exception):
     """The feed could not be had or read; the message names the reason, never the key."""
 
-    def __init__(self, message: str, *, rate_limited: bool = False):
+    def __init__(self, message: str, *, rate_limited: bool = False, auth_failed: bool = False):
         super().__init__(message)
         self.rate_limited = rate_limited
+        self.auth_failed = auth_failed
 
 
 # --- download --------------------------------------------------------------------
@@ -77,7 +79,8 @@ def _download(key: str) -> Iterator[str]:
                            headers={'User-Agent': wordpress_org.USER_AGENT}) as client,
               client.stream('GET', FEED_URL, headers={'Authorization': f'Bearer {key}'}) as resp):
             if resp.status_code in (401, 403):
-                raise FeedError(f'the Wordfence key was rejected (HTTP {resp.status_code}): check it in Settings')
+                raise FeedError(f'the Wordfence key was rejected (HTTP {resp.status_code}): check it in Settings',
+                                auth_failed=True)
             if resp.status_code == 429:
                 raise FeedError('Wordfence rate limit (HTTP 429): try again later', rate_limited=True)
             if resp.status_code != 200:
@@ -226,7 +229,8 @@ def index_path() -> Path:
 
 def _record_link(record: dict) -> str | None:
     """The record's own page on wordfence.com (http -> https); none is made up."""
-    for ref in record.get('references') or []:
+    refs = record.get('references')
+    for ref in refs if isinstance(refs, list) else []:
         if isinstance(ref, str) and _RECORD_LINK.fullmatch(ref):
             return 'https://' + ref.split('://', 1)[1]
     return None
@@ -238,25 +242,53 @@ def _ranges(software: dict) -> list | None:
     affected = software.get('affected_versions')
     if not isinstance(affected, dict) or not affected:
         return None
+    if not all(isinstance(r, dict) for r in affected.values()):
+        return None   # one broken range makes the whole entry unknown, it is not dropped (review #61 pass 2)
     return [[r.get('from_version'), r.get('from_inclusive'), r.get('to_version'), r.get('to_inclusive')]
-            for r in affected.values() if isinstance(r, dict)] or None
+            for r in affected.values()]
 
 
 def _entry(uid: str, record: dict, software: dict) -> dict:
+    """What the index keeps of one component of a record. Fields of an odd
+    shape are left out, never a crash (review #61 pass 2)."""
     cvss = record.get('cvss') if isinstance(record.get('cvss'), dict) else {}
-    return {'id': uid, 'title': str(record.get('title') or '')[:300], 'cve': record.get('cve') or None,
-            'score': cvss.get('score'), 'rating': cvss.get('rating'), 'ranges': _ranges(software),
-            'patched_versions': [str(v) for v in software.get('patched_versions') or []][:10],
+    score = cvss.get('score')
+    patched = software.get('patched_versions')
+    return {'id': uid, 'title': str(record.get('title') or '')[:300],
+            'cve': record['cve'] if isinstance(record.get('cve'), str) and record['cve'] else None,
+            'score': score if isinstance(score, (int, float)) and not isinstance(score, bool) else None,
+            'rating': cvss['rating'] if isinstance(cvss.get('rating'), str) else None,
+            'ranges': _ranges(software),
+            'patched_versions': [str(v) for v in patched][:10] if isinstance(patched, list) else [],
             'remediation': str(software.get('remediation') or '')[:300], 'link': _record_link(record)}
 
 
-def _index_key(software: dict) -> str | None:
-    slug = str(software.get('slug') or '').strip().lower()
-    if software.get('type') == 'core':
-        return 'core'
-    if software.get('type') in ('plugin', 'theme') and slug:
-        return f'{software["type"]}:{slug}'
-    return None
+def _unexpected(uid: str, what: str) -> FeedError:
+    safe = re.sub(r'[^A-Za-z0-9-]', '', uid)[:40]
+    return FeedError(f'the Wordfence feed has an unexpected record ({safe}: {what}): the previous data is kept')
+
+
+def _components(uid: str, record: dict) -> list[tuple[str, dict]]:
+    """(index key, software) of each component of the record we judge: the
+    core, a plugin, a theme; another type is not ours and is skipped. A
+    component that cannot be told (software not a list of objects, no type,
+    a plugin or theme without a slug) refuses the whole feed: a record that
+    is dropped could be the one that matches (review #61 pass 2)."""
+    software = record.get('software')
+    if not isinstance(software, list) or not software:
+        raise _unexpected(uid, 'no software list')
+    out = []
+    for item in software:
+        if not isinstance(item, dict) or not isinstance(item.get('type'), str):
+            raise _unexpected(uid, 'a software entry without a type')
+        if item['type'] == 'core':
+            out.append(('core', item))
+        elif item['type'] in ('plugin', 'theme'):
+            slug = item.get('slug')
+            if not isinstance(slug, str) or not slug.strip():
+                raise _unexpected(uid, f'a {item["type"]} without a slug')
+            out.append((f'{item["type"]}:{slug.strip().lower()}', item))
+    return out
 
 
 def _records_in_index() -> int | None:
@@ -289,20 +321,17 @@ def refresh(key: str, now: float | None = None) -> dict:
             notices: dict[str, dict] = {}
             records = 0
             for uid, record in iter_records(_download(key)):
-                if record.get('informational'):
+                if record.get('informational') is True:
                     continue
-                indexed = False
-                for software in record.get('software') or []:
-                    index_key = _index_key(software) if isinstance(software, dict) else None
-                    if index_key is None:
-                        continue
+                components = _components(uid, record)
+                for index_key, software in components:
                     conn.execute('INSERT INTO vulns VALUES (?, ?)',
                                  (index_key, json.dumps(_entry(uid, record, software))))
-                    indexed = True
-                if not indexed:
+                if not components:
                     continue
                 records += 1
-                for name, claim in (record.get('copyrights') or {}).items():
+                claims = record.get('copyrights')
+                for name, claim in (claims.items() if isinstance(claims, dict) else []):
                     if isinstance(claim, dict) and claim.get('notice') and name not in notices:
                         notices[name] = {'name': name, 'notice': str(claim['notice']),
                                          'license': str(claim.get('license') or ''),
@@ -384,17 +413,29 @@ def _last_failure() -> dict | None:
         return None
 
 
-def _record_failure(error: FeedError, now: float) -> None:
+def _key_id(key: str) -> str:
+    """Which key failed, without keeping it: a short hash."""
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+
+def _record_failure(error: FeedError, now: float, key: str) -> None:
+    """A rejected key pauses only itself - a new key from Settings is tried at
+    once; a rate limit or any other failure pauses every key (review #61 pass 2)."""
     wait = RETRY_429_SEC if error.rate_limited else RETRY_SEC
+    data = {'error': str(error), 'retry_at': now + wait}
+    if error.auth_failed:
+        data['key_id'] = _key_id(key)
     fd = os.open(_failure_path(), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, 'w') as f:
-        json.dump({'error': str(error), 'retry_at': now + wait}, f)
+        json.dump(data, f)
 
 
-def _pending_failure(now: float) -> str | None:
-    """The last failure's reason while its pause lasts, else None."""
+def _pending_failure(now: float, key: str) -> str | None:
+    """The last failure's reason while its pause lasts for this key, else None."""
     failure = _last_failure()
     if failure is None or now >= float(failure['retry_at']):
+        return None
+    if 'key_id' in failure and failure['key_id'] != _key_id(key):
         return None
     at = datetime.fromtimestamp(float(failure['retry_at']), UTC).strftime('%Y-%m-%d %H:%M UTC')
     return f'{failure["error"]} (next try after {at})'
@@ -406,7 +447,7 @@ def _ensure_fresh(key: str, now: float) -> str | None:
     fetched = _fetched_at()
     if fetched is not None and now - fetched < MAX_AGE_SEC:
         return None
-    pending = _pending_failure(now)
+    pending = _pending_failure(now, key)
     if pending:
         return pending
     storage.DB_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -415,13 +456,13 @@ def _ensure_fresh(key: str, now: float) -> str | None:
         fetched = _fetched_at()
         if fetched is not None and now - fetched < MAX_AGE_SEC:
             return None
-        pending = _pending_failure(now)
+        pending = _pending_failure(now, key)
         if pending:
             return pending
         try:
             refresh(key, now=now)
         except FeedError as e:
-            _record_failure(e, now)
+            _record_failure(e, now, key)
             return str(e)
         with contextlib.suppress(FileNotFoundError):
             _failure_path().unlink()

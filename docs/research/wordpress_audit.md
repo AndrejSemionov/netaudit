@@ -277,3 +277,14 @@ and `1.*` are unknown). Nothing with a known version is "not checked"; a
 plugin with ranges that could not be compared shows `?` (or `2 + ?`), not
 0. The record's link is the feed's own (`http` made `https`), never made
 up, and is a hyperlink in the tab.
+
+**Review #61 pass 2 (GPT/Codex), folded in.** A record whose component
+cannot be told — `software` missing, not a list of objects, an entry
+without a type, a plugin or theme without a slug — refuses the whole new
+feed: a dropped record could be the one that matches. A known component
+with broken ranges (any range that is not an object) is "unknown". Other
+fields of an odd shape are left out, never a crash; a software type other
+than core, plugin or theme is skipped. A rejected key (401/403) pauses only
+itself (a short hash of it is kept, never the key), so a new key from
+Settings is tried at once; a rate limit or any other failure pauses every
+key.
