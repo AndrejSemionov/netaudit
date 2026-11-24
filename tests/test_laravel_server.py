@@ -1,15 +1,15 @@
 """
 laravel_server: every Laravel project on a server, over SSH, reading files
-only (docs/research/laravel_audit.md §5, contract L4).
+only (docs/research/laravel_audit.md §5, contract L4; review #63 pass 1).
 
 Three layers are tested apart:
-- the two programs that run on the server and must print nothing but the
-  allowed lines (the grep of APP_DEBUG/APP_ENV, the awk of the cached
-  config) - run here with the real grep and awk on sample files that hold
-  secrets;
-- collect(): the commands sent over SSH, through a fake that reads the
-  marker-wrapped command, runs it against an in-memory file tree and
-  answers like the real tools;
+- the two awk programs that run on the server and print only normalized
+  tokens of APP_DEBUG / APP_ENV (from .env, from the cached config) - run
+  here with the real awk on files that hold secrets;
+- collect(): the commands sent over SSH, through a fake server with owners,
+  groups and modes that reads the marker-wrapped command, runs it as the
+  account it would run as (sudo, sudo -u, runuser) and answers like the real
+  tools (its awk is the real one);
 - judge(): the verdicts, from collected data built by hand.
 The versions' data is faked at laravel_data.support / vulnerabilities
 (tested in test_laravel_data.py).
@@ -21,7 +21,7 @@ import json
 import re
 import shlex
 import shutil
-import subprocess  # nosec B404 - runs the real grep/awk on local sample files
+import subprocess  # nosec B404 - runs the real awk on local sample text
 
 import pytest
 
@@ -31,8 +31,11 @@ from netaudit_pkg.checks import laravel_server
 from netaudit_pkg.findings import subject_id
 from netaudit_pkg.registry import registry
 
+pytestmark = pytest.mark.skipif(not shutil.which('awk'), reason='the server-side programs need awk')
+
 APP = '/var/www/app'
 APP_KEY = 'base64:c2VjcmV0LWtleS1uZXZlci1zaG93bg=='
+SHADOW = 'root:$6$saltsalt$hashhashhash:19000:0:99999:7:::'
 SUPPORTED = {'status': 'supported', 'cycle': '12', 'eol': '2027-02-24', 'latest': '12.73.0', 'error': None}
 ENDED = {'status': 'ended', 'cycle': '10', 'eol': '2025-02-04', 'latest': '10.50.4', 'error': None}
 GHSA = {'id': 'GHSA-78fx-h6xr-vch4', 'title': 'Laravel has a File Validation Bypass', 'severity': 'medium',
@@ -44,8 +47,13 @@ INSTALLED_12 = json.dumps({'packages': [{'name': 'laravel/framework', 'version':
 INSTALLED_10 = json.dumps({'packages': [{'name': 'laravel/framework', 'version': 'v10.0.0'}]})
 
 
+def _awk(program: str, text: str) -> str:
+    return subprocess.run(['awk', program], input=text, capture_output=True, text=True,  # nosec B603 B607
+                          check=True).stdout
+
+
 # =============================================================================
-# the programs that run on the server
+# the programs that run on the server: normalized tokens only
 # =============================================================================
 
 ENV_SAMPLE = f"""APP_NAME=Shop
@@ -57,6 +65,7 @@ APP_ENVIRONMENT=secret-two
 #APP_DEBUG=false
   export APP_ENV="production"
 DB_PASSWORD=hunter2-secret
+APP_ENV=hunter2 has spaces
 """
 
 # what `php artisan config:cache` writes: var_export of every setting
@@ -97,75 +106,66 @@ CONFIG_SAMPLE = f"""<?php return array (
 """
 
 
-@pytest.mark.skipif(not shutil.which('grep'), reason='needs grep')
-def test_the_env_grep_prints_only_the_two_keys(tmp_path):
-    sample = tmp_path / '.env'
-    sample.write_text(ENV_SAMPLE)
-    out = subprocess.run(['grep', '-E', laravel_server.ENV_KEYS_PATTERN, str(sample)],  # nosec B603 B607
-                         capture_output=True, text=True, check=False).stdout
-    assert out.splitlines() == ['APP_ENV=local', 'APP_DEBUG=true', '  export APP_ENV="production"']
-    for secret in (APP_KEY, 'hunter2', 'secret-one', 'secret-two'):
+def test_the_env_program_prints_only_normalized_tokens():
+    out = _awk(laravel_server.ENV_AWK, ENV_SAMPLE)
+    assert out.splitlines() == ['APP_ENV word:local', 'APP_DEBUG true', 'APP_ENV word:production', 'APP_ENV other']
+    for secret in (APP_KEY, 'hunter2', 'secret-one', 'secret-two', '='):
         assert secret not in out
 
 
-@pytest.mark.skipif(not shutil.which('awk'), reason='needs awk')
-def test_the_config_awk_prints_only_app_env_and_debug(tmp_path):
-    sample = tmp_path / 'config.php'
-    sample.write_text(CONFIG_SAMPLE)
-    out = subprocess.run(['awk', laravel_server.CONFIG_AWK, str(sample)],  # nosec B603 B607
-                         capture_output=True, text=True, check=False).stdout
-    assert out.splitlines() == ["    'env' => 'production',", "    'debug' => false,"]
-    for secret in (APP_KEY, 'hunter2', 'shop.test'):
+def test_the_config_program_prints_only_app_env_and_debug_tokens():
+    out = _awk(laravel_server.CONFIG_AWK, CONFIG_SAMPLE)
+    assert out.splitlines() == ['APP_ENV word:production', 'APP_DEBUG false']
+    for secret in (APP_KEY, 'hunter2', 'shop.test', "'"):
         assert secret not in out
 
 
-@pytest.mark.skipif(not shutil.which('awk'), reason='needs awk')
-def test_the_config_awk_prints_nothing_without_an_app_block(tmp_path):
-    sample = tmp_path / 'config.php'
-    sample.write_text("<?php return array (\n  'database' =>\n  array (\n    'debug' => true,\n  ),\n);\n")
-    out = subprocess.run(['awk', laravel_server.CONFIG_AWK, str(sample)],  # nosec B603 B607
-                         capture_output=True, text=True, check=False).stdout
-    assert out == ''
+def test_the_config_program_prints_nothing_without_an_app_block():
+    assert _awk(laravel_server.CONFIG_AWK, "<?php return array (\n  'database' => \n  array (\n"
+                                          "    'debug' => true,\n  ),\n);\n") == ''
 
-
-# =============================================================================
-# parsing what came back
-# =============================================================================
 
 @pytest.mark.parametrize(('line', 'on'), [
     ('APP_DEBUG=true', True), ('APP_DEBUG="true"', True), ("APP_DEBUG='(true)'", True), ('APP_DEBUG=TRUE', True),
-    ('APP_DEBUG=1', True), ('APP_DEBUG=yes', True), ('export APP_DEBUG=true', True),
+    ('APP_DEBUG=1', True), ('APP_DEBUG=yes', True), ('export APP_DEBUG=true', True), ('  APP_DEBUG = true', True),
     ('APP_DEBUG=false', False), ('APP_DEBUG=(false)', False), ('APP_DEBUG=0', False), ('APP_DEBUG=', False),
     ('APP_DEBUG=null', False), ('APP_DEBUG=empty', False), ('APP_DEBUG=false # was true', False),
-    ('  APP_DEBUG = true', True),
+    ('APP_DEBUG="0"', False),
 ])
 def test_app_debug_follows_laravels_env_and_phps_bool(line, on):
-    values = laravel_server.parse_env_lines(line + '\n')
+    values = laravel_server.parse_tokens(_awk(laravel_server.ENV_AWK, line + '\n'))
     assert laravel_server.debug_on(values['APP_DEBUG']) is on
 
 
-def test_a_quoted_value_keeps_its_hash():
-    assert laravel_server.parse_env_lines('APP_ENV="local#x"\n')['APP_ENV'] == 'local#x'
+@pytest.mark.parametrize(('line', 'env'), [('APP_ENV=local', 'local'), ('APP_ENV="local#x"', 'OTHER'),
+                                           ("APP_ENV='staging'", 'staging'), ('APP_ENV=prod # live', 'prod'),
+                                           ('APP_ENV=' + 'x' * 41, 'OTHER')])
+def test_app_env_is_a_plain_word_or_other(line, env):
+    expected = laravel_server.OTHER if env == 'OTHER' else env
+    assert laravel_server.parse_tokens(_awk(laravel_server.ENV_AWK, line + '\n'))['APP_ENV'] == expected
 
 
 def test_a_key_set_twice_with_two_values_is_ambiguous_and_once_more_with_one_is_not():
-    values = laravel_server.parse_env_lines('APP_DEBUG=true\nAPP_DEBUG=false\nAPP_ENV=local\nAPP_ENV="local"\n')
+    values = laravel_server.parse_tokens(_awk(laravel_server.ENV_AWK,
+                                              'APP_DEBUG=true\nAPP_DEBUG=false\nAPP_ENV=local\nAPP_ENV="local"\n'))
     assert values['APP_DEBUG'] is laravel_server.AMBIGUOUS
     assert values['APP_ENV'] == 'local'
 
 
-def test_a_key_not_set_is_missing():
-    assert laravel_server.parse_env_lines('APP_ENV=production\n')['APP_DEBUG'] is laravel_server.MISSING
+def test_a_key_not_set_is_missing_and_an_unknown_token_is_ignored():
+    values = laravel_server.parse_tokens('APP_ENV word:production\nAPP_DEBUG; rm -rf\nAPP_KEY word:x\n')
+    assert values == {'APP_ENV': 'production', 'APP_DEBUG': laravel_server.MISSING}
 
 
-@pytest.mark.parametrize(('text', 'expected'), [
-    ("    'env' => 'production',\n    'debug' => false,\n", {'APP_ENV': 'production', 'APP_DEBUG': False}),
-    ("    'env' => 'local',\n    'debug' => true,\n", {'APP_ENV': 'local', 'APP_DEBUG': True}),
-    ("    'env' => 'it\\'s',\n    'debug' => NULL,\n", {'APP_ENV': "it's", 'APP_DEBUG': None}),
-    ('', {'APP_ENV': laravel_server.MISSING, 'APP_DEBUG': laravel_server.MISSING}),
+@pytest.mark.parametrize(('debug', 'env', 'expected'), [
+    ('false', "'production'", {'APP_ENV': 'production', 'APP_DEBUG': False}),
+    ('true', "'local'", {'APP_ENV': 'local', 'APP_DEBUG': True}),
+    ('NULL', "'it\\'s'", {'APP_ENV': 'OTHER', 'APP_DEBUG': None}),
 ])
-def test_cached_config_values(text, expected):
-    assert laravel_server.parse_config_lines(text) == expected
+def test_cached_config_values(debug, env, expected):
+    expected = {k: laravel_server.OTHER if v == 'OTHER' else v for k, v in expected.items()}
+    text = f"<?php return array (\n  'app' => \n  array (\n    'env' => {env},\n    'debug' => {debug},\n  ),\n);\n"
+    assert laravel_server.parse_tokens(_awk(laravel_server.CONFIG_AWK, text)) == expected
 
 
 # =============================================================================
@@ -176,30 +176,38 @@ def _read(text='', status='ok', truncated=False, reason=None):
     return {'status': status, 'text': text, 'truncated': truncated, 'reason': reason}
 
 
-def _project(*, composer=COMPOSER, installed=INSTALLED_12, lock=None, env=None, env_lines=None,
-             config_lines=None, storage=0o775, cache=0o775, config_php=False, dirs_status='ok'):
-    """One project as collect() returns it. env: [(name, mode, owner, group)]."""
+def _project(*, composer=COMPOSER, installed=INSTALLED_12, lock=None, env=None, env_lines=None, env_status='ok',
+             config_lines=None, storage=0o775, cache=0o775, config_php=False, dirs_status='ok', dir_errors=None,
+             owner='deploy', storage_type='d'):
+    """One project as collect() returns it. env: [(name, mode, owner, group)]; env_lines and
+    config_lines are file text, turned into the server's tokens by the real awk programs."""
     env = [('.env', 0o640, 'deploy', 'www-data')] if env is None else env
     entries = {}
     if storage is not None:
-        entries['storage'] = {'mode': storage, 'type': 'd'}
+        entries['storage'] = {'mode': storage, 'type': storage_type}
     if cache is not None:
         entries['bootstrap/cache'] = {'mode': cache, 'type': 'd'}
     if config_php:
         entries['bootstrap/cache/config.php'] = {'mode': 0o644, 'type': 'f'}
+
+    def tokens(value, program):
+        if isinstance(value, dict) or value is None:
+            return value
+        return _read(_awk(program, value))
+
     return {
+        'owner': owner,
         'composer_json': composer if isinstance(composer, dict) else _read(composer),
         'installed': installed if isinstance(installed, dict) else (_read(installed) if installed is not None
                                                                      else _read(status='missing')),
         'lock': lock if isinstance(lock, dict) else (_read(lock) if lock is not None else _read(status='missing')),
-        'env_files': {'status': 'ok', 'reason': None,
+        'env_files': {'status': env_status, 'reason': None if env_status == 'ok' else 'Permission denied',
                       'files': [{'name': n, 'mode': m, 'owner': o, 'group': g, 'type': 'f'} for n, m, o, g in env]},
         'dirs': {'status': dirs_status, 'reason': None if dirs_status == 'ok' else 'Permission denied',
-                 'entries': entries},
-        'env_lines': env_lines if isinstance(env_lines, dict) else _read(
-            'APP_ENV=production\nAPP_DEBUG=false\n' if env_lines is None else env_lines),
-        'config_lines': config_lines if isinstance(config_lines, dict) or config_lines is None
-        else _read(config_lines),
+                 'entries': entries, 'errors': dir_errors or {}},
+        'env_tokens': tokens('APP_ENV=production\nAPP_DEBUG=false\n' if env_lines is None else env_lines,
+                             laravel_server.ENV_AWK),
+        'config_tokens': tokens(config_lines, laravel_server.CONFIG_AWK),
     }
 
 
@@ -208,7 +216,7 @@ def _raw(projects=None, *, dirs=None, links=None, partial=None, failed=None, sud
     return {'sudo': sudo, 'sudo_note': None if sudo else 'sudo needs a password',
             'discovery': {'dirs': list(projects) if dirs is None else dirs, 'links': links or {},
                           'partial': partial, 'failed': failed},
-            'skipped': skipped or {'old_releases': 0, 'over_limit': 0},
+            'skipped': skipped or {'old_releases': 0, 'over_limit': 0, 'candidates_over': 0},
             'projects': projects}
 
 
@@ -244,6 +252,9 @@ def _detail(result, item, project=APP):
     return next(c['detail'] for c in result['checked'] if c['item'] == item and c.get('project') == project)
 
 
+CACHED = "<?php return array (\n  'app' => \n  array (\n    'env' => 'production',\n    'debug' => false,\n  ),\n);\n"
+
+
 def test_registered_as_a_read_only_ssh_check_in_the_laravel_category():
     spec = registry.get('laravel_server')
     assert spec.category == 'laravel'
@@ -255,10 +266,11 @@ def test_without_a_host():
     assert 'error' in laravel_server.check_laravel_server(host='')
 
 
-def test_a_well_kept_project_is_ok(data):
-    result = laravel_server.judge(_raw(), 'srv.test')
+def test_a_well_kept_project_with_a_cached_config_is_ok(data):
+    result = laravel_server.judge(_raw({APP: _project(config_php=True, config_lines=CACHED)}), 'srv.test')
     checked = _checked(result)
-    assert set(checked) == {'env_files', 'app_debug', 'app_env', 'writable_dirs', 'laravel_version', 'vulns'}
+    assert set(checked) == {'env_files', 'app_debug', 'app_env', 'effective_config', 'writable_dirs',
+                            'laravel_version', 'vulns'}
     assert set(checked.values()) == {'ok'}
     assert _checked(result, None) == {'discovery': 'ok'}
     assert result['verdict'] == 'ok'
@@ -267,6 +279,17 @@ def test_a_well_kept_project_is_ok(data):
     assert result['projects'][0]['framework']['version'] == '12.3.0'
     assert data['asked'] == [[{'name': 'laravel/framework', 'version': '12.3.0'},
                               {'name': 'guzzlehttp/guzzle', 'version': '7.9.2'}]]
+
+
+def test_values_from_env_alone_do_not_confirm_the_configuration_in_effect(data):
+    # review #63 pass 1 (P4): a value of the PHP process, or .env.<APP_ENV>, would win over .env
+    result = laravel_server.judge(_raw(), 'srv.test')
+    checked = _checked(result)
+    assert checked['app_debug'] == checked['app_env'] == 'ok'
+    assert 'PHP process' in _detail(result, 'app_debug')
+    assert checked['effective_config'] == 'not_checked'
+    assert 'PHP process' in _detail(result, 'effective_config')
+    assert result['verdict'] == 'incomplete'
 
 
 def test_no_project_found_is_not_laravel(data):
@@ -282,14 +305,15 @@ def test_no_project_found_in_a_partial_search_cannot_tell(data):
     assert 'Permission denied' in result['findings'][0]['detail']
 
 
-def test_a_failed_search_is_an_error(data):
+def test_a_failed_search_is_not_checked(data):
     result = laravel_server.judge(_raw({}, failed='find: unknown predicate -printf'), 'srv.test')
     assert result['verdict'] == 'incomplete'
     assert 'find' in result['findings'][0]['detail']
 
 
 def test_a_partial_search_is_a_gap_next_to_the_projects_found(data):
-    result = laravel_server.judge(_raw(partial='Permission denied in /home/other'), 'srv.test')
+    result = laravel_server.judge(_raw({APP: _project(config_php=True, config_lines=CACHED)},
+                                       partial='Permission denied in /home/other'), 'srv.test')
     assert _checked(result, None) == {'discovery': 'not_checked'}
     assert result['verdict'] == 'incomplete'
 
@@ -310,6 +334,21 @@ def test_an_env_file_readable_by_everyone(data, name, judged):
         assert _checked(result)['env_files'] == 'ok'
 
 
+def test_a_partial_list_of_env_files_is_not_fine(data):
+    # review #63 pass 1 (P3): one file seen and a Permission denied is not "every file is closed"
+    result = laravel_server.judge(_raw({APP: _project(env_status='partial')}), 'srv.test')
+    assert _checked(result)['env_files'] == 'not_checked'
+    assert 'Permission denied' in _detail(result, 'env_files')
+
+
+def test_an_open_env_file_next_to_a_partial_list_keeps_both(data):
+    raw = _raw({APP: _project(env=[('.env', 0o644, 'deploy', 'deploy')], env_status='partial')})
+    result = laravel_server.judge(raw, 'srv.test')
+    assert _checked(result)['env_files'] == 'problem'
+    assert _checked(result)['read_gaps'] == 'not_checked'
+    assert 'Permission denied' in _detail(result, 'read_gaps')
+
+
 def test_no_env_file_and_no_cached_config_cannot_tell_the_values(data):
     result = laravel_server.judge(_raw({APP: _project(env=[], env_lines=_read(status='missing'))}), 'srv.test')
     checked = _checked(result)
@@ -320,30 +359,31 @@ def test_no_env_file_and_no_cached_config_cannot_tell_the_values(data):
 def test_debug_on_in_env(data):
     result = laravel_server.judge(_raw({APP: _project(env_lines='APP_ENV=production\nAPP_DEBUG=true\n')}), 'srv.test')
     f = _by_id(result, subject_id('LV-SRV-002', APP))
-    assert f['severity'] == 'high' and '.env' in f['detail']
+    assert f['severity'] == 'high' and '.env' in f['detail'] and 'PHP process' in f['detail']
     assert _checked(result)['app_debug'] == 'problem'
 
 
 def test_cached_config_wins_over_env(data):
-    # Laravel does not read .env at all when the config is cached
-    raw = _raw({APP: _project(env_lines='APP_ENV=local\nAPP_DEBUG=true\n', config_php=True,
-                              config_lines="    'env' => 'production',\n    'debug' => false,\n")})
+    raw = _raw({APP: _project(env_lines='APP_ENV=local\nAPP_DEBUG=true\n', config_php=True, config_lines=CACHED)})
     result = laravel_server.judge(raw, 'srv.test')
     assert not [i for i in _ids(result) if i.startswith(('LV-SRV-002', 'LV-SRV-003'))]
     assert 'cached config' in _detail(result, 'app_debug')
     assert _checked(result)['app_debug'] == 'ok'
+    assert _checked(result)['effective_config'] == 'ok'
 
 
 def test_debug_on_in_cached_config(data):
-    raw = _raw({APP: _project(config_php=True, config_lines="    'env' => 'production',\n    'debug' => true,\n")})
+    raw = _raw({APP: _project(config_php=True, config_lines=CACHED.replace('false', 'true'))})
     f = _by_id(laravel_server.judge(raw, 'srv.test'), subject_id('LV-SRV-002', APP))
     assert 'cached config' in f['detail']
 
 
-def test_a_cached_config_that_could_not_be_read_is_not_checked(data):
-    raw = _raw({APP: _project(config_php=True, config_lines=_read(status='denied', reason='Permission denied'))})
+@pytest.mark.parametrize('status', ['denied', 'skipped'])
+def test_a_cached_config_that_was_not_read_is_not_checked(data, status):
+    raw = _raw({APP: _project(config_php=True, config_lines=_read(status=status, reason='the reason'))})
     result = laravel_server.judge(raw, 'srv.test')
     assert _checked(result)['app_debug'] == _checked(result)['app_env'] == 'not_checked'
+    assert 'the reason' in _detail(result, 'app_debug')
 
 
 @pytest.mark.parametrize(('env', 'flagged'), [('local', True), ('development', True), ('production', False),
@@ -378,6 +418,7 @@ def test_a_debug_set_twice_is_not_judged(data):
 def test_an_env_value_is_shown_only_when_it_is_a_plain_word(data):
     result = laravel_server.judge(_raw({APP: _project(env_lines='APP_ENV="loc al; $(id)"\n')}), 'srv.test')
     assert '$(id)' not in json.dumps(result)
+    assert 'not shown' in _detail(result, 'app_env')
 
 
 @pytest.mark.parametrize(('storage', 'cache', 'flagged'), [(0o777, 0o775, ['storage']),
@@ -389,6 +430,14 @@ def test_directories_writable_by_everyone(data, storage, cache, flagged):
     ids = [i for i in _ids(result) if i.startswith('LV-SRV-004')]
     assert ids == [subject_id('LV-SRV-004', APP, d) for d in flagged]
     assert _checked(result)['writable_dirs'] == ('problem' if flagged else 'ok')
+
+
+def test_a_storage_that_is_not_a_directory_is_not_checked(data):
+    # review #63 pass 1 (P3): the mode is the target's; a link to a file is not a writable directory
+    result = laravel_server.judge(_raw({APP: _project(storage=0o777, storage_type='f')}), 'srv.test')
+    assert not [i for i in _ids(result) if i.startswith('LV-SRV-004')]
+    assert _checked(result)['writable_dirs'] == 'not_checked'
+    assert 'not a directory' in _detail(result, 'writable_dirs')
 
 
 def test_directories_that_could_not_be_read_are_not_checked(data):
@@ -423,11 +472,11 @@ def test_no_version_file_on_the_server(data):
     assert data['asked'] == []
 
 
-def test_a_version_file_that_could_not_be_read(data):
-    raw = _raw({APP: _project(installed=_read(status='denied', reason='Permission denied'), lock=None)}, sudo=False)
+def test_a_version_file_that_was_not_read(data):
+    raw = _raw({APP: _project(installed=_read(status='skipped', reason='not read as root'), lock=None)})
     result = laravel_server.judge(raw, 'srv.test')
     assert _checked(result)['vulns'] == 'not_checked'
-    assert 'Permission denied' in _detail(result, 'vulns')
+    assert 'not read as root' in _detail(result, 'vulns')
 
 
 def test_a_version_file_too_large_to_read(data):
@@ -444,11 +493,19 @@ def test_artisan_without_laravel_framework_is_not_a_project(data):
     assert result['skipped']['not_laravel'] == 1
 
 
-def test_a_composer_json_that_could_not_be_read_is_a_gap(data):
-    raw = _raw({APP: _project(composer=_read(status='denied', reason='Permission denied'))}, sudo=False)
+@pytest.mark.parametrize(('composer', 'why'), [
+    (_read(status='denied', reason='Permission denied'), 'Permission denied'),
+    (_read('{"require": {"laravel/framework": "^12', truncated=True), 'too large'),
+    (_read('{"require": '), 'not valid JSON'),
+    (_read('["x"]'), 'not a JSON object'),
+])
+def test_a_composer_json_that_could_not_be_read_is_a_gap_not_a_no(data, composer, why):
+    # review #63 pass 1 (P2): a broken or cut manifest is not "no Laravel here"
+    raw = _raw({APP: _project(composer=composer)})
     result = laravel_server.judge(raw, 'srv.test')
     assert result['verdict'] == 'incomplete'
-    assert 'Permission denied' in _detail(result, 'discovery', None)
+    assert result['skipped']['not_laravel'] == 0
+    assert why in _detail(result, 'discovery', None)
 
 
 def test_findings_name_their_project_and_items_carry_it(data):
@@ -461,12 +518,13 @@ def test_findings_name_their_project_and_items_carry_it(data):
     assert result['verdict'] == 'danger'
 
 
-def test_skipped_releases_and_the_limit_are_said(data):
-    raw = _raw(skipped={'old_releases': 3, 'over_limit': 2})
+def test_skipped_releases_and_the_limits_are_said(data):
+    raw = _raw(skipped={'old_releases': 3, 'over_limit': 2, 'candidates_over': 4})
     result = laravel_server.judge(raw, 'srv.test')
     detail = _detail(result, 'discovery', None)
-    assert '3 earlier release' in detail and '2 more' in detail
-    assert _checked(result, None)['discovery'] == 'not_checked'     # projects past the limit were not checked
+    assert '3 earlier release' in detail
+    assert '2 more Laravel project' in detail and '4 more folder' in detail
+    assert _checked(result, None)['discovery'] == 'not_checked'
 
 
 def test_no_secret_reaches_the_result(data):
@@ -475,7 +533,7 @@ def test_no_secret_reaches_the_result(data):
 
 
 # =============================================================================
-# select_projects(): zero-downtime releases and the limit
+# select_projects(): zero-downtime releases and the candidates' limit
 # =============================================================================
 
 def test_only_the_current_release_is_checked():
@@ -483,7 +541,7 @@ def test_only_the_current_release_is_checked():
     links = {'/home/forge/a/current': '/home/forge/a/releases/2'}
     selected, skipped = laravel_server.select_projects(dirs, links)
     assert selected == ['/home/forge/a/releases/2', '/var/www/b']
-    assert skipped == {'old_releases': 1, 'over_limit': 0}
+    assert skipped == {'old_releases': 1, 'candidates_over': 0}
 
 
 def test_a_relative_current_link():
@@ -497,15 +555,15 @@ def test_releases_without_a_current_link_are_all_checked():
     assert laravel_server.select_projects(dirs, {})[0] == dirs
 
 
-def test_at_most_max_projects():
-    dirs = [f'/var/www/p{i:02d}' for i in range(laravel_server.MAX_PROJECTS + 2)]
+def test_at_most_max_candidates():
+    dirs = [f'/var/www/p{i:03d}' for i in range(laravel_server.MAX_CANDIDATES + 2)]
     selected, skipped = laravel_server.select_projects(dirs, {})
-    assert selected == dirs[:laravel_server.MAX_PROJECTS]
-    assert skipped == {'old_releases': 0, 'over_limit': 2}
+    assert selected == dirs[:laravel_server.MAX_CANDIDATES]
+    assert skipped == {'old_releases': 0, 'candidates_over': 2}
 
 
 # =============================================================================
-# collect(): the commands sent over SSH
+# collect(): the commands sent over SSH, run by a fake server with owners and modes
 # =============================================================================
 
 _WRAPPED = re.compile(r"^\{ (?P<cmd>.*); rc=\$\?; printf '\\n%s:%s\\n' '(?P<marker>__NETAUDIT_RC_[0-9a-f]+__)' "
@@ -513,194 +571,313 @@ _WRAPPED = re.compile(r"^\{ (?P<cmd>.*); rc=\$\?; printf '\\n%s:%s\\n' '(?P<mark
 
 
 class FakeServer:
-    """An SSH executor whose commands run against an in-memory tree.
-    files: path -> dict(type 'f'|'d'|'l', mode, owner, group, text, target,
-    root_only: readable only through sudo)."""
+    """An SSH executor whose commands run against an in-memory tree with
+    owners, groups and modes. files: path -> dict(type 'f'|'d'|'l'|'p', mode,
+    owner, group, text, target). A folder not listed is root's, 755."""
 
-    def __init__(self, files, *, sudo='password', user='deploy'):
+    def __init__(self, files, *, user='deploy', sudo='password', groups=None, runas=True):
         self.files = files
-        self.sudo_mode = sudo          # 'password' | 'nopasswd' | 'refused'
         self.user = user
+        self.sudo_mode = sudo          # 'password' | 'nopasswd' | 'refused'
+        self.runas = runas             # whether sudo -u <other user> is allowed
+        self.groups = groups or {'www-data': {'www-data'}}
         self.password = ''
         self.sudo_password = 'pw' if sudo == 'password' else ''
-        self.commands = []             # (argv, through sudo)
+        self.commands = []             # (argv, the account it ran as)
+        self.through_sudo = []         # argv of the commands that went through sudo
 
     # the executor's interface -------------------------------------------------
     def run(self, cmd, timeout=20, stdin_data=None):
         m = _WRAPPED.match(cmd)
         assert m, f'every command is marker-wrapped: {cmd!r}'
         argv = shlex.split(m.group('cmd'))
-        sudo = False
+        account = self.user
         if argv[0] == 'sudo':
-            sudo = True
-            argv = argv[argv.index('--') + 1:]
             if self.sudo_mode == 'refused' or (self.sudo_mode == 'password' and stdin_data != 'pw\n'):
                 return f"\n{m.group('marker')}:1\n", 'sudo: a password is required\n'
-        self.commands.append((argv, sudo))
-        out, err, rc = self._tool(argv, sudo)
+            opts, argv = argv[1:argv.index('--')], argv[argv.index('--') + 1:]
+            account = opts[opts.index('-u') + 1] if '-u' in opts else 'root'
+            self.through_sudo.append(argv)
+            if account != 'root' and not self.runas:
+                return (f"\n{m.group('marker')}:1\n",
+                        f"Sorry, user {self.user} is not allowed to execute '{argv[0]}' as {account} on srv.\n")
+        elif argv[0] == 'runuser':
+            assert self.user == 'root', 'runuser is used only by root'
+            account, argv = argv[2], argv[4:]
+        self.commands.append((argv, account))
+        out, err, rc = self._tool(argv, account)
         return f"{out}\n{m.group('marker')}:{rc}\n", err
 
     def close(self):
         pass
 
+    # the tree ------------------------------------------------------------------
+    def _entry(self, path, follow):
+        seen = 0
+        while True:
+            entry = self.files.get(path)
+            if entry is None and (path == '/' or any(p.startswith(path.rstrip('/') + '/') for p in self.files)):
+                entry = {'type': 'd', 'mode': 0o755, 'owner': 'root', 'group': 'root'}
+            if entry is None or entry['type'] != 'l' or not follow:
+                return path, entry
+            target = entry['target']
+            path = target if target.startswith('/') else path.rsplit('/', 1)[0] + '/' + target
+            seen += 1
+            assert seen < 5
+
+    def _can_read(self, account, entry):
+        if account == 'root':
+            return True
+        mode = entry['mode']
+        if entry.get('owner') == account:
+            return bool(mode & 0o400)
+        if account in self.groups.get(entry.get('group'), set()):
+            return bool(mode & 0o040)
+        return bool(mode & 0o004)
+
+    @staticmethod
+    def _meta(path, entry):
+        return f'{path}\t{entry.get("owner", "root")}\t{entry.get("group", "root")}\t{entry["mode"]:o}\t{entry["type"]}\0'
+
     # the tools ------------------------------------------------------------------
-    def _readable(self, path, sudo):
-        entry = self.files.get(path)
-        return entry is not None and (sudo or self.user == 'root' or not entry.get('root_only'))
+    def _tool(self, argv, account):
+        handler = {'find': self._find, 'head': self._head, 'awk': self._awk}.get(argv[0])
+        assert handler, f'only find, head and awk are run: {argv}'
+        return handler(argv, account)
 
-    def _tool(self, argv, sudo):
-        handler = {'find': self._find, 'head': self._head, 'grep': self._grep, 'awk': self._awk}.get(argv[0])
-        assert handler, f'only find, head, grep and awk are run: {argv}'
-        return handler(argv, sudo)
-
-    def _find(self, argv, sudo):
+    def _find(self, argv, account):
         if 'artisan' in argv:                                   # the search
-            out = ''
+            out, err = '', ''
             for path, e in sorted(self.files.items()):
+                hidden = [p for p, d in self.files.items() if d['type'] == 'd' and path.startswith(p + '/')
+                          and not self._can_read(account, d)]
+                if hidden:
+                    continue
                 if e['type'] == 'f' and path.endswith('/artisan') and '/vendor/' not in path:
                     out += 'A' + path.rsplit('/', 1)[0] + '\0'
                 if e['type'] == 'l' and path.endswith('/current'):
                     out += f'L{path}\0{e["target"]}\0'
-            denied = [p for p, e in self.files.items() if e.get('root_only') and e['type'] == 'd' and not sudo]
-            err = ''.join(f"find: '{p}': Permission denied\n" for p in denied)
+            for p, d in self.files.items():
+                if d['type'] == 'd' and not self._can_read(account, d):
+                    err += f"find: '{p}': Permission denied\n"
             return out, err, 1 if err else 0
         if '.env*' in argv:                                     # the .env files of one project
             root = argv[argv.index('-L') + 1]
             out = ''
-            for path, e in sorted(self.files.items()):
+            for path in sorted(self.files):
                 head, _, name = path.rpartition('/')
-                if head == root and name.startswith('.env') and e['type'] == 'f':
-                    out += f'{name}\t{e["mode"]:o}\t{e["owner"]}\t{e["group"]}\tf\0'
+                if head == root and name.startswith('.env'):
+                    _, e = self._entry(path, True)
+                    if e is not None:
+                        out += f'{name}\t{e["mode"]:o}\t{e.get("owner", "root")}\t{e.get("group", "root")}\t{e["type"]}\0'
             return out, '', 0
-        paths = argv[1:argv.index('-maxdepth')]                 # storage, bootstrap/cache, config.php
+        follow = argv[1] == '-L'                                # metadata of named paths
+        paths = argv[2:argv.index('-maxdepth')]
         out, err = '', ''
         for path in paths:
-            e = self.files.get(path)
+            _, e = self._entry(path, follow)
             if e is None:
                 err += f"find: '{path}': No such file or directory\n"
             else:
-                out += f'{path}\t{e["mode"]:o}\t{e["type"]}\0'
+                out += self._meta(path, e)
         return out, err, 1 if err else 0
 
-    def _head(self, argv, sudo):
+    def _head(self, argv, account):
         assert argv[1] == '-c'
         path = argv[3]
         assert not path.rsplit('/', 1)[1].startswith('.env'), '.env is never read whole'
         assert not path.endswith('config.php'), 'the cached config is never read whole'
-        if path not in self.files:
+        _, e = self._entry(path, True)
+        if e is None:
             return '', f"head: cannot open '{path}' for reading: No such file or directory\n", 1
-        if not self._readable(path, sudo):
+        if not self._can_read(account, e):
             return '', f"head: cannot open '{path}' for reading: Permission denied\n", 1
-        return self.files[path]['text'][:int(argv[2])], '', 0
+        return e['text'][:int(argv[2])], '', 0
 
-    def _grep(self, argv, sudo):
-        assert argv[1:3] == ['-E', laravel_server.ENV_KEYS_PATTERN]
-        path = argv[3]
-        if path not in self.files:
-            return '', f'grep: {path}: No such file or directory\n', 2
-        if not self._readable(path, sudo):
-            return '', f'grep: {path}: Permission denied\n', 2
-        lines = [ln for ln in self.files[path]['text'].splitlines() if re.match(
-            r'^\s*(export\s+)?(APP_DEBUG|APP_ENV)\s*=', ln)]
-        return '\n'.join(lines), '', 0 if lines else 1
-
-    def _awk(self, argv, sudo):
-        assert argv[1] == laravel_server.CONFIG_AWK
+    def _awk(self, argv, account):
+        assert argv[1] in (laravel_server.ENV_AWK, laravel_server.CONFIG_AWK)
         path = argv[2]
-        if not self._readable(path, sudo):
+        _, e = self._entry(path, True)
+        if e is None:
+            return '', f'awk: cannot open "{path}" (No such file or directory)\n', 2
+        if not self._can_read(account, e):
             return '', f'awk: cannot open "{path}" (Permission denied)\n', 2
-        text = self.files[path]['text']
-        return '\n'.join(ln for ln in text.splitlines() if re.match(r"^    '(env|debug)' => ", ln)), '', 0
+        return _awk(argv[1], e['text']).rstrip('\n'), '', 0
 
 
-def _tree(root=APP, *, env_text='APP_ENV=production\nAPP_DEBUG=false\n', env_mode=0o640, root_only_env=True,
-          installed=INSTALLED_12, extra=None):
+def _tree(root=APP, *, owner='deploy', env_text='APP_ENV=production\nAPP_DEBUG=false\n', env_mode=0o640,
+          env_owner=None, installed=INSTALLED_12, cache_mode=0o775, cache_group=None, extra=None):
+    env_owner = env_owner or owner
     files = {
-        f'{root}/artisan': {'type': 'f', 'mode': 0o755, 'text': '#!/usr/bin/env php'},
-        f'{root}/composer.json': {'type': 'f', 'mode': 0o644, 'text': COMPOSER},
-        f'{root}/vendor/composer/installed.json': {'type': 'f', 'mode': 0o644, 'text': installed},
-        f'{root}/.env': {'type': 'f', 'mode': env_mode, 'owner': 'root', 'group': 'www-data', 'text': env_text,
-                         'root_only': root_only_env},
-        f'{root}/storage': {'type': 'd', 'mode': 0o775},
-        f'{root}/bootstrap/cache': {'type': 'd', 'mode': 0o775},
+        root: {'type': 'd', 'mode': 0o755, 'owner': owner, 'group': owner},
+        f'{root}/artisan': {'type': 'f', 'mode': 0o755, 'owner': owner, 'group': owner, 'text': '#!/usr/bin/env php'},
+        f'{root}/composer.json': {'type': 'f', 'mode': 0o644, 'owner': owner, 'group': owner, 'text': COMPOSER},
+        f'{root}/vendor': {'type': 'd', 'mode': 0o755, 'owner': owner, 'group': owner},
+        f'{root}/vendor/composer': {'type': 'd', 'mode': 0o755, 'owner': owner, 'group': owner},
+        f'{root}/vendor/composer/installed.json': {'type': 'f', 'mode': 0o644, 'owner': owner, 'group': owner,
+                                                   'text': installed},
+        f'{root}/.env': {'type': 'f', 'mode': env_mode, 'owner': env_owner, 'group': 'www-data', 'text': env_text},
+        f'{root}/storage': {'type': 'd', 'mode': 0o775, 'owner': owner, 'group': 'www-data'},
+        f'{root}/bootstrap': {'type': 'd', 'mode': 0o755, 'owner': owner, 'group': owner},
+        f'{root}/bootstrap/cache': {'type': 'd', 'mode': cache_mode, 'owner': owner,
+                                    'group': cache_group or 'www-data'},
     }
     files.update(extra or {})
     return files
 
 
-def test_collect_with_sudo_reads_everything_it_needs(data):
-    server = FakeServer(_tree())
+def _ran_as(server, tool):
+    return {account for argv, account in server.commands if argv[0] == tool}
+
+
+def test_contents_are_read_as_the_project_owner(data):
+    # review #63 pass 1 (P1): no more rights than the account that owns the project
+    server = FakeServer(_tree(owner='shop'))
     raw = laravel_server.collect(server)
+    assert _ran_as(server, 'head') == {'shop'} and _ran_as(server, 'awk') == {'shop'}
+    assert raw['projects'][APP]['owner'] == 'shop'
+    assert raw['projects'][APP]['env_tokens']['status'] == 'ok'
     assert raw['sudo'] is True
-    assert all(sudo for _argv, sudo in server.commands)
+    assert {account for argv, account in server.commands if argv[0] == 'find'} == {'root'}   # names and modes
+
+
+def test_a_link_planted_by_the_owner_reaches_only_what_the_owner_can_read(data):
+    files = _tree(owner='shop')
+    files['/etc/shadow'] = {'type': 'f', 'mode': 0o640, 'owner': 'root', 'group': 'shadow', 'text': SHADOW}
+    files[f'{APP}/composer.json'] = {'type': 'l', 'mode': 0o777, 'owner': 'shop', 'group': 'shop',
+                                     'target': '/etc/shadow'}
+    raw = laravel_server.collect(FakeServer(files))
+    assert raw['projects'][APP]['composer_json']['status'] == 'denied'
+    assert SHADOW not in json.dumps(raw)
+
+
+def test_the_ssh_users_own_project_is_read_without_sudo(data):
+    server = FakeServer(_tree(owner='deploy'))
+    laravel_server.collect(server)
+    assert _ran_as(server, 'head') == {'deploy'}
+    assert not [argv for argv in server.through_sudo if argv[0] in ('head', 'awk')]
+
+
+def test_as_root_contents_are_read_through_runuser_as_the_owner(data):
+    server = FakeServer(_tree(owner='shop'), user='root', sudo='refused')
+    raw = laravel_server.collect(server)
+    assert _ran_as(server, 'head') == {'shop'}
+    assert raw['projects'][APP]['env_tokens']['status'] == 'ok'
+
+
+def test_without_a_way_to_act_as_the_owner_contents_are_not_read(data):
+    server = FakeServer(_tree(owner='shop'), sudo='refused')
+    raw = laravel_server.collect(server)
     project = raw['projects'][APP]
-    assert project['env_lines']['status'] == 'ok'
-    assert 'APP_DEBUG=false' in project['env_lines']['text']
-    assert project['env_files']['files'][0]['mode'] == 0o640
-    assert project['dirs']['entries']['storage']['mode'] == 0o775
-    assert project['config_lines'] is None              # no cached config on this server
-    tools = {argv[0] for argv, _sudo in server.commands}
-    assert tools <= {'find', 'head', 'grep', 'awk'}
+    assert project['composer_json']['status'] == 'skipped'
+    assert 'shop' in project['composer_json']['reason']
+    assert not _ran_as(server, 'head')
+
+
+def test_sudo_that_may_not_act_as_the_owner_is_said(data):
+    server = FakeServer(_tree(owner='shop'), runas=False)
+    raw = laravel_server.collect(server)
+    reason = raw['projects'][APP]['composer_json']['reason']
+    assert raw['projects'][APP]['composer_json']['status'] == 'error'
+    assert 'not allowed' in reason
+
+
+def test_a_root_project_is_read_as_root_only_along_a_path_root_alone_controls(data):
+    # bootstrap/cache writable by its group: the cached config there is not read as root
+    config = {f'{APP}/bootstrap/cache/config.php': {'type': 'f', 'mode': 0o640, 'owner': 'root',
+                                                    'group': 'www-data', 'text': CACHED}}
+    server = FakeServer(_tree(owner='root', cache_mode=0o775, extra=config))
+    raw = laravel_server.collect(server)
+    project = raw['projects'][APP]
+    assert project['config_tokens']['status'] == 'skipped'
+    assert 'bootstrap/cache' in project['config_tokens']['reason']
+    assert project['env_tokens']['status'] == 'ok'                # the project folder is root's alone
+    assert project['composer_json']['status'] == 'ok'
+    result = laravel_server.judge(raw, 'srv.test')
+    assert _checked(result)['app_debug'] == 'not_checked'
+
+
+def test_a_root_project_inside_another_users_folder_is_not_read_as_root(data):
+    files = _tree('/home/forge/app', owner='root')
+    files['/home/forge'] = {'type': 'd', 'mode': 0o755, 'owner': 'forge', 'group': 'forge'}
+    raw = laravel_server.collect(FakeServer(files))
+    composer = raw['projects']['/home/forge/app']['composer_json']
+    assert composer['status'] == 'skipped' and '/home/forge' in composer['reason']
+
+
+def test_only_tokens_cross_for_env_and_config(data):
+    files = _tree(owner='shop', cache_group='shop',
+                  env_text=f'APP_DEBUG=true\nAPP_KEY={APP_KEY}\nDB_PASSWORD=hunter2-secret\n',
+                  extra={f'{APP}/bootstrap/cache/config.php': {'type': 'f', 'mode': 0o640, 'owner': 'shop',
+                                                               'group': 'www-data', 'text': CONFIG_SAMPLE}})
+    raw = laravel_server.collect(FakeServer(files))
+    dumped = json.dumps(raw)
+    for secret in (APP_KEY, 'hunter2'):
+        assert secret not in dumped
+    assert raw['projects'][APP]['env_tokens']['text'] == 'APP_DEBUG true'
+    assert raw['projects'][APP]['config_tokens']['text'] == 'APP_ENV word:production\nAPP_DEBUG false'
+
+
+def test_a_file_that_is_not_a_regular_file_is_not_read(data):
+    files = _tree(owner='shop')
+    files[f'{APP}/vendor/composer/installed.json'] = {'type': 'p', 'mode': 0o644, 'owner': 'shop', 'group': 'shop'}
+    server = FakeServer(files)
+    raw = laravel_server.collect(server)
+    installed = raw['projects'][APP]['installed']
+    assert installed['status'] == 'skipped' and 'not a regular file' in installed['reason']
+    assert not [argv for argv, _ in server.commands if argv[0] == 'head' and argv[-1].endswith('installed.json')]
 
 
 def test_collect_without_sudo_says_so_and_what_it_could_not_read(data):
-    server = FakeServer(_tree(), sudo='refused')
+    server = FakeServer(_tree(owner='deploy', env_owner='root', env_mode=0o640), sudo='refused')
     raw = laravel_server.collect(server)
     assert raw['sudo'] is False and 'password' in raw['sudo_note']
-    assert not any(sudo for _argv, sudo in server.commands)
-    assert raw['projects'][APP]['env_lines']['status'] == 'denied'
+    assert raw['projects'][APP]['env_tokens']['status'] == 'denied'
     result = laravel_server.judge(raw, 'srv.test')
     assert result['collected_without_sudo'] is True
     assert _checked(result)['app_debug'] == 'not_checked'
 
 
-def test_collect_as_root_does_not_use_sudo(data):
-    server = FakeServer(_tree(), sudo='refused', user='root')
-    raw = laravel_server.collect(server)
-    assert raw['sudo'] is False and raw['sudo_note'] is None
-    assert raw['projects'][APP]['env_lines']['status'] == 'ok'
-    assert 'collected_without_sudo' not in laravel_server.judge(raw, 'srv.test')
-
-
-def test_collect_reads_the_cached_config_only_through_awk(data):
-    config = {f'{APP}/bootstrap/cache/config.php': {'type': 'f', 'mode': 0o644, 'text': CONFIG_SAMPLE}}
-    server = FakeServer(_tree(extra=config))
-    raw = laravel_server.collect(server)
-    lines = raw['projects'][APP]['config_lines']
-    assert lines['status'] == 'ok'
-    assert APP_KEY not in lines['text'] and 'hunter2' not in lines['text']
-    result = laravel_server.judge(raw, 'srv.test')
-    assert 'cached config' in _detail(result, 'app_debug')
-
-
 def test_paths_from_the_server_reach_the_tools_as_one_argument(data):
     odd = "/var/www/it's $(touch x) a;b"
-    server = FakeServer(_tree(odd))
+    server = FakeServer(_tree(odd, owner='deploy'))
     raw = laravel_server.collect(server)
     assert odd in raw['projects']
-    assert any(argv[-1] == f'{odd}/.env' for argv, _sudo in server.commands if argv[0] == 'grep')
+    assert any(argv[-1] == f'{odd}/.env' for argv, _ in server.commands if argv[0] == 'awk')
 
 
 def test_collect_reads_a_version_file_up_to_the_limit(data, monkeypatch):
     monkeypatch.setattr(laravel_server, 'MAX_INVENTORY', 40)
-    server = FakeServer(_tree(installed=INSTALLED_12))
-    raw = laravel_server.collect(server)
+    raw = laravel_server.collect(FakeServer(_tree(installed=INSTALLED_12)))
     assert raw['projects'][APP]['installed']['truncated'] is True
 
 
 def test_only_the_current_release_is_read(data):
     files = {}
     for release in ('1', '2'):
-        files.update(_tree(f'/home/forge/shop/releases/{release}'))
-    files['/home/forge/shop/current'] = {'type': 'l', 'mode': 0o777, 'target': 'releases/2'}
+        files.update(_tree(f'/home/forge/shop/releases/{release}', owner='forge'))
+    files['/home/forge/shop/current'] = {'type': 'l', 'mode': 0o777, 'owner': 'forge', 'target': 'releases/2'}
     raw = laravel_server.collect(FakeServer(files))
     assert list(raw['projects']) == ['/home/forge/shop/releases/2']
     assert raw['skipped']['old_releases'] == 1
 
 
+def test_the_limit_counts_laravel_projects_only(data, monkeypatch):
+    # review #63 pass 1 (P2): folders that are not Laravel do not use up the limit
+    monkeypatch.setattr(laravel_server, 'MAX_PROJECTS', 2)
+    files = {}
+    for name in ('a', 'b', 'c'):
+        files.update(_tree(f'/var/www/{name}'))
+    files.update(_tree('/var/www/0-tool'))
+    files['/var/www/0-tool/composer.json']['text'] = json.dumps({'require': {'symfony/console': '^7'}})
+    raw = laravel_server.collect(FakeServer(files))
+    assert sorted(raw['projects']) == ['/var/www/0-tool', '/var/www/a', '/var/www/b']
+    assert raw['skipped']['over_limit'] == 1
+
+
 def test_a_search_with_permission_errors_is_partial(data):
     files = _tree()
-    files['/home/other'] = {'type': 'd', 'mode': 0o700, 'root_only': True}
+    files['/home/other'] = {'type': 'd', 'mode': 0o700, 'owner': 'other', 'group': 'other'}
     raw = laravel_server.collect(FakeServer(files, sudo='refused'))
     assert 'Permission denied' in raw['discovery']['partial']
 
@@ -709,8 +886,8 @@ def test_missing_roots_are_not_errors(data):
     server = FakeServer(_tree())
     original = server._find
 
-    def find(argv, sudo):
-        out, err, rc = original(argv, sudo)
+    def find(argv, account):
+        out, err, rc = original(argv, account)
         if 'artisan' in argv:
             err += "find: '/srv': No such file or directory\n"
             rc = 1
@@ -722,7 +899,7 @@ def test_missing_roots_are_not_errors(data):
 
 
 def test_the_whole_audit_over_a_fake_server(data):
-    files = _tree(env_text='APP_ENV=local\nAPP_DEBUG=true\n', env_mode=0o644, root_only_env=False)
+    files = _tree(owner='deploy', env_text='APP_ENV=local\nAPP_DEBUG=true\n', env_mode=0o644)
     files[f'{APP}/storage']['mode'] = 0o777
     result = laravel_server.audit_laravel_server(FakeServer(files), 'srv.test')
     ids = set(_ids(result))

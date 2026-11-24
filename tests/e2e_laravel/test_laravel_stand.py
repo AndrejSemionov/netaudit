@@ -129,13 +129,14 @@ def test_the_config_awk_on_a_real_cached_config():
     path = f'{STAND_DIR}/lv1/bootstrap/cache/config.php'
     out = subprocess.run(['awk', laravel_server.CONFIG_AWK, path],  # nosec B603 B607
                          capture_output=True, text=True, check=True).stdout
-    assert out.splitlines() == ["    'env' => 'production',", "    'debug' => false,"]
-    assert laravel_server.parse_config_lines(out) == {'APP_ENV': 'production', 'APP_DEBUG': False}
+    assert out.splitlines() == ['APP_ENV word:production', 'APP_DEBUG false']
+    assert laravel_server.parse_tokens(out) == {'APP_ENV': 'production', 'APP_DEBUG': False}
 
 
-def test_the_env_grep_on_the_skeletons_env():
-    out = subprocess.run(['grep', '-E', laravel_server.ENV_KEYS_PATTERN, f'{STAND_DIR}/lv2/.env'],  # nosec B603 B607
+def test_the_env_program_on_the_skeletons_env():
+    out = subprocess.run(['awk', laravel_server.ENV_AWK, f'{STAND_DIR}/lv2/.env'],  # nosec B603 B607
                          capture_output=True, text=True, check=True).stdout
-    assert sorted(out.splitlines()) == ['APP_DEBUG=true', 'APP_ENV=local']
-    values = laravel_server.parse_env_lines(out)
+    assert sorted(out.splitlines()) == ['APP_DEBUG true', 'APP_ENV word:local']
+    values = laravel_server.parse_tokens(out)
     assert values['APP_ENV'] == 'local' and laravel_server.debug_on(values['APP_DEBUG'])
+    assert 'base64:' not in out

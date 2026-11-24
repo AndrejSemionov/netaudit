@@ -82,8 +82,8 @@ def test_vulnerability_record_link_and_data_notices():
 
 # --- laravel_server (contract L4): in the Audit tab, with a view of its own ---------------
 
-SERVER_ITEMS = ('discovery', 'env_files', 'app_debug', 'app_env', 'writable_dirs', 'laravel_version', 'vulns',
-                'vuln_gaps', 'version_sources')
+SERVER_ITEMS = ('discovery', 'env_files', 'app_debug', 'app_env', 'effective_config', 'writable_dirs', 'read_gaps',
+                'laravel_version', 'vulns', 'vuln_gaps', 'version_sources')
 
 
 def test_server_check_has_its_own_view_in_the_audit_tab():

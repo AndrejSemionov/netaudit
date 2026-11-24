@@ -72,7 +72,7 @@ def test_the_shop_is_flagged_for_everything_it_does_wrong(with_sudo):
 
 def test_the_cached_config_wins_over_env(with_sudo):
     checked = _checked(with_sudo, BLOG)
-    assert checked['app_debug'] == checked['app_env'] == 'ok'
+    assert checked['app_debug'] == checked['app_env'] == checked['effective_config'] == 'ok'
     assert 'cached config' in _detail(with_sudo, 'app_debug', BLOG)
     assert checked['env_files'] == 'ok'
     assert not {subject_id('LV-SRV-002', BLOG), subject_id('LV-SRV-003', BLOG)} & _ids(with_sudo)
@@ -81,6 +81,13 @@ def test_the_cached_config_wins_over_env(with_sudo):
 def test_the_old_release_is_not_judged(with_sudo):
     assert not [i for i in _ids(with_sudo) if '%2Fsrv%2Fapi%2Freleases%2F1' in i]
     assert _checked(with_sudo, API)['app_debug'] == 'ok'
+    # values from .env alone do not confirm the configuration in effect
+    assert _checked(with_sudo, API)['effective_config'] == 'not_checked'
+
+
+def test_root_projects_are_read_as_root_with_sudo(with_sudo):
+    for project in (SHOP, BLOG, API):
+        assert _checked(with_sudo, project)['laravel_version'] in ('ok', 'problem'), project
 
 
 def test_no_secret_leaves_the_server(with_sudo, without_sudo):
