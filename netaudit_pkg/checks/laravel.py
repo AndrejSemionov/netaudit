@@ -360,14 +360,14 @@ def _gaps(inventory: dict, path: str) -> list[str]:
     return gaps
 
 
-def _version_sources(seen: dict, too_big: list, source: str, checked: list) -> None:
+def _version_sources(seen: dict, too_big: list, source: str, checked: list, extra: dict | None = None) -> None:
     """When both files are public: whether they agree, said only for the
     packages both name and only when both were read in full (review pass 1-2)."""
     lock, installed = seen['lock'], seen['installed']
     if not (lock and installed):
         return
     if too_big:
-        checked.append({'item': 'version_sources', 'status': 'not_checked',
+        checked.append({**(extra or {}), 'item': 'version_sources', 'status': 'not_checked',
                         'detail': f'{", ".join(too_big)} too large to read: only {source} is used'})
         return
     locked = {p['name']: p['version'] for p in lock['packages']}
@@ -382,38 +382,49 @@ def _version_sources(seen: dict, too_big: list, source: str, checked: list) -> N
         more = f' and {len(differ) - 10} more' if len(differ) > 10 else ''
         detail = (f'composer.lock and installed.json disagree: {", ".join(differ[:10])}{more}; '
                   'the installed versions are used')
-        checked.append({'item': 'version_sources', 'status': 'not_checked',
+        checked.append({**(extra or {}), 'item': 'version_sources', 'status': 'not_checked',
                         'detail': '; '.join([detail, *partial])})
     elif partial:
-        checked.append({'item': 'version_sources', 'status': 'not_checked',
+        checked.append({**(extra or {}), 'item': 'version_sources', 'status': 'not_checked',
                         'detail': 'not compared in full: ' + '; '.join(partial)})
     elif not common:
-        checked.append({'item': 'version_sources', 'status': 'not_checked',
+        checked.append({**(extra or {}), 'item': 'version_sources', 'status': 'not_checked',
                         'detail': f'no package in both files to compare ({scope})'})
     else:
-        checked.append({'item': 'version_sources', 'status': 'ok',
+        checked.append({**(extra or {}), 'item': 'version_sources', 'status': 'ok',
                         'detail': scope.replace(' in both', ' in both agree', 1)})
 
 
-def _check_versions(seen: dict, findings: list, checked: list) -> tuple[dict | None, dict | None, bool]:
-    """Laravel's support and the packages' known vulnerabilities, when a
-    lock or installed.json is public; installed.json first - it names what
-    is installed. Returns (framework, packages, data used)."""
+EXTERNAL_IDS = {'eol': 'LV-EOL-001', 'vuln': 'LV-VULN-001'}
+NOT_PUBLIC = ('not visible from outside: composer.lock is not public (as it should be); '
+              'the version is read on the server')
+
+
+def _check_versions(seen: dict, findings: list, checked: list, *, ids: dict | None = None, subject: tuple = (),
+                    prefix: str = '', extra: dict | None = None,
+                    missing_why: str = NOT_PUBLIC) -> tuple[dict | None, dict | None, bool]:
+    """Laravel's support and the packages' known vulnerabilities from an
+    installed.json or a composer.lock; installed.json first - it names what
+    is installed. Shared with laravel_server (contract L4): `ids` names the
+    eol and vuln controls, `subject` goes before a finding's own subject,
+    `prefix` before its title, `extra` into every checked item. Returns
+    (framework, packages, data used)."""
+    ids = ids or EXTERNAL_IDS
+    extra = extra or {}
     public = [(path, seen['installed' if path == INSTALLED else 'lock']) for path in (INSTALLED, COMPOSER_LOCK)]
     public = [(path, inventory) for path, inventory in public if inventory]
     too_big = [path for path, inventory in public if inventory['partial']]
     readable = [(path, inventory) for path, inventory in public if not inventory['partial']]
     if not readable:
-        why = (f'{", ".join(too_big)} public but too large to read (over {INVENTORY_MAX_BODY // (1024 * 1024)} MB)'
-               if too_big else 'not visible from outside: composer.lock is not public (as it should be); '
-                               'the version is read on the server')
-        checked.append({'item': 'laravel_version', 'status': 'not_checked', 'detail': why})
-        checked.append({'item': 'vulns', 'status': 'not_checked', 'detail': why})
+        why = (f'{", ".join(too_big)} too large to read (over {INVENTORY_MAX_BODY // (1024 * 1024)} MB)'
+               if too_big else missing_why)
+        checked.append({**extra, 'item': 'laravel_version', 'status': 'not_checked', 'detail': why})
+        checked.append({**extra, 'item': 'vulns', 'status': 'not_checked', 'detail': why})
         return None, None, False
 
     source, inventory = readable[0]
     packages = inventory['packages']
-    _version_sources(seen, too_big, source, checked)
+    _version_sources(seen, too_big, source, checked, extra)
     locked = ' (locked in composer.lock; what is installed is not visible)' if source == COMPOSER_LOCK else ''
     gaps = _gaps(inventory, source)
     if not packages:
@@ -421,42 +432,43 @@ def _check_versions(seen: dict, findings: list, checked: list) -> tuple[dict | N
         why = '; '.join([f'no package with a readable version in {source}: nothing was compared', *gaps])
         detail = (f'two versions of laravel/framework in {source}: not judged'
                   if 'laravel/framework' in inventory['conflicting'] else why)
-        checked.append({'item': 'laravel_version', 'status': 'not_checked', 'detail': detail})
-        checked.append({'item': 'vulns', 'status': 'not_checked', 'detail': why})
+        checked.append({**extra, 'item': 'laravel_version', 'status': 'not_checked', 'detail': detail})
+        checked.append({**extra, 'item': 'vulns', 'status': 'not_checked', 'detail': why})
         return None, {'source': source, 'count': 0, 'vulnerable': []}, False
 
     framework = None
     core = next((p for p in packages if p['name'] == 'laravel/framework'), None)
     if 'laravel/framework' in inventory['conflicting']:
-        checked.append({'item': 'laravel_version', 'status': 'not_checked',
+        checked.append({**extra, 'item': 'laravel_version', 'status': 'not_checked',
                         'detail': f'two versions of laravel/framework in {source}: not judged'})
     elif core is None:
-        checked.append({'item': 'laravel_version', 'status': 'not_checked',
+        checked.append({**extra, 'item': 'laravel_version', 'status': 'not_checked',
                         'detail': '; '.join([f'laravel/framework is not in {source}', *gaps])})
     else:
         support = laravel_data.support(core['version'])
         framework = {'version': core['version'], 'source': source, 'support': support}
         if support['status'] == 'ended':
             ended = f'ended {support["eol"]}' if support['eol'] else 'ended'
-            findings.append(_finding('high', f'Laravel {core["version"]} no longer gets security fixes',
+            findings.append(_finding('high', f'{prefix}Laravel {core["version"]} no longer gets security fixes',
                                      f'release line {support["cycle"] or core["version"]}: security support '
-                                     f'{ended} (endoflife.date){locked}', id='LV-EOL-001',
+                                     f'{ended} (endoflife.date){locked}',
+                                     id=subject_id(ids['eol'], *subject) if subject else ids['eol'],
                                      recommendation='Upgrade to a supported Laravel release '
                                                     '(laravel.com/docs/releases).'))
-            checked.append({'item': 'laravel_version', 'status': 'problem',
+            checked.append({**extra, 'item': 'laravel_version', 'status': 'problem',
                             'detail': f'Laravel {core["version"]}{locked}: security support {ended}'})
         elif support['status'] == 'supported':
             until = f'security fixes until {support["eol"]}' if support['eol'] else 'supported'
-            checked.append({'item': 'laravel_version', 'status': 'ok',
+            checked.append({**extra, 'item': 'laravel_version', 'status': 'ok',
                             'detail': f'Laravel {core["version"]}{locked}: {until}'})
         else:
-            checked.append({'item': 'laravel_version', 'status': 'not_checked',
+            checked.append({**extra, 'item': 'laravel_version', 'status': 'not_checked',
                             'detail': support['error'] or f'endoflife.date does not list Laravel {core["version"]}'})
 
     data = laravel_data.vulnerabilities(packages)
     listed = {'source': source, 'count': len(packages), 'vulnerable': []}
     if data['status'] != 'ok':
-        checked.append({'item': 'vulns', 'status': 'not_checked', 'detail': '; '.join([data['error'], *gaps])})
+        checked.append({**extra, 'item': 'vulns', 'status': 'not_checked', 'detail': '; '.join([data['error'], *gaps])})
         return framework, listed, framework is not None
     found = 0
     for p in packages:
@@ -473,8 +485,8 @@ def _check_versions(seen: dict, findings: list, checked: list) -> tuple[dict | N
             fix = (f'Update {p["name"]} to {fixed[0]} or later.' if fixed
                    else 'No fixed release is named for this version: follow the advisory.')
             findings.append(_finding(v.get('severity') or 'medium',
-                                     f'{p["name"]} {p["version"]}: {v.get("title") or v["id"]}', detail,
-                                     id=subject_id('LV-VULN-001', p['name'], v['id']), recommendation=fix,
+                                     f'{prefix}{p["name"]} {p["version"]}: {v.get("title") or v["id"]}', detail,
+                                     id=subject_id(ids['vuln'], *subject, p['name'], v['id']), recommendation=fix,
                                      extra={'link': v['link']} if v.get('link') else {}))
     unanswered = data['unanswered']
     if unanswered:
@@ -482,14 +494,14 @@ def _check_versions(seen: dict, findings: list, checked: list) -> tuple[dict | N
         gaps.append(f'no answer from OSV.dev for: {", ".join(unanswered[:20])}{more}')
     gap = '; '.join(gaps)
     if found:
-        checked.append({'item': 'vulns', 'status': 'problem',
+        checked.append({**extra, 'item': 'vulns', 'status': 'problem',
                         'detail': f'{found} known in {len(listed["vulnerable"])} package(s){locked}, OSV.dev'})
         if gap:
-            checked.append({'item': 'vuln_gaps', 'status': 'not_checked', 'detail': gap})
+            checked.append({**extra, 'item': 'vuln_gaps', 'status': 'not_checked', 'detail': gap})
     elif gap:
-        checked.append({'item': 'vulns', 'status': 'not_checked', 'detail': gap})
+        checked.append({**extra, 'item': 'vulns', 'status': 'not_checked', 'detail': gap})
     else:
-        checked.append({'item': 'vulns', 'status': 'ok',
+        checked.append({**extra, 'item': 'vulns', 'status': 'ok',
                         'detail': f'none known for {len(packages)} package(s) in {source}, OSV.dev'})
     return framework, listed, True
 

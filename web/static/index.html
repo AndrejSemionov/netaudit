@@ -265,6 +265,7 @@
         <button id="lvBtn" onclick="runLaravelCheck()" data-i18n="lv.check">Проверить</button>
       </div>
       <div class="status" id="lvStatus"></div>
+      <p class="hint" data-i18n="lv.server_hint">Версии, .env и права файлов на самом сервере — проверка «Laravel на сервере (SSH)» во вкладке «Аудит», раздел Laravel.</p>
     </div>
     <div id="lvResult"></div>
   </div>
@@ -1382,6 +1383,7 @@ function renderResult(id, r, canvasId) {
   // the same view as the WordPress tab; r is already the escaped display copy
   if (id === 'wordpress_external') return { html: wordPressHtml(r) };
   if (id === 'laravel_external') return { html: laravelHtml(r) };
+  if (id === 'laravel_server') return { html: laravelServerHtml(r) };
   if (r.error) return { html: `<span class="pill bad">${t('run.error')}</span> <span class="timing">${r.error}</span>` };
 
   // --- mtr: таблица + график потерь по хопам ---
@@ -1961,6 +1963,75 @@ function laravelHtml(r) {
     html += `<div class="card"><h2>${t('lv.packages')}: ${p.count}</h2>
       ${rows ? `<table><tr><th>${t('lv.col.package')}</th><th>${t('lv.col.version')}</th><th>${t('lv.col.vulns')}</th></tr>${rows}</table>` : ''}
       <p class="timing">${t('lv.packages_note')} ${p.source}</p></div>`;
+  }
+  if (r.vuln_data) {
+    const notices = (r.vuln_data.notices || []).map(n =>
+      `<details><summary>${n.notice}</summary><p class="timing">${n.license} ${n.license_url}</p></details>`).join('');
+    html += `<div class="card"><p class="timing">${t('lv.vuln_source')}: ${r.vuln_data.source}</p>${notices}</div>`;
+  }
+  return html;
+}
+
+// ---- Laravel on the server (docs/research/laravel_audit.md §5, contract L4) ----
+// The view of a laravel_server result in the Audit tab; r is the escaped
+// display copy. Items and findings name their project folder.
+function laravelServerHtml(r) {
+  if (r.error) return `<span class="pill bad">${t('run.error')}</span> <span class="timing">${r.error}</span>`;
+  const verdict = Object.hasOwn(LV_VERDICT_PILL, r.verdict) ? r.verdict : 'incomplete';
+  const pillClass = LV_VERDICT_PILL[verdict];
+  const checked = Array.isArray(r.checked) ? r.checked : [];
+  let head = '';
+  if (r.score && Number.isFinite(r.score.value)) {
+    const value = Math.round(r.score.value);
+    // the same colour and word as the Laravel and WordPress tabs (USER 2026-11-22)
+    const grade = value >= 80 ? 'good' : value >= 50 ? 'medium' : 'bad';
+    const scoreClass = { good: 'ok', medium: 'warn', bad: 'bad' }[grade];
+    head = `<div><div class="timing">${t('wp.score')}</div><div class="wp-score ${scoreClass}">${value}<small>/100</small></div>
+      <span class="pill ${scoreClass}">${t('wp.grade.' + grade)}</span></div>`;
+  }
+  const gaps = r.score && Array.isArray(r.score.not_checked) ? [...new Set(r.score.not_checked)] : [];
+  const title = verdict === 'not_laravel' ? t('lv.srv.verdict.not_laravel') : t('lv.verdict.' + verdict);
+  let html = `<div class="card"><div class="wp-head">${head}<div>
+      <h2><span class="pill ${pillClass}">${title}</span></h2>
+      ${gaps.length ? `<div class="timing">${t('wp.score_partial')}: ${gaps.map(g => t('lv.srv.item.' + g)).join(', ')}</div>` : ''}
+      ${r.collected_without_sudo ? `<div class="timing">${t('lv.srv.without_sudo')}: ${r.sudo_note || ''}</div>` : ''}
+      <div class="wp-facts"><div><span>${t('lv.srv.host')}</span>${r.host || ''}</div></div>
+    </div></div></div>`;
+  const findings = (r.findings || []).filter(f => f.severity !== 'ok');
+  if (findings.length) {
+    html += `<div class="card"><h2>${t('wp.findings')}: ${findings.length}</h2>` + findings.map(f => {
+      const pillClass = WP_SEVERITY_PILL[f.severity] || '';
+      return `<div class="wp-finding"><span class="pill ${pillClass}">${t('wp.sev.' + f.severity)}</span> <b>${f.title}</b>
+        ${f.detail ? `<div class="timing">${f.detail}</div>` : ''}
+        ${f.recommendation ? `<div>${t('wp.fix')}: ${f.recommendation}</div>` : ''}
+        ${f.link ? `<div><a href="${f.link}" target="_blank" rel="noopener noreferrer">${t('lv.vuln_record')}</a></div>` : ''}</div>`;
+    }).join('') + '</div>';
+  }
+  if (Array.isArray(r.projects) && r.projects.length) {
+    const rows = r.projects.map(p => {
+      const fw = p.framework;
+      const s = fw && fw.support ? fw.support : {};
+      const support = s.status === 'ended' ? t('lv.support_ended') : s.status === 'supported' && s.eol ? t('lv.support_until') + ' ' + s.eol : '';
+      const app = p.app || {};
+      const debug = app.debug === true ? t('lv.srv.on') : app.debug === false ? t('lv.srv.off') : '—';
+      const vulns = p.packages && Array.isArray(p.packages.vulnerable) ? p.packages.vulnerable.reduce((n, v) => n + v.vulns, 0) : '—';
+      return `<tr><td>${p.path}</td><td>${fw ? fw.version : '—'} <span class="timing">${support}</span></td>
+        <td>${debug}</td><td>${app.env || '—'}</td><td>${vulns}</td></tr>`;
+    }).join('');
+    html += `<div class="card"><h2>${t('lv.srv.projects')}: ${r.projects.length}</h2>
+      <table><tr><th>${t('lv.srv.col.path')}</th><th>${t('lv.srv.col.version')}</th><th>${t('lv.srv.col.debug')}</th><th>${t('lv.srv.col.env')}</th><th>${t('lv.srv.col.vulns')}</th></tr>${rows}</table></div>`;
+  }
+  for (const [status, heading] of [['not_checked', t('wp.not_checked')], ['ok', t('wp.fine')]]) {
+    const items = checked.filter(c => c.status === status);
+    if (!items.length) continue;
+    const pillClass = WP_STATUS_PILL[status];
+    html += `<div class="card"><h2>${heading}: ${items.length}</h2><div class="wp-checks">` + items.map(c =>
+      `<div><span class="pill ${pillClass}">${t('wp.status.' + status)}</span> ${t('lv.srv.item.' + c.item)}
+        ${c.project ? `<div class="timing">${c.project}</div>` : ''}<div class="timing">${c.detail || ''}</div></div>`).join('') + '</div></div>';
+  }
+  const skipped = r.skipped || {};
+  if (skipped.old_releases || skipped.not_laravel) {
+    html += `<div class="card"><p class="timing">${t('lv.srv.skipped')}: ${skipped.old_releases || 0} ${t('lv.srv.old_releases')}, ${skipped.not_laravel || 0} ${t('lv.srv.not_laravel_dirs')}</p></div>`;
   }
   if (r.vuln_data) {
     const notices = (r.vuln_data.notices || []).map(n =>

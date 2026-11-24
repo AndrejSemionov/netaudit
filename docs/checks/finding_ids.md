@@ -250,3 +250,16 @@ Contract: `docs/research/laravel_audit.md` (L2, L3).
 | LV-HDR-001 | low | — | HSTS is off |
 | LV-HDR-002 | low | — | X-Content-Type-Options: nosniff is missing |
 | LV-HDR-003 | low | — | no protection from framing (X-Frame-Options / CSP frame-ancestors) |
+
+## laravel_server
+
+Contract: `docs/research/laravel_audit.md` §5 (L4).
+
+| Control id | Severities | Subject | Control |
+|---|---|---|---|
+| LV-SRV-001 | high | project path, file name | a .env file in the project can be read by every user on the server |
+| LV-SRV-002 | high | project path | debug mode is on (APP_DEBUG, from the cached config or .env) |
+| LV-SRV-003 | medium | project path | APP_ENV is local or development |
+| LV-SRV-004 | medium | project path, directory | storage/ or bootstrap/cache can be written by every user on the server |
+| LV-SRV-005 | high | project path | the project's Laravel release line no longer gets security fixes (endoflife.date) |
+| LV-SRV-006 | critical, high, medium, low | project path, package, OSV id | a known vulnerability (OSV.dev, Packagist) affects an installed or locked package |

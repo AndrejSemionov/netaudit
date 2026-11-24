@@ -229,7 +229,7 @@ def data(monkeypatch):
 
 
 def _ids(result):
-    return [f.get('id') for f in result.get('findings', [])]
+    return [f['id'] for f in result.get('findings', []) if f.get('id')]   # the closing 'ok' finding has none
 
 
 def _by_id(result, fid):
