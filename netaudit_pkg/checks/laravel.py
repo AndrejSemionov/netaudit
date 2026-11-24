@@ -164,7 +164,9 @@ def _inventory(pages: dict, path: str) -> dict | None:
     if not (webprobe.answered(page) and page.status == 200):
         return None
     if page.truncated:
-        return {'packages': [], 'unreadable': 0, 'partial': True} if _INVENTORY_START.match(page.text) else None
+        # the same fields as a read inventory (review #62 pass 4)
+        return ({'packages': [], 'unreadable': 0, 'conflicting': [], 'partial': True}
+                if _INVENTORY_START.match(page.text) else None)
     data = laravel_data.lock_packages(page.text)
     return None if data is None else {**data, 'partial': False}
 
@@ -216,6 +218,12 @@ def _is_laravel(home: Page, pages: dict, seen: dict) -> tuple[bool | None, str]:
         opened.append('a composer file with laravel/framework')
     if opened:
         return True, 'open: ' + ', '.join(opened)
+    too_big = [path for path, inventory in ((COMPOSER_LOCK, seen['lock']), (INSTALLED, seen['installed']))
+               if inventory and inventory['partial']]
+    if too_big:
+        # its packages were not read: no sign either way (review #62 pass 4)
+        return None, (f'no Laravel cookies, tool or file seen; {", ".join(too_big)} is public but too large to '
+                      f'read (over {INVENTORY_MAX_BODY // (1024 * 1024)} MB), so its packages could not be read')
     if not webprobe.answered(login):
         return None, (f'no Laravel cookies on the home page, and /login gave no answer '
                       f'({webprobe.why(login)})')
