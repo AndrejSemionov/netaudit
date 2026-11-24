@@ -50,10 +50,13 @@ NOTICES = [
 ]
 
 _SEVERITY = {'CRITICAL': 'critical', 'HIGH': 'high', 'MODERATE': 'medium', 'LOW': 'low'}
-# Composer's package name (its JSON schema), and a version as a lock writes it
-# (1.2.3, v1.2.3, 1.0.0-beta1, dev-main, 2.x-dev, dev-feature/x, 1.2.3+build)
-_NAME = re.compile(r'[a-z0-9](?:[_.-]?[a-z0-9]+)*/[a-z0-9](?:(?:[_.]|-{1,2})?[a-z0-9]+)*')
-_VERSION = re.compile(r'[A-Za-z0-9][A-Za-z0-9._+~/-]{0,99}')
+# Composer's package name (its JSON schema, written so that a failing name
+# is rejected in linear time - review pass 2), and a version as a lock writes
+# it (1.2.3, v1.2.3, 1.0.0-beta1, dev-main, 2.x-dev, dev-feature/x, 1.2.3+build)
+MAX_NAME = 200
+MAX_VERSION = 100
+_NAME = re.compile(r'[a-z0-9]+(?:[_.-][a-z0-9]+)*/[a-z0-9]+(?:(?:[_.]|-{1,2})[a-z0-9]+)*')
+_VERSION = re.compile(r'[A-Za-z0-9][A-Za-z0-9._+~/-]*')
 _VULN_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,99}')
 
 
@@ -87,10 +90,18 @@ def _ask(url: str) -> tuple[int, object]:
         return _get_json(url)
 
 
+def _valid(name, version) -> bool:
+    return (isinstance(name, str) and isinstance(version, str)
+            and len(name) <= MAX_NAME and len(version) <= MAX_VERSION
+            and bool(_NAME.fullmatch(name)) and bool(_VERSION.fullmatch(version)))
+
+
 def lock_packages(text: str) -> dict | None:
-    """{'packages': [{'name', 'version'}], 'unreadable': entries not used}
-    from a composer.lock or installed.json; None when the text is not one (a
-    "not found" page, composer.json)."""
+    """{'packages': [{'name', 'version'}], 'unreadable': entries not used,
+    'conflicting': names listed with two versions} from a composer.lock or
+    installed.json; None when the text is not one (a "not found" page,
+    composer.json). Each name is in 'packages' once: an exact repeat is one
+    package, a name with two versions is left out and named (review pass 2)."""
     try:
         data = json.loads(text)
     except (ValueError, TypeError):
@@ -106,19 +117,24 @@ def lock_packages(text: str) -> dict | None:
         return None
     if not all(isinstance(section, list) for section in sections):
         return None
-    packages, unreadable = [], 0
+    versions: dict[str, str] = {}
+    conflicting: set[str] = set()
+    unreadable = 0
     for section in sections:
         for entry in section:
             name = entry.get('name') if isinstance(entry, dict) else None
             version = entry.get('version') if isinstance(entry, dict) else None
-            if (isinstance(name, str) and isinstance(version, str)
-                    and _NAME.fullmatch(name) and _VERSION.fullmatch(version)):
-                packages.append({'name': name, 'version': version.removeprefix('v')})
-            else:
+            if not _valid(name, version):
                 unreadable += 1
-    if isinstance(data, list) and not packages:
+                continue
+            version = version.removeprefix('v')
+            if name in versions and versions[name] != version:
+                conflicting.add(name)
+            versions.setdefault(name, version)
+    if isinstance(data, list) and not versions:
         return None                # a JSON list of something else
-    return {'packages': packages, 'unreadable': unreadable}
+    packages = [{'name': name, 'version': version} for name, version in versions.items() if name not in conflicting]
+    return {'packages': packages, 'unreadable': unreadable, 'conflicting': sorted(conflicting)}
 
 
 def _padded(a: tuple, b: tuple) -> tuple[tuple, tuple]:
@@ -195,17 +211,20 @@ def advisory(vuln_id: str, package: str, version: str) -> dict:
 
 
 def _ids(element) -> list[str] | None:
-    """The vulnerability ids of one batch element, or None when the element
-    is not in OSV's format or is paged (not the whole answer)."""
-    if not isinstance(element, dict) or element.get('next_page_token'):
+    """The vulnerability ids of one batch element, or None when it is not one
+    of OSV's documented answers: {} (none known) or {"vulns": [{"id": ...}]}.
+    A page token - even an empty one - or a field OSV does not document is
+    not the whole answer (review pass 2)."""
+    if not isinstance(element, dict):
         return None
-    vulns = element.get('vulns', [])
-    if not isinstance(vulns, list):
+    if not element:
+        return []
+    if set(element) != {'vulns'} or not isinstance(element['vulns'], list):
         return None
-    ids = [v.get('id') if isinstance(v, dict) else None for v in vulns]
+    ids = [v.get('id') if isinstance(v, dict) else None for v in element['vulns']]
     if not all(isinstance(i, str) and _VULN_ID.fullmatch(i) for i in ids):
         return None
-    return ids
+    return list(dict.fromkeys(ids))
 
 
 def _osv_batch(packages: list[dict]) -> dict[str, list[str] | None] | None:
@@ -227,7 +246,18 @@ def vulnerabilities(packages: list[dict]) -> dict:
     """{'status': 'ok'|'error', 'matches': {name: [advisory]}, 'unanswered':
     [names with no answer, or not asked past MAX_PACKAGES], 'error',
     'checked': packages answered}."""
-    asked = packages[:MAX_PACKAGES]
+    # one answer per name: an exact repeat is asked once, a name with two
+    # versions is not asked - its answers would overwrite each other (review pass 2)
+    versions: dict[str, set] = {}
+    for p in packages:
+        versions.setdefault(p['name'], set()).add(p['version'])
+    mixed = sorted(name for name, seen in versions.items() if len(seen) > 1)
+    unique, seen_names = [], set(mixed)
+    for p in packages:
+        if p['name'] not in seen_names:
+            seen_names.add(p['name'])
+            unique.append(p)
+    asked = unique[:MAX_PACKAGES]
     answers = _osv_batch(asked) if asked else {}
     if answers is None:
         return {'status': 'error', 'matches': {}, 'unanswered': [p['name'] for p in packages], 'checked': 0,
@@ -250,7 +280,7 @@ def vulnerabilities(packages: list[dict]) -> dict:
                               'link': OSV_LINK.format(id=quote(vuln_id, safe='')),
                               'error': f'not read: more than {MAX_ADVISORIES} vulnerabilities'})
         matches[p['name']] = found
-    unanswered += [p['name'] for p in packages[MAX_PACKAGES:]]
+    unanswered += mixed + [p['name'] for p in unique[MAX_PACKAGES:]]
     return {'status': 'ok', 'matches': matches, 'unanswered': unanswered, 'error': None,
             'checked': len(matches)}
 

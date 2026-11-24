@@ -90,11 +90,16 @@ gets no security fixes.
   locked: the installed versions are used, a disagreement is "not
   checked", a lock alone is said to be locked versions. Read up to 4 MB (a
   real lock is larger than a page); larger → public, not read. A name or
-  version not in Composer's format is not used and is a gap. OSV's batch is
-  asked directly and read strictly (an element out of format or paged is
-  "no answer", a count that differs is no answer at all) — the SSH check's
-  `cve_audit.query_osv` and its cache stay as they are. A fix is named only
-  from the range the version is in (review pass 1).
+  version not in Composer's format is not used and is a gap (the name is
+  checked in linear time and bounded in length). A name listed with two
+  versions is not compared and is a gap; an exact repeat is one package; a
+  file with nothing to compare says so. The two files are said to agree
+  only for the packages both name, and only when both were read in full.
+  OSV's batch is asked directly and read strictly: only `{}` or
+  `{"vulns": [{"id": ...}]}` is an answer; any other shape, a page token or
+  a count that differs is no answer — the SSH check's `cve_audit.query_osv`
+  and its cache stay as they are. A fix is named only from the range the
+  version is in (review pass 1-2).
 - **The session cookie's flags** (Secure, HttpOnly, SameSite) and the
   shared HTTPS / redirect / certificate / header items.
 - GET only; no POST (`execute-solution` is never called).

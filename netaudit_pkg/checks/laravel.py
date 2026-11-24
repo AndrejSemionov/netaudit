@@ -62,7 +62,7 @@ TRANSPORT_IDS = {'no_https': 'LV-TLS-001', 'no_redirect': 'LV-TLS-002', 'cert': 
 
 _ENCRYPTED = 'eyJpdiI6'      # base64 of '{"iv":' - Laravel's EncryptCookies
 _ENV_KEY = re.compile(r'^[ \t]*(APP_KEY|DB_PASSWORD)[ \t]*=', re.MULTILINE)
-_DEBUGBAR = re.compile(r'<!-- Laravel Debugbar Widget -->|new PhpDebugBar\.\w*DebugBar\(')
+_DEBUGBAR = re.compile(r'<!-- Laravel Debugbar Widget -->|new PhpDebugBar\.\w{0,40}DebugBar\(')
 _TELESCOPE = re.compile(r'<title>\s*Telescope\b|<div id="telescope"', re.IGNORECASE)
 _HORIZON = re.compile(r'<title>\s*Horizon\b|<div id="horizon"', re.IGNORECASE)
 # Monolog's line format: [2026-11-23 10:00:00] production.ERROR: ...
@@ -210,8 +210,9 @@ def _is_laravel(home: Page, pages: dict, seen: dict) -> tuple[bool | None, str]:
     opened += ['Ignition'] if seen['ignition'] in ('true', 'false') else []
     opened += [name for name, key in (('Laravel Debugbar', 'debugbar'), ('Telescope', 'telescope'),
                                       ('Horizon', 'horizon'), (LOG_FILE, 'log')) if seen[key]]
-    packages = [p for inventory in (seen['lock'], seen['installed']) if inventory for p in inventory['packages']]
-    if any(p['name'] == 'laravel/framework' for p in packages):
+    inventories = [inventory for inventory in (seen['lock'], seen['installed']) if inventory]
+    if any(p['name'] == 'laravel/framework' for inventory in inventories for p in inventory['packages']) \
+            or any('laravel/framework' in inventory['conflicting'] for inventory in inventories):
         opened.append('a composer file with laravel/framework')
     if opened:
         return True, 'open: ' + ', '.join(opened)
@@ -344,24 +345,54 @@ def _entries(n: int) -> str:
     return f'{n} entry' if n == 1 else f'{n} entries'
 
 
+def _packages(n: int) -> str:
+    return f'{n} package' if n == 1 else f'{n} packages'
+
+
+def _gaps(inventory: dict, path: str) -> list[str]:
+    """What of one file was not compared: unreadable entries, a name with two versions."""
+    gaps = []
+    if inventory['unreadable']:
+        gaps.append(f"{_entries(inventory['unreadable'])} of {path} could not be read (not in Composer's format)")
+    if inventory['conflicting']:
+        gaps.append(f'two versions of one name in {path}, not compared: {", ".join(inventory["conflicting"][:10])}'
+                    + (f' and {len(inventory["conflicting"]) - 10} more' if len(inventory['conflicting']) > 10 else ''))
+    return gaps
+
+
 def _version_sources(seen: dict, too_big: list, source: str, checked: list) -> None:
-    """When both files are public: whether they agree (review pass 1)."""
-    if not (seen['lock'] and seen['installed']):
+    """When both files are public: whether they agree, said only for the
+    packages both name and only when both were read in full (review pass 1-2)."""
+    lock, installed = seen['lock'], seen['installed']
+    if not (lock and installed):
         return
     if too_big:
         checked.append({'item': 'version_sources', 'status': 'not_checked',
                         'detail': f'{", ".join(too_big)} too large to read: only {source} is used'})
         return
-    locked = {p['name']: p['version'] for p in seen['lock']['packages']}
-    differ = [f'{p["name"]} ({locked[p["name"]]} locked, {p["version"]} installed)'
-              for p in seen['installed']['packages'] if p['name'] in locked and locked[p['name']] != p['version']]
+    locked = {p['name']: p['version'] for p in lock['packages']}
+    used = {p['name']: p['version'] for p in installed['packages']}
+    common = [name for name in used if name in locked]
+    differ = [f'{name} ({locked[name]} locked, {used[name]} installed)' for name in common if locked[name] != used[name]]
+    partial = _gaps(lock, COMPOSER_LOCK) + _gaps(installed, INSTALLED)
+    only_lock, only_installed = len(set(locked) - set(used)), len(set(used) - set(locked))
+    scope = f'{_packages(len(common))} in both' + (f'; {only_lock} only in composer.lock' if only_lock else '') \
+        + (f'; {only_installed} only in installed.json' if only_installed else '')
     if differ:
         more = f' and {len(differ) - 10} more' if len(differ) > 10 else ''
+        detail = (f'composer.lock and installed.json disagree: {", ".join(differ[:10])}{more}; '
+                  'the installed versions are used')
         checked.append({'item': 'version_sources', 'status': 'not_checked',
-                        'detail': f'composer.lock and installed.json disagree: {", ".join(differ[:10])}{more}; '
-                                  'the installed versions are used'})
+                        'detail': '; '.join([detail, *partial])})
+    elif partial:
+        checked.append({'item': 'version_sources', 'status': 'not_checked',
+                        'detail': 'not compared in full: ' + '; '.join(partial)})
+    elif not common:
+        checked.append({'item': 'version_sources', 'status': 'not_checked',
+                        'detail': f'no package in both files to compare ({scope})'})
     else:
-        checked.append({'item': 'version_sources', 'status': 'ok', 'detail': 'composer.lock and installed.json agree'})
+        checked.append({'item': 'version_sources', 'status': 'ok',
+                        'detail': scope.replace(' in both', ' in both agree', 1)})
 
 
 def _check_versions(seen: dict, findings: list, checked: list) -> tuple[dict | None, dict | None, bool]:
@@ -384,14 +415,24 @@ def _check_versions(seen: dict, findings: list, checked: list) -> tuple[dict | N
     packages = inventory['packages']
     _version_sources(seen, too_big, source, checked)
     locked = ' (locked in composer.lock; what is installed is not visible)' if source == COMPOSER_LOCK else ''
-    unreadable = (f"{_entries(inventory['unreadable'])} of {source} could not be read (not in Composer's format)"
-                  if inventory['unreadable'] else '')
+    gaps = _gaps(inventory, source)
+    if not packages:
+        # nothing to compare is not "none known" (review pass 2)
+        why = '; '.join([f'no package with a readable version in {source}: nothing was compared', *gaps])
+        detail = (f'two versions of laravel/framework in {source}: not judged'
+                  if 'laravel/framework' in inventory['conflicting'] else why)
+        checked.append({'item': 'laravel_version', 'status': 'not_checked', 'detail': detail})
+        checked.append({'item': 'vulns', 'status': 'not_checked', 'detail': why})
+        return None, {'source': source, 'count': 0, 'vulnerable': []}, False
 
     framework = None
     core = next((p for p in packages if p['name'] == 'laravel/framework'), None)
-    if core is None:
+    if 'laravel/framework' in inventory['conflicting']:
         checked.append({'item': 'laravel_version', 'status': 'not_checked',
-                        'detail': f'laravel/framework is not in {source}' + (f'; {unreadable}' if unreadable else '')})
+                        'detail': f'two versions of laravel/framework in {source}: not judged'})
+    elif core is None:
+        checked.append({'item': 'laravel_version', 'status': 'not_checked',
+                        'detail': '; '.join([f'laravel/framework is not in {source}', *gaps])})
     else:
         support = laravel_data.support(core['version'])
         framework = {'version': core['version'], 'source': source, 'support': support}
@@ -415,8 +456,7 @@ def _check_versions(seen: dict, findings: list, checked: list) -> tuple[dict | N
     data = laravel_data.vulnerabilities(packages)
     listed = {'source': source, 'count': len(packages), 'vulnerable': []}
     if data['status'] != 'ok':
-        checked.append({'item': 'vulns', 'status': 'not_checked',
-                        'detail': data['error'] + (f'; {unreadable}' if unreadable else '')})
+        checked.append({'item': 'vulns', 'status': 'not_checked', 'detail': '; '.join([data['error'], *gaps])})
         return framework, listed, framework is not None
     found = 0
     for p in packages:
@@ -437,7 +477,6 @@ def _check_versions(seen: dict, findings: list, checked: list) -> tuple[dict | N
                                      id=subject_id('LV-VULN-001', p['name'], v['id']), recommendation=fix,
                                      extra={'link': v['link']} if v.get('link') else {}))
     unanswered = data['unanswered']
-    gaps = [unreadable] if unreadable else []
     if unanswered:
         more = f' and {len(unanswered) - 20} more' if len(unanswered) > 20 else ''
         gaps.append(f'no answer from OSV.dev for: {", ".join(unanswered[:20])}{more}')
