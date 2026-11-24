@@ -1,30 +1,36 @@
 """
 Laravel on the server, over SSH (docs/research/laravel_audit.md §5, contract
-L4): every Laravel project under /var/www, /home and /srv, reading files only
-- nothing is run in a project (no php, no artisan).
+L4, review #63 pass 1): every Laravel project under /var/www, /home and
+/srv, reading files only - nothing is run in a project (no php, no artisan).
 
 Two layers:
 - collect(): fixed commands, each path one argument (shlex), find / head /
-  grep / awk only, through sudo when it works and as the SSH user otherwise.
-  What leaves the server is limited on the server: of .env only the lines of
-  APP_DEBUG and APP_ENV (ENV_KEYS_PATTERN), of the cached config only
-  app.env and app.debug (CONFIG_AWK) - never APP_KEY or a password.
-- judge(): the verdicts from what was collected; a file that could not be
-  read is "not checked", never "fine".
+  awk only. Names, modes and owners (find) are listed through sudo when it
+  works. File *contents* are read with no more rights than the project's
+  owner: as the owner (plain, `sudo -u`, or `runuser` when connected as
+  root), or as the SSH user when the owner is root and sudo is not there -
+  and only along a path that the reader or root alone can change: a folder
+  another account may change, or a link read as root, is not followed. Of
+  .env and the cached config only normalized tokens leave the server
+  (ENV_AWK, CONFIG_AWK: `APP_DEBUG true`, `APP_ENV word:production`) -
+  never a line, APP_KEY or a password.
+- judge(): the verdicts from what was collected; a file that could not or
+  may not be read is "not checked", never "fine".
 
 Facts from the Laravel 12 source: with bootstrap/cache/config.php present,
 Laravel does not load .env at all (LoadEnvironmentVariables::bootstrap), so
 the cached values are the ones in effect; values in .env follow Env::get
-(true, (true), quotes) and PHP's bool cast for app.debug. Versions are read
-as by laravel_external (installed.json first, then composer.lock; OSV.dev and
-endoflife.date through laravel_data); cve_audit is not changed.
+(true, (true), quotes) and PHP's bool cast for app.debug, and a value set
+for the PHP process would win over .env - so .env alone does not confirm
+the configuration in effect. Versions are read as by laravel_external
+(installed.json first, then composer.lock; OSV.dev and endoflife.date
+through laravel_data); cve_audit is not changed.
 """
 
 from __future__ import annotations
 
 import json
 import posixpath
-import re
 import shlex
 import uuid
 from dataclasses import dataclass
@@ -44,26 +50,69 @@ except ImportError:  # pragma: no cover
 
 ROOTS = ('/var/www', '/home', '/srv')
 MAX_DEPTH = 6
-MAX_PROJECTS = 20
+MAX_CANDIDATES = 60        # folders with artisan examined
+MAX_PROJECTS = 20          # Laravel projects read in full
 MAX_COMPOSER_JSON = 256 * 1024
 MAX_INVENTORY = laravel.INVENTORY_MAX_BODY
 TIMEOUT = 60
 SERVER_IDS = {'eol': 'LV-SRV-005', 'vuln': 'LV-SRV-006'}
 LOCAL_ENVS = ('local', 'development')     # where Ignition and Telescope open up
+INNER_DIRS = ('vendor', 'vendor/composer', 'bootstrap', 'bootstrap/cache')
+FILES = ('composer.json', 'vendor/composer/installed.json', 'composer.lock', '.env', 'bootstrap/cache/config.php')
+DIRS = ('storage', 'bootstrap/cache')
+PROCESS_CAVEAT = 'a value set for the PHP process (php-fpm pool, systemd unit, container) would win over .env'
 
-# grep -E on the server: only the lines of these two keys leave it
-ENV_KEYS_PATTERN = r'^[[:space:]]*(export[[:space:]]+)?(APP_DEBUG|APP_ENV)[[:space:]]*='
-# awk on the server, over the var_export of `php artisan config:cache`: only
-# the 'env' and 'debug' keys of the top-level 'app' block are printed
-CONFIG_AWK = (
-    "/^  'app' =>[ ]*$/ { inapp = 1; next }\n"
-    "inapp && /^  '[^']*' =>/ { exit }\n"
-    "inapp && /^    '(env|debug)' => / { print }\n"
-)
-
-_ENV_LINE = re.compile(r'^\s*(?:export\s+)?(APP_DEBUG|APP_ENV)\s*=(.*)$')
-_CONFIG_LINE = re.compile(r"^    '(env|debug)' => (.*),$")
-_PLAIN = re.compile(r'[A-Za-z0-9_.-]{1,40}')
+# awk on the server over .env: for each APP_DEBUG / APP_ENV line, a token of
+# its value as Laravel's Env::get reads it - never the line itself
+ENV_AWK = r"""{
+  line = $0
+  sub(/^[ \t]+/, "", line)
+  sub(/^export[ \t]+/, "", line)
+  if (line ~ /^APP_DEBUG[ \t]*=/) key = "APP_DEBUG"
+  else if (line ~ /^APP_ENV[ \t]*=/) key = "APP_ENV"
+  else next
+  v = substr(line, index(line, "=") + 1)
+  sub(/^[ \t]+/, "", v)
+  q = substr(v, 1, 1)
+  if (q == "\"" || q == "'") {
+    v = substr(v, 2)
+    e = index(v, q)
+    if (e > 0) v = substr(v, 1, e - 1)
+  } else {
+    sub(/[ \t]+#.*$/, "", v)
+    if (substr(v, 1, 1) == "#") v = ""
+    sub(/[ \t]+$/, "", v)
+  }
+  l = tolower(v)
+  if (l == "true" || l == "(true)") t = "true"
+  else if (l == "false" || l == "(false)") t = "false"
+  else if (l == "empty" || l == "(empty)" || v == "") t = "empty"
+  else if (l == "null" || l == "(null)") t = "null"
+  else if (key == "APP_DEBUG") t = (v == "0") ? "zero" : "set"
+  else if (length(v) <= 40 && v ~ /^[A-Za-z0-9_.-]+$/) t = "word:" v
+  else t = "other"
+  print key " " t
+}
+"""
+# awk on the server over the var_export of `php artisan config:cache`: tokens
+# of the 'env' and 'debug' keys of the top-level 'app' block only
+CONFIG_AWK = r"""/^  'app' =>[ ]*$/ { inapp = 1; next }
+inapp && /^  '[^']*' =>/ { exit }
+inapp && /^    'debug' => / {
+  v = $0
+  sub(/^    'debug' => /, "", v)
+  sub(/,$/, "", v)
+  print "APP_DEBUG " (v == "true" ? "true" : v == "false" ? "false" : v == "NULL" ? "null" : "other")
+}
+inapp && /^    'env' => / {
+  v = $0
+  sub(/^    'env' => /, "", v)
+  sub(/,$/, "", v)
+  if (v == "NULL") print "APP_ENV null"
+  else if (length(v) <= 42 && v ~ /^'[A-Za-z0-9_.-]+'$/) print "APP_ENV word:" substr(v, 2, length(v) - 2)
+  else print "APP_ENV other"
+}
+"""
 
 
 class _Sentinel:
@@ -76,67 +125,35 @@ class _Sentinel:
 
 MISSING = _Sentinel('MISSING')        # the key is not set
 AMBIGUOUS = _Sentinel('AMBIGUOUS')    # set twice with different values
+OTHER = _Sentinel('OTHER')            # APP_ENV that is not a plain word: not shown
+_SET = 'set'                          # APP_DEBUG with another non-empty value: true for PHP
+
+_TOKENS = {'true': True, 'false': False, 'empty': '', 'null': None, 'zero': '0', 'set': _SET, 'other': OTHER}
 
 
 # =============================================================================
 # values
 # =============================================================================
 
-def _env_value(raw: str):
-    """A value as Laravel's Env::get gives it: quotes removed, an inline
-    comment of an unquoted value dropped, true/false/empty/null mapped."""
-    value = raw.strip()
-    if value[:1] in ('"', "'"):
-        end = value.find(value[0], 1)
-        value = value[1:end] if end > 0 else value[1:]
-    else:
-        value = re.split(r'\s+#', value, maxsplit=1)[0].strip()
-        if value.startswith('#'):
-            value = ''
-    lowered = value.lower()
-    if lowered in ('true', '(true)'):
-        return True
-    if lowered in ('false', '(false)'):
-        return False
-    if lowered in ('empty', '(empty)'):
-        return ''
-    if lowered in ('null', '(null)'):
-        return None
-    return value
-
-
-def _put(values: dict, key: str, value) -> None:
-    if values[key] is MISSING:
-        values[key] = value
-    elif values[key] is not AMBIGUOUS and values[key] != value:
-        values[key] = AMBIGUOUS
-
-
-def parse_env_lines(text: str) -> dict:
+def parse_tokens(text: str) -> dict:
+    """{'APP_DEBUG': value, 'APP_ENV': value} from the server's tokens; a
+    key given twice with two values is AMBIGUOUS, a line not in the token
+    format is ignored."""
     values = {'APP_DEBUG': MISSING, 'APP_ENV': MISSING}
     for line in text.splitlines():
-        m = _ENV_LINE.match(line)
-        if m:
-            _put(values, m.group(1), _env_value(m.group(2)))
-    return values
-
-
-def parse_config_lines(text: str) -> dict:
-    values = {'APP_DEBUG': MISSING, 'APP_ENV': MISSING}
-    for line in text.splitlines():
-        m = _CONFIG_LINE.match(line)
-        if not m:
+        key, _, token = line.strip().partition(' ')
+        if key not in values:
             continue
-        raw = m.group(2)
-        if raw in ('true', 'false'):
-            value = raw == 'true'
-        elif raw == 'NULL':
-            value = None
-        elif len(raw) >= 2 and raw[0] == raw[-1] == "'":
-            value = raw[1:-1].replace("\\'", "'").replace('\\\\', '\\')
+        if token.startswith('word:') and key == 'APP_ENV':
+            value = token[5:]
+        elif token in _TOKENS:
+            value = _TOKENS[token]
         else:
-            value = raw
-        _put(values, 'APP_ENV' if m.group(1) == 'env' else 'APP_DEBUG', value)
+            continue
+        if values[key] is MISSING:
+            values[key] = value
+        elif values[key] is not AMBIGUOUS and values[key] != value:
+            values[key] = AMBIGUOUS
     return values
 
 
@@ -146,12 +163,11 @@ def debug_on(value) -> bool:
         return value
     if value is None or value is MISSING:
         return False
-    return str(value) not in ('', '0')
+    return value not in ('', '0')
 
 
 def _shown(value) -> str:
-    """APP_ENV as shown in the report: a plain word, or not shown."""
-    return value if isinstance(value, str) and _PLAIN.fullmatch(value) else 'another value (not shown)'
+    return value if isinstance(value, str) and value not in ('', _SET) else 'another value (not shown)'
 
 
 # =============================================================================
@@ -166,23 +182,67 @@ class _Run:
     err: str
 
 
-def _exec(ssh, argv: list[str], sudo: bool, timeout: int = TIMEOUT):
-    """argv through sudo (run_sudo_with_exit_code) or as the SSH user; every
-    element is one argument (shlex.join), never shell syntax."""
-    if sudo:
-        r = run_sudo_with_exit_code(ssh, argv, timeout=timeout)
-        return _Run(r.completed, r.exit_code, r.stdout, r.stderr), r
+def _wrap(ssh, command: str, timeout: int, stdin_data: str | None = None) -> _Run:
     marker = f'__NETAUDIT_RC_{uuid.uuid4().hex}__'
-    wrapped = f"{{ {shlex.join(argv)}; rc=$?; printf '\\n%s:%s\\n' '{marker}' \"$rc\"; }}"
-    out, err = ssh.run(wrapped, timeout=timeout)
+    wrapped = f"{{ {command}; rc=$?; printf '\\n%s:%s\\n' '{marker}' \"$rc\"; }}"
+    if stdin_data is None:
+        out, err = ssh.run(wrapped, timeout=timeout)
+    else:
+        out, err = ssh.run(wrapped, timeout=timeout, stdin_data=stdin_data)
     if marker not in out:
-        return _Run(False, None, out, err), None
+        return _Run(False, None, out, err)
     body, _, tail = out.rpartition(marker)
     try:
         rc = int(tail.lstrip(':').strip())
     except ValueError:
-        return _Run(False, None, body, err), None
-    return _Run(True, rc, body.removesuffix('\n'), err), None
+        return _Run(False, None, body, err)
+    return _Run(True, rc, body.removesuffix('\n'), err)
+
+
+def _exec(ssh, argv: list[str], sudo: bool, timeout: int = TIMEOUT):
+    """argv as root through sudo (run_sudo_with_exit_code) or as the SSH
+    user; every element is one argument (shlex.join), never shell syntax."""
+    if sudo:
+        r = run_sudo_with_exit_code(ssh, argv, timeout=timeout)
+        return _Run(r.completed, r.exit_code, r.stdout, r.stderr), r
+    return _wrap(ssh, shlex.join(argv), timeout), None
+
+
+@dataclass
+class _Reader:
+    """How a project's contents are read: as `user`, by `via`
+    ('plain' | 'sudo' (as root) | 'sudo-u' | 'runuser'), or not at all."""
+    user: str
+    via: str | None
+    reason: str | None = None
+
+
+def _reader(me: str, owner: str, sudo: bool) -> _Reader:
+    if owner == me:
+        return _Reader(me, 'plain')
+    if me == 'root':
+        return _Reader(owner, 'runuser')
+    if owner == 'root':
+        # as the SSH user, who has fewer rights than root, when sudo is not there
+        return _Reader('root', 'sudo') if sudo else _Reader(me, 'plain')
+    if sudo:
+        return _Reader(owner, 'sudo-u')
+    return _Reader(owner, None, f'contents are read as the project\'s owner ({owner}), and the SSH user '
+                                f'cannot act as {owner}')
+
+
+def _as(ssh, argv: list[str], reader: _Reader) -> _Run:
+    if reader.via == 'plain':
+        return _wrap(ssh, shlex.join(argv), TIMEOUT)
+    if reader.via == 'sudo':
+        return _exec(ssh, argv, True)[0]
+    if reader.via == 'runuser':
+        return _wrap(ssh, shlex.join(['runuser', '-u', reader.user, '--', *argv]), TIMEOUT)
+    secret = getattr(ssh, 'sudo_password', None) or getattr(ssh, 'password', '')
+    user = f'#{reader.user}' if reader.user.isdigit() else reader.user
+    if secret:
+        return _wrap(ssh, f"sudo -S -p '' -u {shlex.quote(user)} -- {shlex.join(argv)}", TIMEOUT, secret + '\n')
+    return _wrap(ssh, f'sudo -n -u {shlex.quote(user)} -- {shlex.join(argv)}', TIMEOUT)
 
 
 def _search_argv() -> list[str]:
@@ -225,9 +285,9 @@ def _parse_search(run: _Run) -> dict:
 
 
 def select_projects(dirs: list[str], links: dict) -> tuple[list[str], dict]:
-    """The project folders to check: of a zero-downtime deploy (releases/<n>
-    next to a `current` symlink) only the release `current` points to; at
-    most MAX_PROJECTS."""
+    """The folders to examine: of a zero-downtime deploy (releases/<n> next
+    to a `current` symlink) only the release `current` points to; at most
+    MAX_CANDIDATES."""
     current: dict[str, set] = {}
     for link, target in links.items():
         site = posixpath.dirname(link)
@@ -242,25 +302,119 @@ def select_projects(dirs: list[str], links: dict) -> tuple[list[str], dict]:
                 old += 1
                 continue
         selected.append(folder)
-    return selected[:MAX_PROJECTS], {'old_releases': old, 'over_limit': max(0, len(selected) - MAX_PROJECTS)}
+    return selected[:MAX_CANDIDATES], {'old_releases': old,
+                                       'candidates_over': max(0, len(selected) - MAX_CANDIDATES)}
 
 
-def _read_status(run: _Run) -> tuple[str, str | None]:
-    if not run.completed:
-        return 'error', 'no answer'
-    first = next((line.strip() for line in run.err.splitlines() if line.strip()), '')
+def _first_error(run: _Run) -> str:
+    return next((line.strip() for line in run.err.splitlines() if line.strip()), '') or (
+        f'exit code {run.rc}' if run.completed else 'no answer')
+
+
+def _status(run: _Run) -> tuple[str, str | None]:
+    first = _first_error(run)
     if 'No such file or directory' in first:
         return 'missing', None
     if 'Permission denied' in first:
         return 'denied', 'Permission denied'
-    return 'error', first or f'exit code {run.rc}'
+    return 'error', first
 
 
-def _read(ssh, path: str, limit: int, sudo: bool) -> dict:
-    run, _ = _exec(ssh, ['head', '-c', str(limit + 1), path], sudo)
-    if run.completed and run.rc == 0:
-        return {'status': 'ok', 'text': run.out[:limit], 'truncated': len(run.out) > limit, 'reason': None}
-    status, reason = _read_status(run)
+def _meta(ssh, paths: list[str], follow: bool, sudo: bool) -> dict:
+    """path -> {'owner', 'group', 'mode', 'type'}; a path find could not
+    stat is absent, with its reason in the result's 'errors'."""
+    run, _ = _exec(ssh, ['find', '-L' if follow else '-P', *paths, '-maxdepth', '0',
+                         '-printf', '%p\\t%u\\t%g\\t%m\\t%y\\0'], sudo)
+    entries, errors = {}, {}
+    for record in run.out.split('\0'):
+        fields = record.split('\t')
+        if len(fields) == 5 and fields[0] in paths:
+            try:
+                entries[fields[0]] = {'owner': fields[1], 'group': fields[2], 'mode': int(fields[3], 8),
+                                      'type': fields[4]}
+            except ValueError:
+                errors[fields[0]] = 'unexpected answer'
+    for line in run.err.splitlines():
+        for path in paths:
+            if f"'{path}'" in line and 'No such file or directory' not in line:
+                errors[path] = 'Permission denied' if 'Permission denied' in line else line.strip()
+    if not run.completed:
+        errors = {path: 'no answer' for path in paths if path not in entries}
+    return {'entries': entries, 'errors': errors}
+
+
+def _ancestors(path: str) -> list[str]:
+    out, current = [], path
+    while True:
+        out.append(current)
+        if current == '/':
+            return out[::-1]
+        current = posixpath.dirname(current)
+
+
+def _untrusted(chain: dict, folder_path: str, reader: str) -> str | None:
+    """Why a file in folder_path may not be read as `reader`: a folder on the
+    way that another account may change, or that is a link. None when only
+    the reader and root can change the way to it."""
+    for d in _ancestors(folder_path):
+        m = chain['entries'].get(d)
+        if m is None:
+            return f'{d} could not be checked ({chain["errors"].get(d, "no answer")})'
+        if m['type'] == 'l':
+            return f'{d} is a symbolic link'
+        if m['type'] != 'd':
+            return f'{d} is not a folder'
+        if m['owner'] not in (reader, 'root'):
+            return f'{d} belongs to {m["owner"]}'
+        if m['mode'] & 0o020 and m['group'] not in (reader, 'root'):
+            return f'{d} can be changed by the group {m["group"]}'
+        if m['mode'] & 0o002 and not m['mode'] & 0o1000:
+            return f'{d} can be changed by everyone'
+    return None
+
+
+def _skipped(reason: str) -> dict:
+    return {'status': 'skipped', 'text': '', 'truncated': False, 'reason': reason}
+
+
+def _content(ssh, folder: str, rel: str, reader: _Reader, chain: dict, files: dict, argv_for) -> dict:
+    """One file of the project, read as `reader` only when it is a regular
+    file on a path that only the reader or root can change."""
+    path = f'{folder}/{rel}'
+    if reader.via is None:
+        return _skipped(reader.reason)
+    target = files['entries'].get(path)
+    if target is None:
+        reason = files['errors'].get(path)
+        return _skipped(reason) if reason else {'status': 'missing', 'text': '', 'truncated': False, 'reason': None}
+    if target['type'] != 'f':
+        return _skipped(f'{rel} is not a regular file')
+    why = _untrusted(chain, posixpath.dirname(path), reader.user)
+    if why:
+        return _skipped(f'{why}: {rel} is not read as {reader.user}')
+    if reader.user == 'root' and chain['entries'].get(path, {}).get('type') == 'l':
+        return _skipped(f'{rel} is a symbolic link: not followed as root')
+    run = _as(ssh, argv_for(path), reader)
+    return run
+
+
+def _read(ssh, folder, rel, limit, reader, chain, files) -> dict:
+    result = _content(ssh, folder, rel, reader, chain, files, lambda path: ['head', '-c', str(limit + 1), path])
+    if isinstance(result, dict):
+        return result
+    if result.completed and result.rc == 0:
+        return {'status': 'ok', 'text': result.out[:limit], 'truncated': len(result.out) > limit, 'reason': None}
+    status, reason = _status(result)
+    return {'status': status, 'text': '', 'truncated': False, 'reason': reason}
+
+
+def _tokens(ssh, folder, rel, program, reader, chain, files) -> dict:
+    result = _content(ssh, folder, rel, reader, chain, files, lambda path: ['awk', program, path])
+    if isinstance(result, dict):
+        return result
+    if result.completed and result.rc == 0:
+        return {'status': 'ok', 'text': result.out, 'truncated': False, 'reason': None}
+    status, reason = _status(result)
     return {'status': status, 'text': '', 'truncated': False, 'reason': reason}
 
 
@@ -276,56 +430,34 @@ def _env_files(ssh, folder: str, sudo: bool) -> dict:
             except ValueError:
                 continue
             files.append({'name': fields[0], 'mode': mode, 'owner': fields[2], 'group': fields[3], 'type': fields[4]})
-    if not run.completed or (run.rc != 0 and not files):
-        status, reason = _read_status(run)
-        return {'status': 'error', 'files': [], 'reason': reason or status}
-    return {'status': 'ok', 'files': files, 'reason': None}
+    if run.completed and run.rc == 0:
+        return {'status': 'ok', 'files': files, 'reason': None}
+    # a listing with an error is not the whole list (review #63 pass 1)
+    return {'status': 'partial' if files else 'error', 'files': files, 'reason': _first_error(run)}
 
 
-DIRS = ('storage', 'bootstrap/cache', 'bootstrap/cache/config.php')
-
-
-def _dirs(ssh, folder: str, sudo: bool) -> dict:
-    run, _ = _exec(ssh, ['find', *(f'{folder}/{name}' for name in DIRS), '-maxdepth', '0',
-                         '-printf', '%p\\t%m\\t%y\\0'], sudo)
-    if not run.completed:
-        return {'status': 'error', 'reason': 'no answer', 'entries': {}, 'errors': {}}
-    entries, errors = {}, {}
-    for record in run.out.split('\0'):
-        path, _, rest = record.partition('\t')
-        mode, _, kind = rest.partition('\t')
-        name = path.removeprefix(f'{folder}/')
-        if name in DIRS:
-            try:
-                entries[name] = {'mode': int(mode, 8), 'type': kind}
-            except ValueError:
-                errors[name] = 'unexpected answer'
-    for line in run.err.splitlines():
-        for name in DIRS:
-            if f"'{folder}/{name}'" in line and 'No such file or directory' not in line:
-                errors[name] = 'Permission denied' if 'Permission denied' in line else line.strip()
-    return {'status': 'ok', 'reason': None, 'entries': entries, 'errors': errors}
-
-
-def _lines(ssh, argv: list[str], sudo: bool) -> dict:
-    """grep / awk: 0 found, 1 nothing found (grep), 2 the file could not be read."""
-    run, _ = _exec(ssh, argv, sudo)
-    if run.completed and run.rc in (0, 1) and (run.rc == 0 or argv[0] == 'grep'):
-        return {'status': 'ok', 'text': run.out, 'truncated': False, 'reason': None}
-    status, reason = _read_status(run)
-    return {'status': status, 'text': '', 'truncated': False, 'reason': reason}
-
-
-def _requires_laravel(read: dict) -> bool:
+def manifest(read: dict) -> tuple[str, str | None]:
+    """('laravel' | 'not_laravel' | 'gap', why): a composer.json that could
+    not be read whole, or is not a manifest, is a gap - never 'not_laravel'."""
+    if read['status'] != 'ok':
+        return 'gap', f'composer.json could not be read: {read["reason"] or read["status"]}'
+    if read['truncated']:
+        return 'gap', 'composer.json is too large to read'
     try:
         data = json.loads(read['text'])
     except ValueError:
-        return False
-    return isinstance(data, dict) and isinstance(data.get('require'), dict) and 'laravel/framework' in data['require']
+        return 'gap', 'composer.json is not valid JSON'
+    if not isinstance(data, dict):
+        return 'gap', 'composer.json is not a JSON object'
+    require = data.get('require', {})
+    if not isinstance(require, dict):
+        return 'gap', 'the require of composer.json is not an object'
+    return ('laravel', None) if 'laravel/framework' in require else ('not_laravel', None)
 
 
 def collect(ssh) -> dict:
-    sudo, note = getattr(ssh, 'user', '') != 'root', None
+    me = getattr(ssh, 'user', '')
+    sudo, note = me != 'root', None
     if sudo:
         run, result = _exec(ssh, _search_argv(), True)
         if result is not None and result.sudo_error:
@@ -337,25 +469,40 @@ def collect(ssh) -> dict:
     else:
         run, _ = _exec(ssh, _search_argv(), False)
     discovery = _parse_search(run)
-    selected, skipped = select_projects(discovery['dirs'], discovery['links'])
+    candidates, skipped = select_projects(discovery['dirs'], discovery['links'])
+    skipped['over_limit'] = 0
 
-    projects = {}
-    for folder in selected:
-        composer = _read(ssh, f'{folder}/composer.json', MAX_COMPOSER_JSON, sudo)
-        project = {'composer_json': composer}
+    projects, laravel_projects = {}, 0
+    for folder in candidates:
+        paths = sorted({*_ancestors(folder), *(f'{folder}/{d}' for d in INNER_DIRS),
+                        *(f'{folder}/{f}' for f in FILES)})
+        chain = _meta(ssh, paths, False, sudo)
+        files = _meta(ssh, [f'{folder}/{f}' for f in (*FILES, *DIRS)], True, sudo)
+        owner = chain['entries'].get(folder, {}).get('owner')
+        reader = _reader(me, owner, sudo) if owner else _Reader('', None, 'the project folder could not be checked')
+        composer = _read(ssh, folder, 'composer.json', MAX_COMPOSER_JSON, reader, chain, files)
+        project = {'owner': owner, 'reader': {'user': reader.user, 'via': reader.via}, 'composer_json': composer}
+        kind, _ = manifest(composer)
+        if kind == 'laravel':
+            laravel_projects += 1
+            if laravel_projects > MAX_PROJECTS:
+                skipped['over_limit'] += 1
+                continue
         projects[folder] = project
-        if composer['status'] != 'ok' or not _requires_laravel(composer):
+        if kind != 'laravel':
             continue
-        project['installed'] = _read(ssh, f'{folder}/vendor/composer/installed.json', MAX_INVENTORY, sudo)
-        project['lock'] = _read(ssh, f'{folder}/composer.lock', MAX_INVENTORY, sudo)
+        project['installed'] = _read(ssh, folder, 'vendor/composer/installed.json', MAX_INVENTORY, reader, chain, files)
+        project['lock'] = _read(ssh, folder, 'composer.lock', MAX_INVENTORY, reader, chain, files)
         project['env_files'] = _env_files(ssh, folder, sudo)
-        project['dirs'] = _dirs(ssh, folder, sudo)
-        project['env_lines'] = _lines(ssh, ['grep', '-E', ENV_KEYS_PATTERN, f'{folder}/.env'], sudo)
-        cache = project['dirs']
-        if 'bootstrap/cache/config.php' in cache['entries']:
-            project['config_lines'] = _lines(ssh, ['awk', CONFIG_AWK, f'{folder}/bootstrap/cache/config.php'], sudo)
-        else:
-            project['config_lines'] = None
+        entries = {rel: {'mode': files['entries'][f'{folder}/{rel}']['mode'],
+                         'type': files['entries'][f'{folder}/{rel}']['type']}
+                   for rel in (*DIRS, 'bootstrap/cache/config.php') if f'{folder}/{rel}' in files['entries']}
+        errors = {rel: files['errors'][f'{folder}/{rel}']
+                  for rel in (*DIRS, 'bootstrap/cache/config.php') if f'{folder}/{rel}' in files['errors']}
+        project['dirs'] = {'status': 'ok', 'reason': None, 'entries': entries, 'errors': errors}
+        project['env_tokens'] = _tokens(ssh, folder, '.env', ENV_AWK, reader, chain, files)
+        project['config_tokens'] = (_tokens(ssh, folder, 'bootstrap/cache/config.php', CONFIG_AWK, reader, chain,
+                                            files) if 'bootstrap/cache/config.php' in entries else None)
     return {'sudo': sudo, 'sudo_note': note, 'discovery': discovery, 'skipped': skipped, 'projects': projects}
 
 
@@ -377,7 +524,7 @@ def _inventory(read: dict, name: str) -> tuple[dict | None, str | None]:
 
 
 def _judge_env_files(path: str, env: dict, findings: list, add) -> None:
-    if env['status'] != 'ok':
+    if env['status'] == 'error':
         add('env_files', 'not_checked', f'the .env files could not be listed: {env["reason"]}')
         return
     judged = [f for f in env['files'] if f['name'] != '.env.example' and f['type'] == 'f']
@@ -390,8 +537,14 @@ def _judge_env_files(path: str, env: dict, findings: list, add) -> None:
                                  recommendation='Make it readable by its owner and the web server only: '
                                                 'mode 640, owned by the deploy user, group the web server.'))
     listed = ', '.join(f'{f["name"]} {f["mode"]:o}' for f in judged)
+    partial = env['status'] == 'partial'
     if open_:
         add('env_files', 'problem', 'readable by everyone: ' + ', '.join(f'{f["name"]} {f["mode"]:o}' for f in open_))
+        if partial:
+            add('read_gaps', 'not_checked', f'not every .env file could be listed: {env["reason"]}')
+    elif partial:
+        add('env_files', 'not_checked', f'{listed or "none"} seen, but not every .env file could be listed: '
+                                        f'{env["reason"]}')
     else:
         add('env_files', 'ok', listed or 'no .env file in the project folder')
 
@@ -399,22 +552,26 @@ def _judge_env_files(path: str, env: dict, findings: list, add) -> None:
 def _values(project: dict) -> tuple[dict | None, str, str | None]:
     """(values, where they were read, why they could not be)."""
     dirs = project['dirs']
-    if dirs['status'] != 'ok' or 'bootstrap/cache/config.php' in dirs.get('errors', {}):
-        reason = dirs.get('reason') or dirs.get('errors', {}).get('bootstrap/cache/config.php')
+    errors = dirs.get('errors', {})
+    if dirs['status'] != 'ok' or 'bootstrap/cache/config.php' in errors:
+        reason = dirs.get('reason') or errors.get('bootstrap/cache/config.php')
         return None, '', f'could not tell whether the config is cached: {reason}'
-    if 'bootstrap/cache/config.php' in dirs['entries']:
-        lines = project['config_lines']
+    config = dirs['entries'].get('bootstrap/cache/config.php')
+    if config is not None:
         source = 'cached config (bootstrap/cache/config.php; .env is not read)'
-        if lines is None or lines['status'] != 'ok':
-            return None, source, f'the cached config could not be read: {(lines or {}).get("reason") or "no answer"}'
-        return parse_config_lines(lines['text']), source, None
-    lines = project['env_lines']
-    if lines['status'] == 'missing':
+        tokens = project['config_tokens']
+        if config['type'] != 'f':
+            return None, source, 'bootstrap/cache/config.php is not a regular file'
+        if tokens is None or tokens['status'] != 'ok':
+            return None, source, f'the cached config could not be read: {(tokens or {}).get("reason") or "no answer"}'
+        return parse_tokens(tokens['text']), source, None
+    tokens = project['env_tokens']
+    if tokens['status'] == 'missing':
         return None, '.env', ('no .env file and no cached config: the values may come from the server\'s '
                               'environment, not visible here')
-    if lines['status'] != 'ok':
-        return None, '.env', f'.env could not be read: {lines["reason"] or lines["status"]}'
-    return parse_env_lines(lines['text']), '.env', None
+    if tokens['status'] != 'ok':
+        return None, '.env', f'.env could not be read: {tokens["reason"] or tokens["status"]}'
+    return parse_tokens(tokens['text']), '.env', None
 
 
 def _judge_values(path: str, project: dict, findings: list, add) -> dict:
@@ -424,7 +581,7 @@ def _judge_values(path: str, project: dict, findings: list, add) -> dict:
         add('app_env', 'not_checked', why)
         return {'debug': None, 'env': None, 'source': None}
     cached = source != '.env'
-    caveat = '' if cached else ' (a value set for the PHP process would win over .env)'
+    where = source if cached else f'.env; {PROCESS_CAVEAT}'
     debug, env = values['APP_DEBUG'], values['APP_ENV']
     app = {'debug': None, 'env': None, 'source': 'cached config' if cached else '.env'}
 
@@ -434,18 +591,18 @@ def _judge_values(path: str, project: dict, findings: list, add) -> dict:
         add('app_debug', 'not_checked', 'the cached config has no app.debug')
     elif debug is MISSING:
         app['debug'] = False
-        add('app_debug', 'ok', 'not set in .env: off by default')
+        add('app_debug', 'ok', f'not set in .env: off by default ({PROCESS_CAVEAT})')
     elif debug_on(debug):
         app['debug'] = True
         findings.append(_finding('high', f'{path}: debug mode is on (APP_DEBUG)',
-                                 f'on in the {source}: an error page shows code, queries and settings to '
-                                 f'anyone{caveat}', id=subject_id('LV-SRV-002', path),
+                                 f'on in the {where}: an error page shows code, queries and settings to anyone',
+                                 id=subject_id('LV-SRV-002', path),
                                  recommendation='Set APP_DEBUG=false; if the config is cached, cache it again '
                                                 '(php artisan config:cache).'))
-        add('app_debug', 'problem', f'on ({source})')
+        add('app_debug', 'problem', f'on ({where})')
     else:
         app['debug'] = False
-        add('app_debug', 'ok', f'off ({source})')
+        add('app_debug', 'ok', f'off ({where})')
 
     if env is AMBIGUOUS:
         add('app_env', 'not_checked', f'APP_ENV is set twice with different values in {source}')
@@ -457,12 +614,21 @@ def _judge_values(path: str, project: dict, findings: list, add) -> dict:
         app['env'] = shown
         if isinstance(name, str) and name.lower() in LOCAL_ENVS:
             findings.append(_finding('medium', f'{path}: APP_ENV is {shown}',
-                                     f'in the {source}: Ignition, Telescope and Horizon open up in this '
-                                     f'environment{caveat}', id=subject_id('LV-SRV-003', path),
+                                     f'in the {where}: Ignition, Telescope and Horizon open up in this environment',
+                                     id=subject_id('LV-SRV-003', path),
                                      recommendation='Set APP_ENV=production on a live server.'))
-            add('app_env', 'problem', f'{shown} ({source})')
+            add('app_env', 'problem', f'{shown} ({where})')
         else:
-            add('app_env', 'ok', f'{shown} ({source})' + (' - not set, the default' if env is MISSING else ''))
+            unset = ' - not set, the default' if env is MISSING else ''
+            add('app_env', 'ok', f'{shown}{unset} ({where})')
+
+    # only a cached config is the configuration in effect (review #63 pass 1)
+    if cached:
+        add('effective_config', 'ok', 'the cached config is what Laravel uses: it does not read .env then')
+    else:
+        add('effective_config', 'not_checked', f'values read from .env; {PROCESS_CAVEAT}, and so would a '
+                                               '.env.<APP_ENV> the environment chooses: the configuration in '
+                                               'effect is not confirmed')
     return app
 
 
@@ -471,10 +637,13 @@ def _judge_dirs(path: str, dirs: dict, findings: list, add) -> None:
         add('writable_dirs', 'not_checked', f'could not be read: {dirs["reason"]}')
         return
     open_, gaps, fine = [], [], []
-    for name in ('storage', 'bootstrap/cache'):
+    for name in DIRS:
         entry = dirs['entries'].get(name)
         if entry is None:
             gaps.append(f'{name}: {dirs.get("errors", {}).get(name) or "not found"}')
+        elif entry['type'] != 'd':
+            # the mode is the target's (find -L); a link to a file is no writable folder (review #63 pass 1)
+            gaps.append(f'{name}: not a directory')
         elif entry['mode'] & 0o002:
             open_.append(name)
             findings.append(_finding('medium', f'{path}/{name} can be written by every user on the server',
@@ -486,6 +655,8 @@ def _judge_dirs(path: str, dirs: dict, findings: list, add) -> None:
             fine.append(f'{name} {entry["mode"]:o}')
     if open_:
         add('writable_dirs', 'problem', 'writable by everyone: ' + ', '.join(open_))
+        if gaps:
+            add('read_gaps', 'not_checked', '; '.join(gaps))
     elif gaps:
         add('writable_dirs', 'not_checked', '; '.join(gaps))
     else:
@@ -510,14 +681,14 @@ def _judge_versions(path: str, project: dict, findings: list, checked: list) -> 
 def judge(raw: dict, host: str) -> dict:
     findings: list = []
     checked: list = []
-    discovery, skipped = raw['discovery'], dict(raw['skipped'])
+    discovery = raw['discovery']
+    skipped = {'old_releases': 0, 'over_limit': 0, 'candidates_over': 0, **raw['skipped'], 'not_laravel': 0}
     projects, gaps = [], []
-    skipped['not_laravel'] = 0
     for path, project in raw['projects'].items():
-        composer = project['composer_json']
-        if composer['status'] != 'ok':
-            gaps.append(f'{path}/composer.json could not be read: {composer["reason"] or composer["status"]}')
-        elif not _requires_laravel(composer):
+        kind, why = manifest(project['composer_json'])
+        if kind == 'gap':
+            gaps.append(f'{path}: {why}')
+        elif kind == 'not_laravel':
             skipped['not_laravel'] += 1
         else:
             projects.append((path, project))
@@ -526,7 +697,10 @@ def judge(raw: dict, host: str) -> dict:
     if discovery['partial']:
         gaps.insert(0, f'the search was partial: {discovery["partial"]}')
     if skipped['over_limit']:
-        gaps.append(f'{skipped["over_limit"]} more project folder(s) past the limit of {MAX_PROJECTS} not checked')
+        gaps.append(f'{skipped["over_limit"]} more Laravel project(s) past the limit of {MAX_PROJECTS} not checked')
+    if skipped['candidates_over']:
+        gaps.append(f'{skipped["candidates_over"]} more folder(s) with artisan past the limit of {MAX_CANDIDATES} '
+                    'not examined')
 
     found = f'{len(projects)} Laravel project(s) under {", ".join(ROOTS)} (depth {MAX_DEPTH})'
     notes = [found]
@@ -560,7 +734,8 @@ def judge(raw: dict, host: str) -> dict:
         _judge_dirs(path, project['dirs'], findings, add)
         framework, packages, used = _judge_versions(path, project, findings, checked)
         data_used = data_used or used
-        out.append({'path': path, 'framework': framework, 'packages': packages, 'app': app})
+        out.append({'path': path, 'owner': project.get('owner'), 'framework': framework, 'packages': packages,
+                    'app': app})
 
     verdict = webprobe.verdict(findings, checked)
     if verdict == 'ok':
@@ -588,10 +763,10 @@ def audit_laravel_server(ssh, host: str) -> dict:
     ],
     required_tools=[],
     description='Finds every Laravel project on the server (/var/www, /home, /srv) and checks it by reading '
-                'files only: who can read .env, APP_DEBUG and APP_ENV (from the cached config when there is '
-                'one), storage and bootstrap/cache writable by all, whether the Laravel release still gets '
-                'security fixes and the known vulnerabilities of its packages. Never reads APP_KEY or passwords, '
-                'runs nothing in the project.',
+                'files only, with no more rights than the project\'s owner: who can read .env, APP_DEBUG and '
+                'APP_ENV (from the cached config when there is one), storage and bootstrap/cache writable by '
+                'all, whether the Laravel release still gets security fixes and the known vulnerabilities of '
+                'its packages. Never reads APP_KEY or passwords, runs nothing in the project.',
 )
 def check_laravel_server(host='', user='root', port=22, key_path='', password='', sudo_password='') -> dict:  # nosec B107 - empty default is a CLI/API parameter, not a hardcoded credential
     if paramiko is None:

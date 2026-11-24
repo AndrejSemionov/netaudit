@@ -26,9 +26,11 @@
   from the cached config when there is one (Laravel ignores `.env` then);
   `storage` and `bootstrap/cache` writable by everyone; whether its Laravel
   release still gets security fixes and the known vulnerabilities of its
-  installed packages. Only the lines of those two keys leave the server -
-  never `APP_KEY` or a password - and nothing is run in a project. It uses
-  sudo when it can and says what it could not read without it.
+  installed packages. File contents are read with no more rights than the
+  project's owner, never through a folder another account can change; of
+  `.env` and the cached config only normalized values of those two keys
+  leave the server - never `APP_KEY` or a password - and nothing is run in
+  a project. It says what it could not or may not read.
 
 - WordPress: known vulnerabilities of the core and of every plugin whose
   version is known, from Wordfence Intelligence. Each one is a finding with

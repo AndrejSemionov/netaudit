@@ -137,8 +137,22 @@ facts are from the Laravel 12 source.
   environment would win over `.env` and is not visible here: the detail
   says where the value was read.
 - `storage/` and `bootstrap/cache` writable by others → medium.
-- sudo is used when it works (the sudo password, or NOPASSWD); otherwise
-  the check runs as the SSH user and names what it could not read.
+- **Reading with the least rights (review #63 pass 1).** Names, modes and
+  owners are listed through sudo when it works. File *contents* are read
+  with no more rights than the project's owner: as the owner (plain, `sudo
+  -u`, `runuser` when connected as root), or as the SSH user when the owner
+  is root and there is no sudo. A file is read only when it is a regular
+  file and every folder on its path can be changed by the reader or root
+  alone (a folder of another account, writable by another group or by all,
+  or a link on the way, is not followed; as root, the file itself must not
+  be a link). Of `.env` and the cached config only normalized tokens leave
+  the server (`APP_DEBUG true`, `APP_ENV word:production`), never a line.
+  What may not or could not be read is "not checked", with the reason.
+- A cut or broken `composer.json` is a gap, not "no Laravel"; the limit is
+  20 Laravel projects among at most 60 folders with `artisan`.
+- Values from `.env` alone do not confirm the configuration in effect (a
+  value of the PHP process, or a `.env.<APP_ENV>` the environment chooses,
+  would win): an item says so; only a cached config confirms it.
 - Nothing is run in the project (no `php artisan`): reading files only.
 - Ids `LV-SRV-001`…`006` (subject: the project path; a vulnerability also
   the package and the advisory id). The check sits in the Audit tab under

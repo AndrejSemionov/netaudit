@@ -160,6 +160,8 @@ const I18N = {
     'lv.srv.item.env_files': 'Права файлов .env',
     'lv.srv.item.app_debug': 'APP_DEBUG (режим отладки)',
     'lv.srv.item.app_env': 'APP_ENV (окружение)',
+    'lv.srv.item.effective_config': 'Действующая конфигурация подтверждена',
+    'lv.srv.item.read_gaps': 'Что не удалось прочитать',
     'lv.srv.item.writable_dirs': 'Запись в storage и bootstrap/cache',
     'lv.srv.item.laravel_version': 'Версия Laravel и её поддержка',
     'lv.srv.item.vulns': 'Известные уязвимости пакетов',
@@ -645,6 +647,8 @@ const I18N = {
     'lv.srv.item.env_files': '.env file permissions',
     'lv.srv.item.app_debug': 'APP_DEBUG (debug mode)',
     'lv.srv.item.app_env': 'APP_ENV (environment)',
+    'lv.srv.item.effective_config': 'Configuration in effect confirmed',
+    'lv.srv.item.read_gaps': 'What could not be read',
     'lv.srv.item.writable_dirs': 'Writes to storage and bootstrap/cache',
     'lv.srv.item.laravel_version': 'Laravel version and its support',
     'lv.srv.item.vulns': 'Known vulnerabilities of packages',
@@ -1087,7 +1091,7 @@ const I18N_CHECKS = {
   },
   laravel_server: {
     label: { ru: 'Laravel на сервере (SSH)' },
-    desc: { ru: 'Находит все проекты Laravel на сервере (/var/www, /home, /srv) и проверяет их, только читая файлы: кто может прочитать .env, APP_DEBUG и APP_ENV (из кэша конфигурации, если он есть), запись для всех в storage и bootstrap/cache, получает ли версия Laravel исправления безопасности и известные уязвимости её пакетов. APP_KEY и пароли не читаются, в проекте ничего не запускается.' },
+    desc: { ru: 'Находит все проекты Laravel на сервере (/var/www, /home, /srv) и проверяет их, только читая файлы и не больше прав, чем у владельца проекта: кто может прочитать .env, APP_DEBUG и APP_ENV (из кэша конфигурации, если он есть), запись для всех в storage и bootstrap/cache, получает ли версия Laravel исправления безопасности и известные уязвимости её пакетов. APP_KEY и пароли не читаются, в проекте ничего не запускается.' },
     params: { host: { ru: 'Хост' }, user: { ru: 'Пользователь' }, port: { ru: 'SSH-порт' }, key_path: { ru: 'Путь к ключу' }, password: { ru: 'Пароль SSH (если без ключа)' }, sudo_password: { ru: 'Пароль sudo (если sudo его спрашивает)' } },
   },
   sql_injection: {
