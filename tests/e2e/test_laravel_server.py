@@ -56,7 +56,7 @@ def _detail(result, item, project):
 def test_every_project_once_and_only_the_current_release(with_sudo):
     assert 'error' not in with_sudo, with_sudo
     assert [p['path'] for p in with_sudo['projects']] == [API, BLOG, SHOP]
-    assert with_sudo['skipped'] == {'old_releases': 1, 'over_limit': 0, 'not_laravel': 1}
+    assert with_sudo['skipped'] == {'old_releases': 1, 'over_limit': 0, 'candidates_over': 0, 'not_laravel': 1}
     assert 'collected_without_sudo' not in with_sudo
 
 
