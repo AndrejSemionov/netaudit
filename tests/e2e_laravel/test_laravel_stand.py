@@ -13,13 +13,15 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess  # nosec B404 - runs awk and grep on the stand's own files
 
 import pytest
 
-from netaudit_pkg.checks import laravel
+from netaudit_pkg.checks import laravel, laravel_server
 
 LV1 = os.environ.get('NETAUDIT_E2E_LV1')
 LV2 = os.environ.get('NETAUDIT_E2E_LV2')
+STAND_DIR = os.environ.get('NETAUDIT_E2E_LV_DIR')   # the two projects' folders
 OPEN_ITEMS = ('env', 'ignition', 'debugbar', 'telescope', 'horizon', 'laravel_log', 'project_files', 'git_config')
 
 pytestmark = pytest.mark.skipif(not (LV1 and LV2), reason='the Laravel E2E stand is not configured')
@@ -118,3 +120,22 @@ def test_plain_http_is_reported(site1, site2):
         assert 'LV-TLS-001' in _ids(site)
         assert _checked(site)['https'] == 'problem'
         assert site['verdict'] == 'danger'
+
+
+# --- the programs laravel_server runs on a server, on files a real Laravel wrote ---
+
+def test_the_config_awk_on_a_real_cached_config():
+    # lv1's config was cached by `php artisan config:cache` (setup.sh): every setting, secrets included
+    path = f'{STAND_DIR}/lv1/bootstrap/cache/config.php'
+    out = subprocess.run(['awk', laravel_server.CONFIG_AWK, path],  # nosec B603 B607
+                         capture_output=True, text=True, check=True).stdout
+    assert out.splitlines() == ["    'env' => 'production',", "    'debug' => false,"]
+    assert laravel_server.parse_config_lines(out) == {'APP_ENV': 'production', 'APP_DEBUG': False}
+
+
+def test_the_env_grep_on_the_skeletons_env():
+    out = subprocess.run(['grep', '-E', laravel_server.ENV_KEYS_PATTERN, f'{STAND_DIR}/lv2/.env'],  # nosec B603 B607
+                         capture_output=True, text=True, check=True).stdout
+    assert sorted(out.splitlines()) == ['APP_DEBUG=true', 'APP_ENV=local']
+    values = laravel_server.parse_env_lines(out)
+    assert values['APP_ENV'] == 'local' and laravel_server.debug_on(values['APP_DEBUG'])
