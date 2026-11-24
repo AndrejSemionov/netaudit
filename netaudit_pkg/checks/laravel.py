@@ -226,7 +226,7 @@ def _is_laravel(home: Page, pages: dict, seen: dict) -> tuple[bool | None, str]:
                       f'read (over {INVENTORY_MAX_BODY // (1024 * 1024)} MB), so its packages could not be read')
     if not webprobe.answered(login):
         return None, (f'no Laravel cookies on the home page, and /login gave no answer '
-                      f'({webprobe.why(login)})')
+                      f'({webprobe.why(login)}) - try again later')
     return False, 'no Laravel cookies on the home page or /login, and no Laravel tool or file open'
 
 
@@ -532,7 +532,7 @@ def check_laravel_external(url='https://example.com') -> dict:
     is_laravel, why = _is_laravel(home, pages, seen)
     if is_laravel is None:
         findings = [_finding('info', 'could not tell whether the site runs Laravel',
-                             f'{why}; nothing was judged - try again later', requires_manual_verification=True)]
+                             f'{why}; nothing was judged', requires_manual_verification=True)]
         return {'url': base, 'laravel': None, 'verdict': 'incomplete', 'findings': findings,
                 'summary': webprobe.summary(findings)}
     if not is_laravel:
