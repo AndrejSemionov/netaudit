@@ -78,3 +78,35 @@ def test_vulnerability_record_link_and_data_notices():
     assert 'href="${f.link}"' in view and 'rel="noopener noreferrer"' in view
     for part in ('.notices', '.license_url', '.license'):
         assert part in view, part
+
+
+# --- laravel_server (contract L4): in the Audit tab, with a view of its own ---------------
+
+SERVER_ITEMS = ('discovery', 'env_files', 'app_debug', 'app_env', 'writable_dirs', 'laravel_version', 'vulns',
+                'vuln_gaps', 'version_sources')
+
+
+def test_server_check_has_its_own_view_in_the_audit_tab():
+    functions = _functions(_script())
+    assert "if (id === 'laravel_server') return { html: laravelServerHtml(r) };" in functions['renderResult']
+    view = functions['laravelServerHtml']
+    for part in ('r.verdict', 'r.checked', 'r.findings', 'r.projects', 'r.score', 'c.project', 'r.vuln_data',
+                 'r.collected_without_sudo', 'r.skipped'):
+        assert part in view, part
+    assert 'href="${f.link}"' in view and 'rel="noopener noreferrer"' in view
+    assert "const grade = value >= 80 ? 'good' : value >= 50 ? 'medium' : 'bad';" in view
+
+
+def test_server_labels_in_both_languages():
+    keys = [f'lv.srv.item.{i}' for i in SERVER_ITEMS]
+    keys += ['lv.srv.projects', 'lv.srv.col.path', 'lv.srv.col.version', 'lv.srv.col.debug', 'lv.srv.col.env',
+             'lv.srv.col.vulns', 'lv.srv.without_sudo', 'lv.srv.skipped', 'lv.srv.verdict.not_laravel', 'lv.server_hint']
+    for lang in ('ru', 'en'):
+        block = _lang_block(lang)
+        for key in keys:
+            assert f"'{key}':" in block, (lang, key)
+
+
+def test_the_laravel_tab_points_to_the_server_check():
+    page = INDEX[INDEX.index('id="tab-laravel"'):INDEX.index('id="tab-trends"')]
+    assert 'data-i18n="lv.server_hint"' in page
