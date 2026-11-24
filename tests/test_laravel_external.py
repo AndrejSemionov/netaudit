@@ -736,3 +736,19 @@ def test_sources_with_nothing_in_common_are_not_compared(monkeypatch):
     result = laravel.check_laravel_external(BASE)
     assert _checked(result)['version_sources'] == 'not_checked'
     assert 'no package in both' in _detail(result, 'version_sources')
+
+
+# --- review #62 pass 4 (USER allowed): a public inventory too large to read, and no other sign -------------
+
+@pytest.mark.parametrize('path', ['composer.lock', 'vendor/composer/installed.json'])
+def test_a_public_inventory_too_large_to_read_alone_cannot_tell(monkeypatch, path):
+    monkeypatch.setattr(laravel, 'INVENTORY_MAX_BODY', 2000)
+    packages = [{'name': f'vendor/package{i}', 'version': '1.0.0'} for i in range(200)]
+    text = json.dumps({'_readme': ['x'], 'content-hash': 'abc', 'packages': packages}, indent=4)
+    _site(monkeypatch, {f'{BASE}{path}': (200, {}, text)}, cookies=[])
+    result = laravel.check_laravel_external(BASE)
+    # its packages were not read, so it is no sign either way: "could not tell", never a crash or "no Laravel"
+    assert result['laravel'] is None
+    assert result['verdict'] == 'incomplete'
+    detail = result['findings'][0]['detail']
+    assert path in detail and 'too large' in detail
