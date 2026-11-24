@@ -232,7 +232,7 @@ Contract: `docs/research/laravel_audit.md` (L2, L3).
 | Control id | Severities | Subject | Control |
 |---|---|---|---|
 | LV-ENV-001 | critical | — | a .env file (or a copy) is public with APP_KEY or DB_PASSWORD |
-| LV-IGN-001 | critical | — | Ignition's health check answers: debug mode with runnable solutions |
+| LV-IGN-001 | high | — | Ignition's health check answers: debug mode with runnable solutions on (running one is never tried) |
 | LV-DBG-001 | high | — | the Laravel debug bar is shown to visitors |
 | LV-TEL-001 | high | — | Telescope is open to anyone |
 | LV-HRZ-001 | high | — | Horizon is open to anyone |
@@ -243,7 +243,7 @@ Contract: `docs/research/laravel_audit.md` (L2, L3).
 | LV-CKE-002 | medium | — | the session cookie has no HttpOnly |
 | LV-CKE-003 | low | — | the session cookie has no SameSite, or SameSite=None |
 | LV-EOL-001 | high | — | the Laravel release line no longer gets security fixes (endoflife.date) |
-| LV-VULN-001 | critical, high, medium, low | package, OSV id | a known vulnerability (OSV.dev, Packagist) affects a package version in a public composer.lock |
+| LV-VULN-001 | critical, high, medium, low | package, OSV id | a known vulnerability (OSV.dev, Packagist) affects a package version in a public installed.json or composer.lock |
 | LV-TLS-001 | high | — | the site does not use HTTPS |
 | LV-TLS-002 | medium | — | http does not redirect to https |
 | LV-TLS-003 | medium | — | the certificate ends in less than 14 days |

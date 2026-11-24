@@ -45,6 +45,7 @@ class Page:
     headers: dict     # lower-case names
     text: str         # at most MAX_BODY bytes, decoded
     cookies: list = field(default_factory=list)   # each Set-Cookie of the final answer, as sent
+    truncated: bool = False   # the body was longer than the limit and was cut
 
 
 class OffSiteRedirect(httpx.HTTPError):
@@ -71,9 +72,10 @@ def same_site(url: str, base: str) -> bool:
     return a.removeprefix('www.') == b.removeprefix('www.')
 
 
-def fetch(url: str, follow: bool = True, *, transport=None) -> Page:
-    """A GET and the start of the body; redirects checked per hop. Transport
-    errors raise httpx.HTTPError."""
+def fetch(url: str, follow: bool = True, *, transport=None, max_body: int = MAX_BODY) -> Page:
+    """A GET and the start of the body (at most max_body bytes, Page.truncated
+    when there was more); redirects checked per hop. Transport errors raise
+    httpx.HTTPError."""
     start = url
     with httpx.Client(timeout=TIMEOUT, follow_redirects=False, transport=transport,
                       headers={'User-Agent': wordpress_org.USER_AGENT}) as client:
@@ -90,12 +92,12 @@ def fetch(url: str, follow: bool = True, *, transport=None) -> Page:
                     body = bytearray()
                     for chunk in resp.iter_bytes():
                         body += chunk
-                        if len(body) >= MAX_BODY:
+                        if len(body) > max_body:
                             break
-                    text = bytes(body[:MAX_BODY]).decode(resp.charset_encoding or 'utf-8', errors='replace')
+                    text = bytes(body[:max_body]).decode(resp.charset_encoding or 'utf-8', errors='replace')
                     cookies = [v for k, v in resp.headers.multi_items() if k.lower() == 'set-cookie']
                     return Page(resp.status_code, url, {k.lower(): v for k, v in resp.headers.items()}, text,
-                                cookies)
+                                cookies, truncated=len(body) > max_body)
             except httpx.InvalidURL as e:
                 # httpx parses Location even when it does not follow it: a site's
                 # "javascript:..." must not crash the check (InvalidURL is no HTTPError)

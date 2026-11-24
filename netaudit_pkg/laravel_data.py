@@ -1,14 +1,17 @@
 """
 Version data for the Laravel checks (docs/research/laravel_audit.md §3,
-contract L3).
+contract L3, review pass 1).
 
 - Packages: a composer.lock (both sections) or vendor/composer/installed.json
   (Composer 2 and 1) read into name and version, the 'v' prefix stripped
-  as cve_audit does.
-- Vulnerabilities: OSV.dev, ecosystem Packagist (records from the GitHub
-  Advisory Database, CC BY 4.0), asked through cve_audit.query_osv (one
-  batch, a 24 h cache); each record is then read for its title, rating,
-  CVE and the fix for this version.
+  as cve_audit does. A name or version that is not in Composer's format is
+  not used - it came from the site - and is counted as unreadable.
+- Vulnerabilities: OSV.dev's batch query, ecosystem Packagist (records from
+  the GitHub Advisory Database, CC BY 4.0). Asked here, not through the SSH
+  check's cve_audit.query_osv, whose parsing and cache stay as they are:
+  only an element in OSV's format says "none known"; a paged, missing or
+  malformed one is "no answer" for that package. Each record is then read
+  for its title, rating, CVE and the fix of the range this version is in.
 - Support: endoflife.date's Laravel release lines (MIT): whether the
   release line still gets security fixes.
 
@@ -19,6 +22,7 @@ vulnerabilities" or "supported".
 from __future__ import annotations
 
 import json
+import re
 from datetime import date
 from urllib.parse import quote
 
@@ -26,6 +30,7 @@ import httpx
 
 from . import wordpress_org
 
+OSV_BATCH_URL = 'https://api.osv.dev/v1/querybatch'
 OSV_VULN_URL = 'https://api.osv.dev/v1/vulns/{id}'
 OSV_LINK = 'https://osv.dev/vulnerability/{id}'
 EOL_URL = 'https://endoflife.date/api/laravel.json'
@@ -45,12 +50,28 @@ NOTICES = [
 ]
 
 _SEVERITY = {'CRITICAL': 'critical', 'HIGH': 'high', 'MODERATE': 'medium', 'LOW': 'low'}
+# Composer's package name (its JSON schema), and a version as a lock writes it
+# (1.2.3, v1.2.3, 1.0.0-beta1, dev-main, 2.x-dev, dev-feature/x, 1.2.3+build)
+_NAME = re.compile(r'[a-z0-9](?:[_.-]?[a-z0-9]+)*/[a-z0-9](?:(?:[_.]|-{1,2})?[a-z0-9]+)*')
+_VERSION = re.compile(r'[A-Za-z0-9][A-Za-z0-9._+~/-]{0,99}')
+_VULN_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,99}')
 
 
 def _get_json(url: str) -> tuple[int, object]:
     """The one HTTP call of this module: (status code, parsed JSON or None).
     Transport errors raise httpx.HTTPError."""
     resp = httpx.get(url, timeout=TIMEOUT, headers={'User-Agent': wordpress_org.USER_AGENT})
+    try:
+        data = resp.json()
+    except ValueError:
+        data = None
+    return resp.status_code, data
+
+
+def _post_json(url: str, body: dict) -> tuple[int, object]:
+    """The batch query: (status code, parsed JSON or None). Transport errors
+    raise httpx.HTTPError."""
+    resp = httpx.post(url, json=body, timeout=TIMEOUT * 2, headers={'User-Agent': wordpress_org.USER_AGENT})
     try:
         data = resp.json()
     except ValueError:
@@ -66,9 +87,10 @@ def _ask(url: str) -> tuple[int, object]:
         return _get_json(url)
 
 
-def lock_packages(text: str) -> list[dict] | None:
-    """[{'name', 'version'}] from a composer.lock or installed.json; None
-    when the text is not one (a "not found" page, composer.json)."""
+def lock_packages(text: str) -> dict | None:
+    """{'packages': [{'name', 'version'}], 'unreadable': entries not used}
+    from a composer.lock or installed.json; None when the text is not one (a
+    "not found" page, composer.json)."""
     try:
         data = json.loads(text)
     except (ValueError, TypeError):
@@ -84,17 +106,19 @@ def lock_packages(text: str) -> list[dict] | None:
         return None
     if not all(isinstance(section, list) for section in sections):
         return None
-    packages = []
+    packages, unreadable = [], 0
     for section in sections:
         for entry in section:
-            if not isinstance(entry, dict):
-                continue
-            name, version = entry.get('name'), entry.get('version')
-            if isinstance(name, str) and isinstance(version, str) and name and version:
+            name = entry.get('name') if isinstance(entry, dict) else None
+            version = entry.get('version') if isinstance(entry, dict) else None
+            if (isinstance(name, str) and isinstance(version, str)
+                    and _NAME.fullmatch(name) and _VERSION.fullmatch(version)):
                 packages.append({'name': name, 'version': version.removeprefix('v')})
+            else:
+                unreadable += 1
     if isinstance(data, list) and not packages:
         return None                # a JSON list of something else
-    return packages
+    return {'packages': packages, 'unreadable': unreadable}
 
 
 def _padded(a: tuple, b: tuple) -> tuple[tuple, tuple]:
@@ -102,41 +126,52 @@ def _padded(a: tuple, b: tuple) -> tuple[tuple, tuple]:
     return a + (0,) * (width - len(a)), b + (0,) * (width - len(b))
 
 
-def _within(version: tuple, introduced: str | None, fixed: str) -> bool:
-    low = (0,) if introduced in (None, '0') else wordpress_org.version_tuple(introduced)
-    high = wordpress_org.version_tuple(fixed)
-    if low is None or high is None:
-        return False
+def _at_least(version: tuple, bound: str | None) -> bool | None:
+    if bound in (None, '0'):
+        return True
+    low = wordpress_org.version_tuple(bound)
+    if low is None:
+        return None
     v, lo = _padded(version, low)
+    return v >= lo
+
+
+def _below(version: tuple, bound: str, inclusive: bool = False) -> bool | None:
+    high = wordpress_org.version_tuple(bound)
+    if high is None:
+        return None
     v, hi = _padded(version, high)
-    return lo <= v < hi
+    return v <= hi if inclusive else v < hi
 
 
 def _fixes(record: dict, package: str, version: str) -> list[str]:
-    """The release that fixes this version, or every fix of the package when
-    the version is in no range that can be compared."""
+    """The release that fixes the range this version is in - [] when the
+    range has no fix (open, or last_affected) or the version is in no range
+    that can be compared. A fix of another release line is never offered
+    (review pass 1)."""
     current = wordpress_org.version_tuple(version)
-    every = []
+    if current is None:
+        return []
     for affected in record.get('affected') or []:
         if not isinstance(affected, dict) or not isinstance(affected.get('package'), dict):
             continue
         if str(affected['package'].get('name', '')).lower() != package.lower():
             continue
         for rng in affected.get('ranges') or []:
-            introduced = None
             events = rng.get('events') if isinstance(rng, dict) else None
+            introduced = None
             for event in events if isinstance(events, list) else []:
                 if not isinstance(event, dict):
                     continue
                 if 'introduced' in event:
                     introduced = str(event['introduced'])
-                elif 'fixed' in event:
-                    fixed = str(event['fixed'])
-                    every.append(fixed)
-                    if current is not None and _within(current, introduced, fixed):
-                        return [fixed]
+                elif 'fixed' in event or 'last_affected' in event:
+                    bound = str(event.get('fixed', event.get('last_affected')))
+                    inside = _at_least(current, introduced) and _below(current, bound, 'fixed' not in event)
+                    if introduced is not None and inside:
+                        return [bound] if 'fixed' in event else []
                     introduced = None
-    return sorted(set(every), key=lambda v: (wordpress_org.version_tuple(v) or (), v))
+    return []
 
 
 def advisory(vuln_id: str, package: str, version: str) -> dict:
@@ -159,27 +194,54 @@ def advisory(vuln_id: str, package: str, version: str) -> dict:
             'fixed': _fixes(data, package, version)}
 
 
-def _query_osv(packages: list[dict]) -> tuple[dict, set]:
-    from .checks import cve_audit  # the checks package imports this module
-    return cve_audit.query_osv(packages)
+def _ids(element) -> list[str] | None:
+    """The vulnerability ids of one batch element, or None when the element
+    is not in OSV's format or is paged (not the whole answer)."""
+    if not isinstance(element, dict) or element.get('next_page_token'):
+        return None
+    vulns = element.get('vulns', [])
+    if not isinstance(vulns, list):
+        return None
+    ids = [v.get('id') if isinstance(v, dict) else None for v in vulns]
+    if not all(isinstance(i, str) and _VULN_ID.fullmatch(i) for i in ids):
+        return None
+    return ids
+
+
+def _osv_batch(packages: list[dict]) -> dict[str, list[str] | None] | None:
+    """{name: ids, or None for no answer}; None when the batch as a whole
+    gave no answer to read."""
+    body = {'queries': [{'package': {'name': p['name'], 'ecosystem': 'Packagist'}, 'version': p['version']}
+                        for p in packages]}
+    try:
+        code, data = _post_json(OSV_BATCH_URL, body)
+    except httpx.HTTPError:
+        return None
+    results = data.get('results') if code == 200 and isinstance(data, dict) else None
+    if not isinstance(results, list) or len(results) != len(packages):
+        return None     # the answers' order is the questions' order: a count that differs cannot be read
+    return {p['name']: _ids(element) for p, element in zip(packages, results)}
 
 
 def vulnerabilities(packages: list[dict]) -> dict:
     """{'status': 'ok'|'error', 'matches': {name: [advisory]}, 'unanswered':
-    [names OSV gave no answer for], 'error', 'checked': packages asked}."""
+    [names with no answer, or not asked past MAX_PACKAGES], 'error',
+    'checked': packages answered}."""
     asked = packages[:MAX_PACKAGES]
-    result, errors = _query_osv([{'name': p['name'], 'version': p['version'], 'ecosystem': 'Packagist'}
-                                 for p in asked])
-    if asked and len(errors) >= len(asked):
-        return {'status': 'error', 'matches': {}, 'unanswered': sorted(errors), 'checked': 0,
-                'error': 'OSV.dev gave no answer (a network error or a server error)'}
+    answers = _osv_batch(asked) if asked else {}
+    if answers is None:
+        return {'status': 'error', 'matches': {}, 'unanswered': [p['name'] for p in packages], 'checked': 0,
+                'error': 'OSV.dev gave no answer to read (a network error, a server error or an unexpected answer)'}
     matches: dict[str, list] = {}
+    unanswered = []
     read = 0
     for p in asked:
-        if p['name'] in errors:
+        ids = answers.get(p['name'])
+        if ids is None:
+            unanswered.append(p['name'])
             continue
         found = []
-        for vuln_id in result.get(p['name']) or []:
+        for vuln_id in ids:
             if read < MAX_ADVISORIES:
                 read += 1
                 found.append(advisory(vuln_id, p['name'], p['version']))
@@ -188,11 +250,9 @@ def vulnerabilities(packages: list[dict]) -> dict:
                               'link': OSV_LINK.format(id=quote(vuln_id, safe='')),
                               'error': f'not read: more than {MAX_ADVISORIES} vulnerabilities'})
         matches[p['name']] = found
-    unanswered = sorted(errors)
-    if len(packages) > MAX_PACKAGES:
-        unanswered += [p['name'] for p in packages[MAX_PACKAGES:]]
+    unanswered += [p['name'] for p in packages[MAX_PACKAGES:]]
     return {'status': 'ok', 'matches': matches, 'unanswered': unanswered, 'error': None,
-            'checked': len(asked) - len(errors)}
+            'checked': len(matches)}
 
 
 def support(version: str, today: date | None = None) -> dict:

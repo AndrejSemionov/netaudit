@@ -43,7 +43,7 @@ Read from GitHub (`laravel/laravel` 12.x, `laravel/framework` 12.x,
 | JSON error bodies carry `exception` and `trace` when debug | `Handler.php:1031–1036` | same: visible only on an error |
 | Skeleton `.env.example`: `APP_ENV=local`, `APP_DEBUG=true` | `laravel/laravel` 12.x `.env.example:2,4` | a copied example on a server turns debug on — a common real mistake |
 | Skeleton has no Ignition, Telescope, Horizon or Debugbar | skeleton `composer.json` | these are added by the developer; finding one open is a finding, not finding one is no proof |
-| Ignition `GET /_ignition/health-check` answers only when `app.debug` **and** (explicit `IGNITION_ENABLE_RUNNABLE_SOLUTIONS`, or `APP_ENV` local/development); else 404 | `ignition-routes.php`, `RunnableSolutionsGuard::check()` | a 200 JSON `{"can_execute_commands": …}` on a public site is critical (runnable solutions; the old CVE-2021-3129 path) |
+| Ignition `GET /_ignition/health-check` answers only when `app.debug` **and** (explicit `IGNITION_ENABLE_RUNNABLE_SOLUTIONS`, or `APP_ENV` local/development); else 404 | `ignition-routes.php`, `RunnableSolutionsGuard::check()` | a 200 JSON `{"can_execute_commands": true/false}` proves the route is open, so debug mode with runnable solutions on - high; its boolean is the result of an internal diagnostic, and running a solution (a POST) is never tried, so neither running code nor an old CVE is claimed (review pass 1) |
 | Telescope at `/telescope`; outside `local` only the `viewTelescope` gate | `TelescopeApplicationServiceProvider.php:25–31`, `config/telescope.php:45` | the UI answering a visitor = requests, queries and data open |
 | Horizon at `/horizon`; default auth `environment('local')` | `Horizon.php:81–84` | same |
 | Debugbar: on when `debugbar.enabled`, or else `app.debug`, never in `production`/`testing` unless forced; injects `<!-- Laravel Debugbar Widget -->` | `LaravelDebugbar.php:566–592, 781` | the marker in the home page = debug on and the bar shown to visitors |
@@ -74,7 +74,9 @@ gets no security fixes.
   `APP_KEY=` or `DB_PASSWORD=` lines (a soft-404 page does not); the
   content is never kept. Critical: the app key and database password.
 - **Ignition open:** `GET /_ignition/health-check` → 200 JSON with
-  `can_execute_commands` → critical (debug on, runnable solutions).
+  `can_execute_commands` true or false → high (the route open: debug on,
+  runnable solutions on; running one not tried); another value → not
+  checked.
 - **Debug bar shown:** the home page has the Debugbar marker → high.
 - **Telescope / Horizon open:** `/telescope`, `/horizon` answer with their
   UI (title/markers in the HTML) → high; 401/403/404 → fine.
@@ -82,9 +84,17 @@ gets no security fixes.
   instead of `public/`): `storage/logs/laravel.log` (log lines),
   `composer.json`/`composer.lock` (JSON with `packages`),
   `vendor/composer/installed.json`, `.git/config` — content-checked.
-- **Versions from a public `composer.lock`:** when it is public, its
-  packages go to OSV like on the server — the only way to name
-  vulnerabilities from outside; otherwise "not visible from outside".
+- **Versions from a public `composer.lock` or `installed.json`:** the only
+  way to name vulnerabilities from outside; otherwise "not visible from
+  outside". `installed.json` names what is installed, the lock what was
+  locked: the installed versions are used, a disagreement is "not
+  checked", a lock alone is said to be locked versions. Read up to 4 MB (a
+  real lock is larger than a page); larger → public, not read. A name or
+  version not in Composer's format is not used and is a gap. OSV's batch is
+  asked directly and read strictly (an element out of format or paged is
+  "no answer", a count that differs is no answer at all) — the SSH check's
+  `cve_audit.query_osv` and its cache stay as they are. A fix is named only
+  from the range the version is in (review pass 1).
 - **The session cookie's flags** (Secure, HttpOnly, SameSite) and the
   shared HTTPS / redirect / certificate / header items.
 - GET only; no POST (`execute-solution` is never called).
@@ -141,7 +151,8 @@ Laravel project copied in.
 
 - **L1. Category and tab `laravel`** (RU/EN), like WordPress.
 - **L2. `laravel_external`** (PASSIVE, GET only): §4; shared items.
-- **L3. Versions from a public `composer.lock`** → OSV, attribution.
+- **L3. Versions from a public `composer.lock` / `installed.json`** → OSV,
+  endoflife.date, attribution; as refined in §4 by review pass 1.
 - **L4. `laravel_server`** (SSH, READ_ONLY): §5.
 - **L5. Shared module** for the WordPress and Laravel web probes.
 - **L6. Tests**: RED/GREEN on fixtures; E2E stand (§7).

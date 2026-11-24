@@ -7,8 +7,11 @@ never called.
 A Laravel site does not show its version: from outside this check sees
 misconfigurations - an open .env, debug tools left on, the project folder
 served instead of public/ - and the versions only when composer.lock or
-vendor/composer/installed.json is public by mistake. Otherwise the version
-and the known vulnerabilities are "not checked", never "none".
+vendor/composer/installed.json is public by mistake. installed.json names
+what is installed, the lock what was locked: the installed versions are
+used and a disagreement is said (review pass 1). An entry that could not be
+read, a package OSV gave no answer for, or a file too large to read is
+"not checked", never "none known".
 
 Is it Laravel: the XSRF-TOKEN cookie, a cookie encrypted by Laravel (its
 value starts with base64 of '{"iv":'), the same on /login, or an open
@@ -49,6 +52,8 @@ COMPOSER_JSON = 'composer.json'
 COMPOSER_LOCK = 'composer.lock'
 INSTALLED = 'vendor/composer/installed.json'
 GIT_CONFIG = '.git/config'
+INVENTORIES = (COMPOSER_LOCK, INSTALLED)
+INVENTORY_MAX_BODY = 4 * 1024 * 1024   # a real lock is often far more than a page's 256 KB
 PROBES = (*ENV_FILES, IGNITION, TELESCOPE, HORIZON, LOG_FILE, COMPOSER_JSON, COMPOSER_LOCK, INSTALLED,
           GIT_CONFIG, LOGIN)
 
@@ -64,22 +69,24 @@ _HORIZON = re.compile(r'<title>\s*Horizon\b|<div id="horizon"', re.IGNORECASE)
 _LOG_LINE = re.compile(r'^\[\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}[^\]]*\] [\w-]+\.'
                        r'(?:DEBUG|INFO|NOTICE|WARNING|ERROR|CRITICAL|ALERT|EMERGENCY):', re.MULTILINE)
 _GIT_CONFIG = re.compile(r'^\s*\[core\]', re.MULTILINE)
+# how a composer.lock, an installed.json of Composer 2 or of Composer 1 begins
+_INVENTORY_START = re.compile(r'\s*(?:\{\s*"(?:_readme|content-hash|packages|packages-dev|dev)"|\[\s*\{\s*"name")')
 
 _TRANSPORT = None   # tests put an httpx.MockTransport here
 
 
-def _fetch(url: str, follow: bool = True) -> Page:
+def _fetch(url: str, follow: bool = True, max_body: int | None = None) -> Page:
     """The one request seam of this check (webprobe.fetch)."""
-    return webprobe.fetch(url, follow, transport=_TRANSPORT)
+    return webprobe.fetch(url, follow, transport=_TRANSPORT, max_body=max_body or webprobe.MAX_BODY)
 
 
-def _fetch_twice(url: str, follow: bool = True) -> Page:
-    return webprobe.fetch_twice(lambda u, f: _fetch(u, f), url, follow)
+def _fetch_twice(url: str, follow: bool = True, max_body: int | None = None) -> Page:
+    return webprobe.fetch_twice(lambda u, f: _fetch(u, f, max_body), url, follow)
 
 
-def _try(url: str, follow: bool = True) -> Page | None:
+def _try(url: str, follow: bool = True, max_body: int | None = None) -> Page | None:
     try:
-        return _fetch_twice(url, follow)
+        return _fetch_twice(url, follow, max_body)
     except httpx.HTTPError:
         return None
 
@@ -133,12 +140,33 @@ def _opened(pages: dict, path: str, test) -> bool:
     return webprobe.answered(page) and page.status == 200 and bool(test(page.text))
 
 
-def _ignition_open(text: str) -> bool:
+def _ignition_answer(pages: dict) -> str | None:
+    """'true' / 'false' when Ignition's health check answers, 'unexpected'
+    for its key with another value, None when it does not answer."""
+    page = pages.get(IGNITION)
+    if not (webprobe.answered(page) and page.status == 200):
+        return None
     try:
-        data = json.loads(text)
+        data = json.loads(page.text)
     except ValueError:
-        return False
-    return isinstance(data, dict) and 'can_execute_commands' in data
+        return None
+    if not isinstance(data, dict) or 'can_execute_commands' not in data:
+        return None
+    value = data['can_execute_commands']
+    return json.dumps(value) if isinstance(value, bool) else 'unexpected'
+
+
+def _inventory(pages: dict, path: str) -> dict | None:
+    """{'packages', 'unreadable', 'partial'} of a public lock or
+    installed.json; 'partial' when it is too large to read whole. None when
+    it is not public."""
+    page = pages.get(path)
+    if not (webprobe.answered(page) and page.status == 200):
+        return None
+    if page.truncated:
+        return {'packages': [], 'unreadable': 0, 'partial': True} if _INVENTORY_START.match(page.text) else None
+    data = laravel_data.lock_packages(page.text)
+    return None if data is None else {**data, 'partial': False}
 
 
 def _composer_json(text: str) -> bool:
@@ -154,21 +182,16 @@ def _exposures(home: Page, pages: dict) -> dict:
     for path in ENV_FILES:
         if _opened(pages, path, _ENV_KEY.search):
             env_keys[path] = sorted({m.group(1) for m in _ENV_KEY.finditer(pages[path].text)})
-    lock = installed = None
-    if _opened(pages, COMPOSER_LOCK, lambda text: laravel_data.lock_packages(text) is not None):
-        lock = laravel_data.lock_packages(pages[COMPOSER_LOCK].text)
-    if _opened(pages, INSTALLED, lambda text: laravel_data.lock_packages(text) is not None):
-        installed = laravel_data.lock_packages(pages[INSTALLED].text)
     return {
         'env': env_keys,
-        'ignition': _opened(pages, IGNITION, _ignition_open),
+        'ignition': _ignition_answer(pages),
         'debugbar': bool(_DEBUGBAR.search(home.text)),
         'telescope': _opened(pages, TELESCOPE, _TELESCOPE.search),
         'horizon': _opened(pages, HORIZON, _HORIZON.search),
         'log': _opened(pages, LOG_FILE, _LOG_LINE.search),
         'composer_json': _opened(pages, COMPOSER_JSON, _composer_json),
-        'lock': lock,
-        'installed': installed,
+        'lock': _inventory(pages, COMPOSER_LOCK),
+        'installed': _inventory(pages, INSTALLED),
         'git': _opened(pages, GIT_CONFIG, _GIT_CONFIG.search),
     }
 
@@ -184,10 +207,10 @@ def _is_laravel(home: Page, pages: dict, seen: dict) -> tuple[bool | None, str]:
     if sign:
         return True, f'{sign} on /login'
     opened = [*seen['env']]
-    opened += [name for name, key in (('Ignition', 'ignition'), ('Laravel Debugbar', 'debugbar'),
-                                      ('Telescope', 'telescope'), ('Horizon', 'horizon'),
-                                      (LOG_FILE, 'log')) if seen[key]]
-    packages = (seen['lock'] or []) + (seen['installed'] or [])
+    opened += ['Ignition'] if seen['ignition'] in ('true', 'false') else []
+    opened += [name for name, key in (('Laravel Debugbar', 'debugbar'), ('Telescope', 'telescope'),
+                                      ('Horizon', 'horizon'), (LOG_FILE, 'log')) if seen[key]]
+    packages = [p for inventory in (seen['lock'], seen['installed']) if inventory for p in inventory['packages']]
     if any(p['name'] == 'laravel/framework' for p in packages):
         opened.append('a composer file with laravel/framework')
     if opened:
@@ -252,12 +275,12 @@ def _report_exposures(home: Page, pages: dict, seen: dict, findings: list, check
                                  recommendation='Serve the site from public/ and deny .env* in the web server, '
                                                 'then change APP_KEY, the database password and every other '
                                                 'secret in it: anyone could have read them.'))
-    if seen['ignition']:
-        runs = json.loads(pages[IGNITION].text).get('can_execute_commands')
-        findings.append(_finding('critical', 'Ignition is open: debug mode with runnable solutions',
-                                 f'{IGNITION} answers (can_execute_commands: {json.dumps(runs)}): APP_DEBUG '
-                                 'is on and its solutions can be run from the browser (old versions: '
-                                 'CVE-2021-3129)', id='LV-IGN-001',
+    if seen['ignition'] in ('true', 'false'):
+        # the open route is the fact; running a solution would take a POST and is never tried (review pass 1)
+        findings.append(_finding('high', "Ignition's health check is open: debug mode with runnable solutions on",
+                                 f'{IGNITION} answers (can_execute_commands: {seen["ignition"]}). Ignition opens '
+                                 'this route only with APP_DEBUG on and runnable solutions enabled; whether a '
+                                 'solution can be run was not tried (GET requests only)', id='LV-IGN-001',
                                  recommendation='Set APP_DEBUG=false and APP_ENV=production, and keep '
                                                 'IGNITION_ENABLE_RUNNABLE_SOLUTIONS off.'))
     if seen['debugbar']:
@@ -304,7 +327,11 @@ def _report_exposures(home: Page, pages: dict, seen: dict, findings: list, check
             checked.append({'item': name, 'status': 'ok', 'detail': ok_detail})
 
     item('env', ENV_FILES, list(seen['env']), 'no .env file is public')
-    item('ignition', [IGNITION], [IGNITION] if seen['ignition'] else [], 'closed')
+    if seen['ignition'] == 'unexpected':
+        checked.append({'item': 'ignition', 'status': 'not_checked',
+                        'detail': f'unexpected answer from {IGNITION}: can_execute_commands is neither true nor false'})
+    else:
+        item('ignition', [IGNITION], [IGNITION] if seen['ignition'] else [], 'closed')
     item('debugbar', [], ['on the home page'] if seen['debugbar'] else [], 'not on the home page')
     item('telescope', [TELESCOPE], [f'/{TELESCOPE}'] if seen['telescope'] else [], 'not open')
     item('horizon', [HORIZON], [f'/{HORIZON}'] if seen['horizon'] else [], 'not open')
@@ -313,23 +340,58 @@ def _report_exposures(home: Page, pages: dict, seen: dict, findings: list, check
     item('git_config', [GIT_CONFIG], [GIT_CONFIG] if seen['git'] else [], 'not public')
 
 
+def _entries(n: int) -> str:
+    return f'{n} entry' if n == 1 else f'{n} entries'
+
+
+def _version_sources(seen: dict, too_big: list, source: str, checked: list) -> None:
+    """When both files are public: whether they agree (review pass 1)."""
+    if not (seen['lock'] and seen['installed']):
+        return
+    if too_big:
+        checked.append({'item': 'version_sources', 'status': 'not_checked',
+                        'detail': f'{", ".join(too_big)} too large to read: only {source} is used'})
+        return
+    locked = {p['name']: p['version'] for p in seen['lock']['packages']}
+    differ = [f'{p["name"]} ({locked[p["name"]]} locked, {p["version"]} installed)'
+              for p in seen['installed']['packages'] if p['name'] in locked and locked[p['name']] != p['version']]
+    if differ:
+        more = f' and {len(differ) - 10} more' if len(differ) > 10 else ''
+        checked.append({'item': 'version_sources', 'status': 'not_checked',
+                        'detail': f'composer.lock and installed.json disagree: {", ".join(differ[:10])}{more}; '
+                                  'the installed versions are used'})
+    else:
+        checked.append({'item': 'version_sources', 'status': 'ok', 'detail': 'composer.lock and installed.json agree'})
+
+
 def _check_versions(seen: dict, findings: list, checked: list) -> tuple[dict | None, dict | None, bool]:
     """Laravel's support and the packages' known vulnerabilities, when a
-    lock is public. Returns (framework, packages, data used)."""
-    source, packages = next(((path, found) for path, found in ((COMPOSER_LOCK, seen['lock']),
-                                                                (INSTALLED, seen['installed'])) if found), (None, None))
-    if not packages:
-        why = ('not visible from outside: composer.lock is not public (as it should be); '
-               'the version is read on the server')
+    lock or installed.json is public; installed.json first - it names what
+    is installed. Returns (framework, packages, data used)."""
+    public = [(path, seen['installed' if path == INSTALLED else 'lock']) for path in (INSTALLED, COMPOSER_LOCK)]
+    public = [(path, inventory) for path, inventory in public if inventory]
+    too_big = [path for path, inventory in public if inventory['partial']]
+    readable = [(path, inventory) for path, inventory in public if not inventory['partial']]
+    if not readable:
+        why = (f'{", ".join(too_big)} public but too large to read (over {INVENTORY_MAX_BODY // (1024 * 1024)} MB)'
+               if too_big else 'not visible from outside: composer.lock is not public (as it should be); '
+                               'the version is read on the server')
         checked.append({'item': 'laravel_version', 'status': 'not_checked', 'detail': why})
         checked.append({'item': 'vulns', 'status': 'not_checked', 'detail': why})
         return None, None, False
+
+    source, inventory = readable[0]
+    packages = inventory['packages']
+    _version_sources(seen, too_big, source, checked)
+    locked = ' (locked in composer.lock; what is installed is not visible)' if source == COMPOSER_LOCK else ''
+    unreadable = (f"{_entries(inventory['unreadable'])} of {source} could not be read (not in Composer's format)"
+                  if inventory['unreadable'] else '')
 
     framework = None
     core = next((p for p in packages if p['name'] == 'laravel/framework'), None)
     if core is None:
         checked.append({'item': 'laravel_version', 'status': 'not_checked',
-                        'detail': f'laravel/framework is not in {source}'})
+                        'detail': f'laravel/framework is not in {source}' + (f'; {unreadable}' if unreadable else '')})
     else:
         support = laravel_data.support(core['version'])
         framework = {'version': core['version'], 'source': source, 'support': support}
@@ -337,15 +399,15 @@ def _check_versions(seen: dict, findings: list, checked: list) -> tuple[dict | N
             ended = f'ended {support["eol"]}' if support['eol'] else 'ended'
             findings.append(_finding('high', f'Laravel {core["version"]} no longer gets security fixes',
                                      f'release line {support["cycle"] or core["version"]}: security support '
-                                     f'{ended} (endoflife.date)', id='LV-EOL-001',
+                                     f'{ended} (endoflife.date){locked}', id='LV-EOL-001',
                                      recommendation='Upgrade to a supported Laravel release '
                                                     '(laravel.com/docs/releases).'))
             checked.append({'item': 'laravel_version', 'status': 'problem',
-                            'detail': f'Laravel {core["version"]}: security support {ended}'})
+                            'detail': f'Laravel {core["version"]}{locked}: security support {ended}'})
         elif support['status'] == 'supported':
             until = f'security fixes until {support["eol"]}' if support['eol'] else 'supported'
             checked.append({'item': 'laravel_version', 'status': 'ok',
-                            'detail': f'Laravel {core["version"]}: {until}'})
+                            'detail': f'Laravel {core["version"]}{locked}: {until}'})
         else:
             checked.append({'item': 'laravel_version', 'status': 'not_checked',
                             'detail': support['error'] or f'endoflife.date does not list Laravel {core["version"]}'})
@@ -353,7 +415,8 @@ def _check_versions(seen: dict, findings: list, checked: list) -> tuple[dict | N
     data = laravel_data.vulnerabilities(packages)
     listed = {'source': source, 'count': len(packages), 'vulnerable': []}
     if data['status'] != 'ok':
-        checked.append({'item': 'vulns', 'status': 'not_checked', 'detail': data['error']})
+        checked.append({'item': 'vulns', 'status': 'not_checked',
+                        'detail': data['error'] + (f'; {unreadable}' if unreadable else '')})
         return framework, listed, framework is not None
     found = 0
     for p in packages:
@@ -363,22 +426,28 @@ def _check_versions(seen: dict, findings: list, checked: list) -> tuple[dict | N
         for v in vulns:
             found += 1
             fixed = v.get('fixed') or []
-            detail = ' · '.join([v.get('cve') or 'no CVE', f'fixed in {", ".join(fixed)}' if fixed
-                                 else 'no fixed release named', *([v['error']] if v.get('error') else [])])
-            fix = (f'Update {p["name"]} to {fixed[0]} or later (composer update {p["name"]}).' if fixed
-                   else f'See the advisory; remove or replace {p["name"]} if no fix exists.')
+            detail = ' · '.join([v.get('cve') or 'no CVE',
+                                 f'fixed in {fixed[0]}' if fixed else 'no fixed release named for this version',
+                                 *([v['error']] if v.get('error') else [])])
+            # words, never a command built from the site's data (review pass 1)
+            fix = (f'Update {p["name"]} to {fixed[0]} or later.' if fixed
+                   else 'No fixed release is named for this version: follow the advisory.')
             findings.append(_finding(v.get('severity') or 'medium',
                                      f'{p["name"]} {p["version"]}: {v.get("title") or v["id"]}', detail,
                                      id=subject_id('LV-VULN-001', p['name'], v['id']), recommendation=fix,
                                      extra={'link': v['link']} if v.get('link') else {}))
     unanswered = data['unanswered']
-    gap = f'no answer from OSV.dev for: {", ".join(unanswered)}' if unanswered else ''
+    gaps = [unreadable] if unreadable else []
+    if unanswered:
+        more = f' and {len(unanswered) - 20} more' if len(unanswered) > 20 else ''
+        gaps.append(f'no answer from OSV.dev for: {", ".join(unanswered[:20])}{more}')
+    gap = '; '.join(gaps)
     if found:
         checked.append({'item': 'vulns', 'status': 'problem',
-                        'detail': f'{found} known in {len(listed["vulnerable"])} package(s), OSV.dev'})
-        if unanswered:
+                        'detail': f'{found} known in {len(listed["vulnerable"])} package(s){locked}, OSV.dev'})
+        if gap:
             checked.append({'item': 'vuln_gaps', 'status': 'not_checked', 'detail': gap})
-    elif unanswered:
+    elif gap:
         checked.append({'item': 'vulns', 'status': 'not_checked', 'detail': gap})
     else:
         checked.append({'item': 'vulns', 'status': 'ok',
@@ -410,7 +479,8 @@ def check_laravel_external(url='https://example.com') -> dict:
     final = urlparse(home.url)
     base = f'{final.scheme}://{final.netloc}{urlparse(base).path}'
 
-    pages = {path: _try(base + path) for path in PROBES}
+    pages = {path: _try(base + path, max_body=INVENTORY_MAX_BODY if path in INVENTORIES else None)
+             for path in PROBES}
     seen = _exposures(home, pages)
     is_laravel, why = _is_laravel(home, pages, seen)
     if is_laravel is None:

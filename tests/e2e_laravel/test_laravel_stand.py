@@ -97,11 +97,13 @@ def test_files_of_the_project_folder_are_found(site2):
     assert 'e2e stand' not in json.dumps(site2)    # the log line itself is not kept
 
 
-def test_versions_from_the_public_lock(site2):
+def test_versions_from_the_public_files(site2):
+    # both are public on the stand: installed.json names what is installed, and agrees with the lock
     framework = site2['framework']
-    assert framework['source'] == 'composer.lock'
+    assert framework['source'] == 'vendor/composer/installed.json'
     assert framework['version'].startswith('12.')
     statuses = _checked(site2)
+    assert statuses['version_sources'] == 'ok', _detail(site2, 'version_sources')
     # live endoflife.date and OSV.dev answers: judged, whichever way
     assert statuses['laravel_version'] in ('ok', 'problem'), _detail(site2, 'laravel_version')
     assert statuses['vulns'] in ('ok', 'problem'), _detail(site2, 'vulns')

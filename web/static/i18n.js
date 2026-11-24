@@ -140,6 +140,7 @@ const I18N = {
     'lv.item.laravel_version': 'Версия Laravel и её поддержка',
     'lv.item.vulns': 'Известные уязвимости пакетов',
     'lv.item.vuln_gaps': 'Уязвимости: проверены не все пакеты',
+    'lv.item.version_sources': 'composer.lock и installed.json совпадают',
     // кнопки/статусы аудита
     'run': 'Запустить аудит',
     'run.stop': '■ Остановить',
@@ -600,6 +601,7 @@ const I18N = {
     'lv.item.laravel_version': 'Laravel version and its support',
     'lv.item.vulns': 'Known vulnerabilities of packages',
     'lv.item.vuln_gaps': 'Vulnerabilities: not every package checked',
+    'lv.item.version_sources': 'composer.lock and installed.json agree',
     'run': 'Run audit',
     'run.stop': '■ Stop',
     'save.preset': 'Save as preset',

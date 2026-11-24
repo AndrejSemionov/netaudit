@@ -15,7 +15,7 @@ from tests.test_web_wordpress_tab import INDEX, _lang_block
 # every checked item laravel_external can report (tests/test_laravel_external.py)
 ITEMS = ('https', 'http_redirect', 'certificate', 'hsts', 'nosniff', 'framing', 'session_cookie', 'env',
          'ignition', 'debugbar', 'telescope', 'horizon', 'laravel_log', 'project_files', 'git_config',
-         'laravel_version', 'vulns', 'vuln_gaps')
+         'laravel_version', 'vulns', 'vuln_gaps', 'version_sources')
 VERDICTS = ('ok', 'warn', 'danger', 'incomplete', 'not_laravel', 'unreachable')
 
 
