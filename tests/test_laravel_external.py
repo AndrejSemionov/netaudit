@@ -674,3 +674,65 @@ def test_fetch_marks_a_cut_body(monkeypatch):
     assert laravel._fetch(BASE, max_body=10).truncated is True
     assert len(laravel._fetch(BASE, max_body=10).text) == 10
     assert laravel._fetch(BASE, max_body=50).truncated is False
+
+
+# --- review pass 2: nothing compared, two versions of one name, a partial comparison -----------------------
+
+@pytest.mark.parametrize('lock', [{'packages': []}, {'packages': [{'name': 'a/b'}, {'name': 'c/d'}]}])
+def test_an_inventory_with_nothing_to_compare_says_so(monkeypatch, lock):
+    requested = _site(monkeypatch, {f'{BASE}composer.lock': (200, {}, json.dumps(lock))})
+    result = laravel.check_laravel_external(BASE)
+    checked = _checked(result)
+    assert checked['vulns'] == checked['laravel_version'] == 'not_checked'
+    assert 'nothing was compared' in _detail(result, 'vulns')
+    assert requested.vulns == []
+    assert 'LV-FILE-002' in _ids(result)
+
+
+def test_two_versions_of_laravel_in_one_file_are_not_judged(monkeypatch):
+    lock = json.dumps({'packages': [{'name': 'laravel/framework', 'version': 'v11.0.0'},
+                                    {'name': 'guzzlehttp/guzzle', 'version': '7.4.0'}],
+                       'packages-dev': [{'name': 'laravel/framework', 'version': 'v12.3.0'}]})
+    vulns = {'status': 'ok', 'matches': {'guzzlehttp/guzzle': []}, 'unanswered': [], 'error': None, 'checked': 1}
+    requested = _site(monkeypatch, {f'{BASE}composer.lock': (200, {}, lock)}, vulns=vulns)
+    result = laravel.check_laravel_external(BASE)
+    assert requested.support == []
+    assert requested.vulns == [[{'name': 'guzzlehttp/guzzle', 'version': '7.4.0'}]]
+    checked = _checked(result)
+    assert checked['laravel_version'] == 'not_checked'
+    assert 'two versions' in _detail(result, 'laravel_version')
+    assert checked['vulns'] == 'not_checked'
+    assert 'laravel/framework' in _detail(result, 'vulns')
+
+
+def test_sources_with_an_unreadable_entry_are_not_said_to_agree(monkeypatch):
+    lock = json.dumps({'packages': [{'name': 'laravel/framework', 'version': 'v12.3.0'}, {'name': 'a/b'}]})
+    installed = json.dumps({'packages': [{'name': 'laravel/framework', 'version': 'v12.3.0'}]})
+    _site(monkeypatch, {f'{BASE}composer.lock': (200, {}, lock),
+                        f'{BASE}vendor/composer/installed.json': (200, {}, installed)})
+    result = laravel.check_laravel_external(BASE)
+    assert _checked(result)['version_sources'] == 'not_checked'
+    assert 'could not be read' in _detail(result, 'version_sources')
+
+
+def test_agreement_is_said_only_for_the_packages_in_both(monkeypatch):
+    # a normal --no-dev install: the lock has dev packages that are not installed
+    lock = json.dumps({'packages': [{'name': 'laravel/framework', 'version': 'v12.3.0'}],
+                       'packages-dev': [{'name': 'phpunit/phpunit', 'version': '11.0.0'}]})
+    installed = json.dumps({'packages': [{'name': 'laravel/framework', 'version': 'v12.3.0'}]})
+    _site(monkeypatch, {f'{BASE}composer.lock': (200, {}, lock),
+                        f'{BASE}vendor/composer/installed.json': (200, {}, installed)})
+    result = laravel.check_laravel_external(BASE)
+    assert _checked(result)['version_sources'] == 'ok'
+    detail = _detail(result, 'version_sources')
+    assert '1 package in both' in detail and '1 only in composer.lock' in detail
+
+
+def test_sources_with_nothing_in_common_are_not_compared(monkeypatch):
+    lock = json.dumps({'packages': [{'name': 'a/b', 'version': '1.0'}]})
+    installed = json.dumps({'packages': [{'name': 'c/d', 'version': '1.0'}]})
+    _site(monkeypatch, {f'{BASE}composer.lock': (200, {}, lock),
+                        f'{BASE}vendor/composer/installed.json': (200, {}, installed)})
+    result = laravel.check_laravel_external(BASE)
+    assert _checked(result)['version_sources'] == 'not_checked'
+    assert 'no package in both' in _detail(result, 'version_sources')

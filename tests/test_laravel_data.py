@@ -13,6 +13,7 @@ stay as they are).
 from __future__ import annotations
 
 import json
+import time
 from datetime import date
 
 import httpx
@@ -79,7 +80,7 @@ def test_lock_packages_reads_both_sections_and_strips_the_v():
     assert laravel_data.lock_packages(text) == {
         'packages': [{'name': 'laravel/framework', 'version': '11.0.0'},
                      {'name': 'phpunit/phpunit', 'version': '10.5.1'}],
-        'unreadable': 0}
+        'unreadable': 0, 'conflicting': []}
 
 
 def test_lock_packages_reads_installed_json_of_composer_2_and_1():
@@ -98,7 +99,8 @@ def test_lock_packages_is_none_for_anything_else(text):
 def test_lock_packages_counts_the_entries_it_could_not_read():
     # review pass 1: a skipped entry is a gap, never a package with no vulnerabilities
     text = json.dumps({'packages': [{'name': 'a/b'}, {'version': '1.0'}, 'x', {'name': 'c/d', 'version': '2.0'}]})
-    assert laravel_data.lock_packages(text) == {'packages': [{'name': 'c/d', 'version': '2.0'}], 'unreadable': 3}
+    assert laravel_data.lock_packages(text) == {'packages': [{'name': 'c/d', 'version': '2.0'}], 'unreadable': 3,
+                                                'conflicting': []}
 
 
 @pytest.mark.parametrize('entry', [
@@ -111,7 +113,31 @@ def test_lock_packages_counts_the_entries_it_could_not_read():
 def test_lock_packages_takes_only_names_and_versions_in_composers_format(entry):
     # review pass 1 (P1): what comes from the site is checked before it is asked about or shown
     text = json.dumps({'packages': [entry, {'name': 'c/d', 'version': '2.0'}]})
-    assert laravel_data.lock_packages(text) == {'packages': [{'name': 'c/d', 'version': '2.0'}], 'unreadable': 1}
+    assert laravel_data.lock_packages(text) == {'packages': [{'name': 'c/d', 'version': '2.0'}], 'unreadable': 1,
+                                                'conflicting': []}
+
+
+def test_one_name_with_two_versions_is_a_gap_and_an_exact_repeat_is_one_package():
+    # review pass 2: answers for two versions of one name must never overwrite each other
+    text = json.dumps({'packages': [{'name': 'example/library', 'version': '1.0.0'},
+                                    {'name': 'c/d', 'version': '2.0'}],
+                       'packages-dev': [{'name': 'example/library', 'version': '2.0.0'},
+                                        {'name': 'c/d', 'version': 'v2.0'}]})
+    assert laravel_data.lock_packages(text) == {'packages': [{'name': 'c/d', 'version': '2.0'}], 'unreadable': 0,
+                                                'conflicting': ['example/library']}
+
+
+def test_the_name_check_takes_linear_time_and_a_bounded_name():
+    # review pass 2: a nested optional separator made a failing name take exponential time
+    slow = 'a' * 27 + '!'
+    started = time.perf_counter()
+    result = laravel_data.lock_packages(json.dumps({'packages': [{'name': slow, 'version': '1.0'},
+                                                                 {'name': 'a/' + slow, 'version': '1.0'}]}))
+    assert time.perf_counter() - started < 0.2
+    assert result == {'packages': [], 'unreadable': 2, 'conflicting': []}
+    long_name = 'a' * 150 + '/' + 'b' * 150
+    assert laravel_data.lock_packages(json.dumps({'packages': [{'name': long_name, 'version': '1.0'}]}))[
+        'unreadable'] == 1
 
 
 def test_lock_packages_accepts_real_composer_names_and_versions():
@@ -222,7 +248,10 @@ def test_vulnerabilities_asks_osv_for_packagist_and_reads_each_record(batch, ans
 @pytest.mark.parametrize('element', [None, [], 'x', {'vulns': None}, {'vulns': 'x'}, {'vulns': [None]},
                                      {'vulns': [{'modified': 'x'}]}, {'vulns': [{'id': 'GHSA x;y'}]},
                                      {'next_page_token': 'abc'},
-                                     {'vulns': [{'id': 'GHSA-a'}], 'next_page_token': 'abc'}])
+                                     {'vulns': [{'id': 'GHSA-a'}], 'next_page_token': 'abc'},
+                                     # review pass 2: a shape OSV does not document is no answer either
+                                     {'unknown': 1}, {'vulns': [], 'unknown': 1}, {'next_page_token': ''},
+                                     {'next_page_token': None}])
 def test_an_answer_osv_did_not_give_in_its_format_is_not_none_known(batch, answers, element):
     # review pass 1 (P2): only an element in OSV's format says "none known"; a
     # paged element is not the whole answer
@@ -232,6 +261,29 @@ def test_an_answer_osv_did_not_give_in_its_format_is_not_none_known(batch, answe
     assert data['unanswered'] == ['laravel/framework']
     assert 'laravel/framework' not in data['matches']
     assert data['matches']['guzzlehttp/guzzle'] == []
+
+
+@pytest.mark.parametrize(('element', 'ids'), [({}, []), ({'vulns': []}, []),
+                                               ({'vulns': [{'id': 'GHSA-a', 'modified': 'x'}]}, ['GHSA-a']),
+                                               ({'vulns': [{'id': 'GHSA-a'}, {'id': 'GHSA-a'}]}, ['GHSA-a'])])
+def test_osvs_documented_answers(batch, answers, element, ids):
+    batch['answer'] = (200, {'results': [element, {}]})
+    data = laravel_data.vulnerabilities(TWO)
+    assert [a['id'] for a in data['matches']['laravel/framework']] == ids
+    assert data['unanswered'] == []
+
+
+def test_vulnerabilities_never_mixes_versions_of_one_name(batch, answers):
+    # review pass 2: the answer for 1.0.0 is not overwritten by the answer for 2.0.0
+    batch['answer'] = (200, {'results': [{}]})
+    data = laravel_data.vulnerabilities([{'name': 'example/library', 'version': '1.0.0'},
+                                         {'name': 'example/library', 'version': '2.0.0'},
+                                         {'name': 'c/d', 'version': '1.0'}, {'name': 'c/d', 'version': '1.0'}])
+    assert batch['asked'] == [{'queries': [{'package': {'name': 'c/d', 'ecosystem': 'Packagist'}, 'version': '1.0'}]}]
+    assert 'example/library' in data['unanswered']
+    assert 'example/library' not in data['matches']
+    assert data['matches']['c/d'] == []
+    assert data['checked'] == 1
 
 
 @pytest.mark.parametrize('answer', [(200, {'results': [{}]}), (200, {'results': [{}, {}, {}]}), (200, {}),
