@@ -382,3 +382,42 @@ Defaults chosen by Claude (USER may change any):
 4. Network reports are not sent to AI analysis unless turned on for the run.
 5. Live check: the CI stand during development; the first real audit is run
    by USER after the PR is merged.
+
+## 12. PR 1 — how the contract is built
+
+USER approved §11 on 2026-11-25 («Утверждаю»). PR 1 = N1 + N2 + N3 + N4 +
+N8 (basic) + N9.
+
+- **Check `lan_audit`**, category `lan` (tab "Аудит сети" / "Network audit"),
+  ACTIVE, tools `nmap` and `ip`. Params: `client` (name for the report),
+  `authorization` (nothing is sent without "yes — the network owner gave me
+  written permission"), `level2` (own confirmation, off), `interface`
+  (empty = the interface of the default route), `share_with_ai` (no).
+- **Range**: the subnet of that interface, if private and at most /22; a
+  larger one is cut to the /24 around this machine and the rest is named as
+  not checked; a public subnet is refused.
+- **Steps**: vantage (`ip -j route/addr/neigh`, resolv.conf) → discovery
+  (`nmap -sn -n -PS<ports>`) while listening for MNDP (UDP 5678) and LLMNR
+  (UDP 5355) and running the three broadcast scripts → the neighbour table →
+  ports, `-sV --version-light` and the level-1 scripts on every device found
+  (`-Pn`, so a device seen only by ARP is scanned too) → judgment. `-T3`,
+  `--max-rate`, `--host-timeout`; every command has a process timeout.
+- **Two kinds of "not checked"**: *gaps* (something this run should have
+  done and could not: a listener port busy, nmap failed, a host timed out,
+  the range was cut, support lookup failed) make the verdict "incomplete";
+  *limits* (what this kind of run never covers: UDP, OS detection, other
+  subnets — PR 2, known vulnerabilities by version — PR 3, level 2 when off)
+  are always listed and do not change the verdict.
+- **Refinements of §7.1** (to check in review): `mongodb-info` is not used —
+  its first query, `buildInfo`, is answered without a login even when MongoDB
+  requires one (HYPOTHESIS), so it proves nothing; NET-DB-002 is Redis only.
+  NET-WEB-001 = a plain-HTTP web interface without a redirect to HTTPS on a
+  device NetAudit takes for a printer, camera, NAS or network device; the
+  gateway's own is `RTR-SVC-001:http`, never both. NET-TLS-001: expired =
+  medium, self-signed = low. LLMNR not heard = ok "none heard in N s", which
+  does not prove it is off. `RTR-VER-001` in PR 1 is the support status from
+  endoflife.date only; KEV and NVD need version ranges and come with N7.
+- **AI**: the stored report is unchanged; `ai_analyze` replaces a
+  `lan_audit` result with a note unless the run had `share_with_ai = yes`.
+- **Not in PR 1**: other subnets, segments and isolation (PR 2), known
+  vulnerabilities by version (PR 3), trends for this check (no identity yet).

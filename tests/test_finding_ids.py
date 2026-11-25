@@ -32,6 +32,7 @@ from netaudit_pkg.checks import (
     cve_audit,
     dns_audit,
     docker_audit,
+    lan_audit,
     laravel,
     laravel_server,
     log_discovery_audit,
@@ -72,6 +73,8 @@ IN_SCOPE = {
     webprobe: None,
     laravel: None,
     laravel_server: None,
+    # docs/research/network_audit.md
+    lan_audit: None,
 }
 # severities a finding may have without being a problem the trend counts
 NOT_PROBLEMS = ('ok', 'info', 'not_supported', 'third_party_repo')
