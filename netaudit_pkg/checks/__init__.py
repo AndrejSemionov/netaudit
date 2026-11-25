@@ -11,6 +11,7 @@ from . import (
     fail2ban_logs_audit,  # noqa: F401
     kern_log_audit,  # noqa: F401
     kernel_hardening,  # noqa: F401
+    lan_audit,  # noqa: F401
     laravel,  # noqa: F401
     laravel_server,  # noqa: F401
     log_discovery_audit,  # noqa: F401

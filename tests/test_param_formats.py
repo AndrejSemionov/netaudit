@@ -140,9 +140,10 @@ def test_number_ranges(check_id, name, low, high):
 
 # free text by design: never a command-argument position (bpf_filter and
 # expected_issuer_contains), or validated in the check (directories, unit,
-# target_ip), or an SSH field that goes to Paramiko only
+# target_ip), or an SSH field that goes to Paramiko only; lan_audit's client
+# is a label for the report, cut to 120 characters and shown escaped
 FREE_TEXT = {'bpf_filter', 'expected_issuer_contains', 'directories', 'unit', 'target_ip',
-             'host', 'user', 'key_path'}
+             'host', 'user', 'key_path', 'client'}
 
 
 def test_every_text_parameter_has_a_format_or_is_free_by_decision():

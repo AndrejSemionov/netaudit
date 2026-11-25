@@ -79,7 +79,7 @@ IN_SCOPE = {
 # severities a finding may have without being a problem the trend counts
 NOT_PROBLEMS = ('ok', 'info', 'not_supported', 'third_party_repo')
 NEW_PREFIXES = {'F2B', 'FW', 'SQL', 'WEB', 'DCK', 'SYS', 'BKP', 'DNS',
-                'AIDE', 'CT', 'CVE', 'LOG', 'LYN', 'RKT', 'SQLI', 'WP', 'LV'}
+                'AIDE', 'CT', 'CVE', 'LOG', 'LYN', 'RKT', 'SQLI', 'WP', 'LV', 'NET', 'RTR'}
 
 
 def _catalogue() -> dict[str, set[str]]:

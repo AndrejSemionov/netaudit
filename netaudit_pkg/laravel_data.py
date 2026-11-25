@@ -285,14 +285,16 @@ def vulnerabilities(packages: list[dict]) -> dict:
             'checked': len(matches)}
 
 
-def support(version: str, today: date | None = None) -> dict:
+def support(version: str, today: date | None = None, url: str = EOL_URL) -> dict:
     """{'status': 'supported'|'ended'|'unknown'|'error', 'cycle', 'eol',
     'latest', 'error'}. 'unknown': a release line endoflife.date does not
-    list (a dev branch, a line newer than its data) - not "supported"."""
+    list (a dev branch, a line newer than its data) - not "supported".
+    `url`: another product's release lines in the same format (RouterOS,
+    checks/lan_audit.py)."""
     today = today or date.today()  # noqa: DTZ011 - a calendar date is compared, the server's day is right
     out = {'status': 'unknown', 'cycle': None, 'eol': None, 'latest': None, 'error': None}
     try:
-        code, data = _ask(EOL_URL)
+        code, data = _ask(url)
     except httpx.HTTPError as e:
         return {**out, 'status': 'error', 'error': f'endoflife.date: {type(e).__name__}'}
     if code != 200:

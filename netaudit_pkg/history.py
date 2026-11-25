@@ -94,6 +94,30 @@ def _resolve_ai_language(explicit: str | None = None) -> str:
     return lang if lang in _PROMPT_INSTRUCTIONS else DEFAULT_AI_LANGUAGE
 
 
+# checks whose result describes a client's network - its devices, their names
+# and MACs (personal data): kept out of the AI prompt unless that run allowed
+# it (docs/research/network_audit.md §6, §12). The stored report is unchanged.
+LOCAL_ONLY_CHECKS = ('lan_audit',)
+WITHHELD = ('the network audit result stays on this machine: it lists the client\'s devices; '
+            'allow AI analysis for a run with share_with_ai = yes')
+
+
+def withhold_local_only(report: dict) -> dict:
+    """Copy of `report` whose local-only results are replaced by a note,
+    unless the run's own params say share_with_ai = yes."""
+    results = report.get('results')
+    if not isinstance(results, dict) or not any(c in results for c in LOCAL_ONLY_CHECKS):
+        return report
+    context = report.get('execution_context') or {}
+    out = {**report, 'results': dict(results)}
+    for check_id in LOCAL_ONLY_CHECKS:
+        params = context.get(check_id) if isinstance(context, dict) else None
+        allowed = isinstance(params, dict) and params.get('share_with_ai') == 'yes'
+        if check_id in results and not allowed:
+            out['results'][check_id] = {'withheld': WITHHELD}
+    return out
+
+
 def ai_analyze(report: dict, api_key: str | None = None, language: str | None = None,
                 history: list[dict] | None = None, trends: list[dict] | None = None) -> dict:
     """AI analysis: problems + recommendations on what to do.
@@ -123,7 +147,7 @@ def ai_analyze(report: dict, api_key: str | None = None, language: str | None = 
     lang = _resolve_ai_language(language)
     # the prompt leaves the machine: never include secret params, whatever
     # path the report came from (storage, a fresh run, the browser)
-    report_json = json.dumps(redact_report(report), ensure_ascii=False, indent=2)
+    report_json = json.dumps(redact_report(withhold_local_only(report)), ensure_ascii=False, indent=2)
     # .replace(), not .format() - _PROMPT_INSTRUCTIONS itself contains a
     # literal JSON example of the expected response format (e.g.
     # '{"summary": "...", "problems": [...]}'), and str.format() parses
@@ -140,7 +164,8 @@ def ai_analyze(report: dict, api_key: str | None = None, language: str | None = 
         # find_related_reports()'s output format (a list of reduced
         # {timestamp, checks, results} dicts) as the only thing this
         # function needs to know about "history" - no separate schema.
-        history_json = json.dumps([redact_report(h) for h in history], ensure_ascii=False, indent=2)
+        history_json = json.dumps([redact_report(withhold_local_only(h)) for h in history],
+                                  ensure_ascii=False, indent=2)
         prompt += (
             f'\n\nPREVIOUS REPORTS FOR THE SAME OBJECT (most recent first, '
             f'for trend comparison):\n{history_json}'

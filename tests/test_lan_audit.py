@@ -193,11 +193,11 @@ def supported(version):
 
 
 def build(**over):
-    kwargs = dict(client='Example Ltd', vantage=VANTAGE, scanned='192.168.88.0/24', note=None,
-                  discovery=lan.parse_nmap_xml(DISCOVERY), neighbours=NEIGHBOURS,
-                  ports=lan.parse_nmap_xml(PORTS), broadcast=lan.parse_nmap_xml(BROADCAST),
-                  heard=HEARD_NOTHING, level2=False, support=supported,
-                  vendors={'4c:5e:0c': 'Routerboard.com', '00:11:32': 'Synology Incorporated'})
+    kwargs = {'client': 'Example Ltd', 'vantage': VANTAGE, 'scanned': '192.168.88.0/24', 'note': None,
+              'discovery': lan.parse_nmap_xml(DISCOVERY), 'neighbours': NEIGHBOURS,
+              'ports': lan.parse_nmap_xml(PORTS), 'broadcast': lan.parse_nmap_xml(BROADCAST),
+              'heard': HEARD_NOTHING, 'level2': False, 'support': supported,
+              'vendors': {'4c:5e:0c': 'Routerboard.com', '00:11:32': 'Synology Incorporated'}}
     kwargs.update(over)
     return lan_audit.build_result(**kwargs)
 
@@ -393,7 +393,8 @@ def test_ports_command_names_scripts_one_by_one():
     for cmd in (one, two):
         assert {'-sT', '-sV', '--version-light', '-Pn', '--host-timeout'} <= set(cmd)
         assert not FORBIDDEN & set(cmd)
-    scripts = lambda cmd: set(cmd[cmd.index('--script') + 1].split(','))  # noqa: E731
+    def scripts(cmd):
+        return set(cmd[cmd.index('--script') + 1].split(','))
     assert scripts(one) == set(lan.LEVEL1_SCRIPTS)
     assert scripts(two) == set(lan.LEVEL1_SCRIPTS) | set(lan.LEVEL2_SCRIPTS)
     assert not scripts(two) & {'default', 'safe', 'vuln', 'intrusive', 'all', 'auth', 'brute', 'exploit', 'dos'}
