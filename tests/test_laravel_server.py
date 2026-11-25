@@ -575,12 +575,15 @@ class FakeServer:
     owners, groups and modes. files: path -> dict(type 'f'|'d'|'l'|'p', mode,
     owner, group, text, target). A folder not listed is root's, 755."""
 
-    def __init__(self, files, *, user='deploy', sudo='password', groups=None, runas=True):
+    def __init__(self, files, *, user='deploy', sudo='password', groups=None, runas=True, fail=None):
         self.files = files
         self.user = user
         self.sudo_mode = sudo          # 'password' | 'nopasswd' | 'refused'
         self.runas = runas             # whether sudo -u <other user> is allowed
+        # supplementary members of a group; every user's primary group is its own name
         self.groups = groups or {'www-data': {'www-data'}}
+        # a command that fails as a whole: 'meta-L' / 'meta-P' / 'getent' -> (rc, stderr)
+        self.fail = fail or {}
         self.password = ''
         self.sudo_password = 'pw' if sudo == 'password' else ''
         self.commands = []             # (argv, the account it ran as)
@@ -641,9 +644,26 @@ class FakeServer:
 
     # the tools ------------------------------------------------------------------
     def _tool(self, argv, account):
-        handler = {'find': self._find, 'head': self._head, 'awk': self._awk}.get(argv[0])
-        assert handler, f'only find, head and awk are run: {argv}'
+        handler = {'find': self._find, 'head': self._head, 'awk': self._awk, 'getent': self._getent}.get(argv[0])
+        assert handler, f'only find, head, awk and getent are run: {argv}'
         return handler(argv, account)
+
+    def _users(self):
+        users = {'root', self.user, *(e.get('owner') for e in self.files.values() if e.get('owner'))}
+        return sorted(users, key=lambda u: (u != 'root', u))
+
+    def _getent(self, argv, account):
+        if 'getent' in self.fail:
+            rc, err = self.fail['getent']
+            return '', err, rc
+        users = self._users()
+        names = [*users, *(g for g in self.groups if g not in users)]
+        if argv[1] == 'passwd':
+            return '\n'.join(f'{u}:x:{i}:{i}::/home/{u}:/bin/sh' for i, u in enumerate(users)), '', 0
+        group = argv[2]
+        if group not in names:
+            return '', '', 2
+        return f'{group}:x:{names.index(group)}:{",".join(sorted(self.groups.get(group, set())))}', '', 0
 
     def _find(self, argv, account):
         if 'artisan' in argv:                                   # the search
@@ -672,11 +692,17 @@ class FakeServer:
                         out += f'{name}\t{e["mode"]:o}\t{e.get("owner", "root")}\t{e.get("group", "root")}\t{e["type"]}\0'
             return out, '', 0
         follow = argv[1] == '-L'                                # metadata of named paths
+        if f'meta{argv[1]}' in self.fail:
+            rc, err = self.fail[f'meta{argv[1]}']
+            return '', err, rc
         paths = argv[2:argv.index('-maxdepth')]
         out, err = '', ''
         for path in paths:
             _, e = self._entry(path, follow)
-            if e is None:
+            stat_error = (self.files.get(path) or {}).get('stat_error' + ('' if follow else '_P'))
+            if stat_error:
+                err += f"find: '{path}': {stat_error}\n"
+            elif e is None:
                 err += f"find: '{path}': No such file or directory\n"
             else:
                 out += self._meta(path, e)
@@ -907,3 +933,65 @@ def test_the_whole_audit_over_a_fake_server(data):
             subject_id('LV-SRV-004', APP, 'storage')} <= ids
     assert result['verdict'] == 'danger'
     assert result['host'] == 'srv.test'
+
+
+# --- review #63 pass 2: an unconfirmed object, a group's real members, a failed listing ------------------
+
+def test_a_root_read_needs_the_file_confirmed_as_a_regular_file(data):
+    files = _tree(owner='root')
+    files[f'{APP}/composer.json']['stat_error_P'] = 'Input/output error'      # find -P could not stat it
+    server = FakeServer(files)
+    raw = laravel_server.collect(server)
+    composer = raw['projects'][APP]['composer_json']
+    assert composer['status'] == 'skipped' and 'Input/output error' in composer['reason']
+    assert not [argv for argv, _ in server.commands if argv[0] == 'head' and argv[-1].endswith('composer.json')]
+
+
+def test_a_group_writable_folder_is_trusted_only_with_its_members_known(data):
+    config = {f'{APP}/bootstrap/cache/config.php': {'type': 'f', 'mode': 0o640, 'owner': 'shop', 'group': 'shop',
+                                                    'text': CACHED}}
+    # the group is named like the owner, but has another member
+    raw = laravel_server.collect(FakeServer(_tree(owner='shop', cache_group='shop', extra=config),
+                                            groups={'shop': {'mallory'}}))
+    tokens = raw['projects'][APP]['config_tokens']
+    assert tokens['status'] == 'skipped'
+    assert 'bootstrap/cache' in tokens['reason'] and 'mallory' in tokens['reason']
+    # the same tree, its group holding the owner alone: read
+    raw = laravel_server.collect(FakeServer(_tree(owner='shop', cache_group='shop', extra=config)))
+    assert raw['projects'][APP]['config_tokens']['status'] == 'ok'
+
+
+def test_group_root_with_another_member_is_not_trusted_for_a_root_read(data):
+    config = {f'{APP}/bootstrap/cache/config.php': {'type': 'f', 'mode': 0o640, 'owner': 'root', 'group': 'root',
+                                                    'text': CACHED}}
+    files = _tree(owner='root', cache_group='root', extra=config)
+    raw = laravel_server.collect(FakeServer(files, groups={'root': {'operator'}}))
+    assert raw['projects'][APP]['config_tokens']['status'] == 'skipped'
+    raw = laravel_server.collect(FakeServer(files))
+    assert raw['projects'][APP]['config_tokens']['status'] == 'ok'
+
+
+def test_group_members_that_cannot_be_listed_are_not_trusted(data):
+    config = {f'{APP}/bootstrap/cache/config.php': {'type': 'f', 'mode': 0o640, 'owner': 'shop', 'group': 'shop',
+                                                    'text': CACHED}}
+    server = FakeServer(_tree(owner='shop', cache_group='shop', extra=config), fail={'getent': (2, '')})
+    tokens = laravel_server.collect(server)['projects'][APP]['config_tokens']
+    assert tokens['status'] == 'skipped' and 'members' in tokens['reason']
+
+
+@pytest.mark.parametrize('which', ['meta-L', 'meta-P'])
+def test_a_failed_metadata_listing_is_not_a_missing_file(data, which):
+    server = FakeServer(_tree(owner='shop'), fail={which: (126, 'find: cannot execute: Permission denied\n')})
+    raw = laravel_server.collect(server)
+    composer = raw['projects'][APP]['composer_json']
+    assert composer['status'] == 'skipped'
+    assert 'cannot execute' in composer['reason']
+    assert not [argv for argv, _ in server.commands if argv[0] == 'head']
+    result = laravel_server.judge(raw, 'srv.test')
+    assert result['verdict'] == 'incomplete'
+
+
+def test_a_confirmed_missing_file_is_missing(data):
+    raw = laravel_server.collect(FakeServer(_tree(owner='shop')))
+    assert raw['projects'][APP]['lock']['status'] == 'missing'          # find said: No such file or directory
+    assert raw['projects'][APP]['config_tokens'] is None
