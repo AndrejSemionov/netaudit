@@ -321,11 +321,13 @@ def _status(run: _Run) -> tuple[str, str | None]:
 
 
 def _meta(ssh, paths: list[str], follow: bool, sudo: bool) -> dict:
-    """path -> {'owner', 'group', 'mode', 'type'}; a path find could not
-    stat is absent, with its reason in the result's 'errors'."""
+    """{'entries': path -> {'owner', 'group', 'mode', 'type'}, 'missing': paths
+    find said do not exist, 'errors': path -> reason for every other path
+    not listed}. A listing that failed as a whole leaves its reason on every
+    path it did not list - never "missing" (review #63 pass 2)."""
     run, _ = _exec(ssh, ['find', '-L' if follow else '-P', *paths, '-maxdepth', '0',
                          '-printf', '%p\\t%u\\t%g\\t%m\\t%y\\0'], sudo)
-    entries, errors = {}, {}
+    entries, errors, missing = {}, {}, set()
     for record in run.out.split('\0'):
         fields = record.split('\t')
         if len(fields) == 5 and fields[0] in paths:
@@ -336,11 +338,21 @@ def _meta(ssh, paths: list[str], follow: bool, sudo: bool) -> dict:
                 errors[fields[0]] = 'unexpected answer'
     for line in run.err.splitlines():
         for path in paths:
-            if f"'{path}'" in line and 'No such file or directory' not in line:
-                errors[path] = 'Permission denied' if 'Permission denied' in line else line.strip()
-    if not run.completed:
-        errors = {path: 'no answer' for path in paths if path not in entries}
-    return {'entries': entries, 'errors': errors}
+            prefix = f"find: '{path}': "
+            if line.startswith(prefix):
+                reason = line[len(prefix):].strip()
+                if reason == 'No such file or directory':
+                    missing.add(path)
+                else:
+                    errors[path] = reason
+    failed = not run.completed or run.rc not in (0, 1)
+    whole = f'the listing failed: {_first_error(run)}' if failed else 'not listed'
+    for path in paths:
+        if path not in entries and path not in missing:
+            errors.setdefault(path, whole)
+    if failed:
+        missing = set()
+    return {'entries': entries, 'errors': errors, 'missing': missing}
 
 
 def _ancestors(path: str) -> list[str]:
@@ -352,22 +364,30 @@ def _ancestors(path: str) -> list[str]:
         current = posixpath.dirname(current)
 
 
-def _untrusted(chain: dict, folder_path: str, reader: str) -> str | None:
+def _untrusted(chain: dict, folder_path: str, reader: str, members: dict) -> str | None:
     """Why a file in folder_path may not be read as `reader`: a folder on the
     way that another account may change, or that is a link. None when only
-    the reader and root can change the way to it."""
+    the reader and root can change the way to it. A folder its group may
+    change is trusted only when the group's members, listed on the server
+    (`members`), are the reader and root - a group's name proves nothing
+    (review #63 pass 2)."""
     for d in _ancestors(folder_path):
         m = chain['entries'].get(d)
         if m is None:
-            return f'{d} could not be checked ({chain["errors"].get(d, "no answer")})'
+            return f'{d} could not be checked ({chain["errors"].get(d, "not listed")})'
         if m['type'] == 'l':
             return f'{d} is a symbolic link'
         if m['type'] != 'd':
             return f'{d} is not a folder'
         if m['owner'] not in (reader, 'root'):
             return f'{d} belongs to {m["owner"]}'
-        if m['mode'] & 0o020 and m['group'] not in (reader, 'root'):
-            return f'{d} can be changed by the group {m["group"]}'
+        if m['mode'] & 0o020:
+            group = members.get(m['group'])
+            if group is None:
+                return f'{d} can be changed by the group {m["group"]}, whose members could not be listed'
+            others = sorted(group - {reader, 'root'})
+            if others:
+                return f'{d} can be changed by the group {m["group"]} (members: {", ".join(others)})'
         if m['mode'] & 0o002 and not m['mode'] & 0o1000:
             return f'{d} can be changed by everyone'
     return None
@@ -377,29 +397,37 @@ def _skipped(reason: str) -> dict:
     return {'status': 'skipped', 'text': '', 'truncated': False, 'reason': reason}
 
 
-def _content(ssh, folder: str, rel: str, reader: _Reader, chain: dict, files: dict, argv_for) -> dict:
+def _content(ssh, folder: str, rel: str, reader: _Reader, chain: dict, files: dict, members: dict, argv_for):
     """One file of the project, read as `reader` only when it is a regular
-    file on a path that only the reader or root can change."""
+    file on a path that only the reader or root can change; read as root,
+    the file itself must be confirmed a regular file, not a link (review #63
+    pass 2). Returns a Read dict when it is not read, else the run."""
     path = f'{folder}/{rel}'
     if reader.via is None:
         return _skipped(reader.reason)
     target = files['entries'].get(path)
     if target is None:
-        reason = files['errors'].get(path)
-        return _skipped(reason) if reason else {'status': 'missing', 'text': '', 'truncated': False, 'reason': None}
+        if path in files['missing']:
+            return {'status': 'missing', 'text': '', 'truncated': False, 'reason': None}
+        return _skipped(f'{rel} could not be checked: {files["errors"].get(path, "not listed")}')
     if target['type'] != 'f':
         return _skipped(f'{rel} is not a regular file')
-    why = _untrusted(chain, posixpath.dirname(path), reader.user)
+    why = _untrusted(chain, posixpath.dirname(path), reader.user, members)
     if why:
         return _skipped(f'{why}: {rel} is not read as {reader.user}')
-    if reader.user == 'root' and chain['entries'].get(path, {}).get('type') == 'l':
-        return _skipped(f'{rel} is a symbolic link: not followed as root')
-    run = _as(ssh, argv_for(path), reader)
-    return run
+    if reader.user == 'root':
+        own = chain['entries'].get(path)
+        if own is None:
+            return _skipped(f'{rel} could not be confirmed as a regular file '
+                            f'({chain["errors"].get(path, "not listed")}): not read as root')
+        if own['type'] != 'f':
+            return _skipped(f'{rel} is a symbolic link or not a regular file: not read as root')
+    return _as(ssh, argv_for(path), reader)
 
 
-def _read(ssh, folder, rel, limit, reader, chain, files) -> dict:
-    result = _content(ssh, folder, rel, reader, chain, files, lambda path: ['head', '-c', str(limit + 1), path])
+def _read(ssh, folder, rel, limit, reader, chain, files, members) -> dict:
+    result = _content(ssh, folder, rel, reader, chain, files, members,
+                      lambda path: ['head', '-c', str(limit + 1), path])
     if isinstance(result, dict):
         return result
     if result.completed and result.rc == 0:
@@ -408,8 +436,8 @@ def _read(ssh, folder, rel, limit, reader, chain, files) -> dict:
     return {'status': status, 'text': '', 'truncated': False, 'reason': reason}
 
 
-def _tokens(ssh, folder, rel, program, reader, chain, files) -> dict:
-    result = _content(ssh, folder, rel, reader, chain, files, lambda path: ['awk', program, path])
+def _tokens(ssh, folder, rel, program, reader, chain, files, members) -> dict:
+    result = _content(ssh, folder, rel, reader, chain, files, members, lambda path: ['awk', program, path])
     if isinstance(result, dict):
         return result
     if result.completed and result.rc == 0:
@@ -434,6 +462,27 @@ def _env_files(ssh, folder: str, sudo: bool) -> dict:
         return {'status': 'ok', 'files': files, 'reason': None}
     # a listing with an error is not the whole list (review #63 pass 1)
     return {'status': 'partial' if files else 'error', 'files': files, 'reason': _first_error(run)}
+
+
+def _group_members(ssh, groups: set, cache: dict) -> dict:
+    """group -> its members (supplementary, and every user whose primary
+    group it is), or None when they could not be listed. getent runs as the
+    SSH user; it reads names only."""
+    if 'passwd' not in cache:
+        run = _wrap(ssh, 'getent passwd', TIMEOUT)
+        users = None
+        if run.completed and run.rc == 0:
+            users = [(f[0], f[3]) for f in (line.split(':') for line in run.out.splitlines()) if len(f) >= 4]
+        cache['passwd'] = users
+    for group in groups - set(cache.get('groups', {})):
+        run = _wrap(ssh, shlex.join(['getent', 'group', group]), TIMEOUT)
+        fields = run.out.strip().split(':') if run.completed and run.rc == 0 else []
+        if len(fields) != 4 or cache['passwd'] is None:
+            members = None
+        else:
+            members = {m for m in fields[3].split(',') if m} | {u for u, gid in cache['passwd'] if gid == fields[2]}
+        cache.setdefault('groups', {})[group] = members
+    return cache.get('groups', {})
 
 
 def manifest(read: dict) -> tuple[str, str | None]:
@@ -472,15 +521,18 @@ def collect(ssh) -> dict:
     candidates, skipped = select_projects(discovery['dirs'], discovery['links'])
     skipped['over_limit'] = 0
 
-    projects, laravel_projects = {}, 0
+    projects, laravel_projects, group_cache = {}, 0, {}
     for folder in candidates:
         paths = sorted({*_ancestors(folder), *(f'{folder}/{d}' for d in INNER_DIRS),
                         *(f'{folder}/{f}' for f in FILES)})
         chain = _meta(ssh, paths, False, sudo)
         files = _meta(ssh, [f'{folder}/{f}' for f in (*FILES, *DIRS)], True, sudo)
         owner = chain['entries'].get(folder, {}).get('owner')
-        reader = _reader(me, owner, sudo) if owner else _Reader('', None, 'the project folder could not be checked')
-        composer = _read(ssh, folder, 'composer.json', MAX_COMPOSER_JSON, reader, chain, files)
+        reader = _reader(me, owner, sudo) if owner else _Reader(
+            '', None, f'the project folder could not be checked: {chain["errors"].get(folder, "not listed")}')
+        writable = {m['group'] for m in chain['entries'].values() if m['type'] == 'd' and m['mode'] & 0o020}
+        members = _group_members(ssh, writable, group_cache) if writable else {}
+        composer = _read(ssh, folder, 'composer.json', MAX_COMPOSER_JSON, reader, chain, files, members)
         project = {'owner': owner, 'reader': {'user': reader.user, 'via': reader.via}, 'composer_json': composer}
         kind, _ = manifest(composer)
         if kind == 'laravel':
@@ -491,8 +543,9 @@ def collect(ssh) -> dict:
         projects[folder] = project
         if kind != 'laravel':
             continue
-        project['installed'] = _read(ssh, folder, 'vendor/composer/installed.json', MAX_INVENTORY, reader, chain, files)
-        project['lock'] = _read(ssh, folder, 'composer.lock', MAX_INVENTORY, reader, chain, files)
+        project['installed'] = _read(ssh, folder, 'vendor/composer/installed.json', MAX_INVENTORY, reader, chain,
+                                     files, members)
+        project['lock'] = _read(ssh, folder, 'composer.lock', MAX_INVENTORY, reader, chain, files, members)
         project['env_files'] = _env_files(ssh, folder, sudo)
         entries = {rel: {'mode': files['entries'][f'{folder}/{rel}']['mode'],
                          'type': files['entries'][f'{folder}/{rel}']['type']}
@@ -500,9 +553,9 @@ def collect(ssh) -> dict:
         errors = {rel: files['errors'][f'{folder}/{rel}']
                   for rel in (*DIRS, 'bootstrap/cache/config.php') if f'{folder}/{rel}' in files['errors']}
         project['dirs'] = {'status': 'ok', 'reason': None, 'entries': entries, 'errors': errors}
-        project['env_tokens'] = _tokens(ssh, folder, '.env', ENV_AWK, reader, chain, files)
+        project['env_tokens'] = _tokens(ssh, folder, '.env', ENV_AWK, reader, chain, files, members)
         project['config_tokens'] = (_tokens(ssh, folder, 'bootstrap/cache/config.php', CONFIG_AWK, reader, chain,
-                                            files) if 'bootstrap/cache/config.php' in entries else None)
+                                            files, members) if 'bootstrap/cache/config.php' in entries else None)
     return {'sudo': sudo, 'sudo_note': note, 'discovery': discovery, 'skipped': skipped, 'projects': projects}
 
 
