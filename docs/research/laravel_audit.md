@@ -144,8 +144,9 @@ facts are from the Laravel 12 source.
   is root and there is no sudo. A file is read only when it is a regular
   file and every folder on its path can be changed by the reader or root
   alone (a folder of another account, writable by another group or by all,
-  or a link on the way, is not followed; as root, the file itself must not
-  be a link). Of `.env` and the cached config only normalized tokens leave
+  or a link on the way, is not followed; as root, the file itself must be
+  confirmed a regular file and no folder on the way may be writable by
+  everyone, sticky or not - review #63 pass 2-4). Of `.env` and the cached config only normalized tokens leave
   the server (`APP_DEBUG true`, `APP_ENV word:production`), never a line.
   What may not or could not be read is "not checked", with the reason.
 - A cut or broken `composer.json` is a gap, not "no Laravel"; the limit is

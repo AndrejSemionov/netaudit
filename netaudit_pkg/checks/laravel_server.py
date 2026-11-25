@@ -398,7 +398,9 @@ def _untrusted(chain: dict, folder_path: str, reader: str, members: dict) -> str
             others = sorted(group - {reader, 'root'})
             if others:
                 return f'{d} can be changed by the group {m["group"]} (members: {", ".join(others)})'
-        if m['mode'] & 0o002 and not m['mode'] & 0o1000:
+        if m['mode'] & 0o002 and (reader == 'root' or not m['mode'] & 0o1000):
+            # sticky keeps others from removing a file, not its owner from swapping it for a
+            # link: no exception on the way to a read as root (review #63 pass 4)
             return f'{d} can be changed by everyone'
     return None
 
