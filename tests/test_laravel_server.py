@@ -575,8 +575,11 @@ class FakeServer:
     owners, groups and modes. files: path -> dict(type 'f'|'d'|'l'|'p', mode,
     owner, group, text, target). A folder not listed is root's, 755."""
 
-    def __init__(self, files, *, user='deploy', sudo='password', groups=None, runas=True, fail=None):
+    def __init__(self, files, *, user='deploy', sudo='password', groups=None, runas=True, fail=None,
+                 locale='C'):
         self.files = files
+        # 'utf8': GNU tools quote paths with curly quotes, as on a server whose locale is UTF-8
+        self.locale = locale
         self.user = user
         self.sudo_mode = sudo          # 'password' | 'nopasswd' | 'refused'
         self.runas = runas             # whether sudo -u <other user> is allowed
@@ -588,6 +591,7 @@ class FakeServer:
         self.sudo_password = 'pw' if sudo == 'password' else ''
         self.commands = []             # (argv, the account it ran as)
         self.through_sudo = []         # argv of the commands that went through sudo
+        self.envs = []                 # the environment each command was given with env
 
     # the executor's interface -------------------------------------------------
     def run(self, cmd, timeout=20, stdin_data=None):
@@ -607,8 +611,17 @@ class FakeServer:
         elif argv[0] == 'runuser':
             assert self.user == 'root', 'runuser is used only by root'
             account, argv = argv[2], argv[4:]
+        env = {}
+        if argv[0] == 'env':
+            argv = argv[1:]
+            while '=' in argv[0]:
+                key, _, value = argv.pop(0).partition('=')
+                env[key] = value
         self.commands.append((argv, account))
+        self.envs.append(env)
         out, err, rc = self._tool(argv, account)
+        if self.locale == 'utf8' and env.get('LC_ALL') != 'C':
+            err = re.sub(r"'([^'\n]*)'", '\u2018\\1\u2019', err)
         return f"{out}\n{m.group('marker')}:{rc}\n", err
 
     def close(self):
@@ -995,3 +1008,18 @@ def test_a_confirmed_missing_file_is_missing(data):
     raw = laravel_server.collect(FakeServer(_tree(owner='shop')))
     assert raw['projects'][APP]['lock']['status'] == 'missing'          # find said: No such file or directory
     assert raw['projects'][APP]['config_tokens'] is None
+
+
+# --- a server whose locale is not C: the tools' messages are read in the C locale -------------------------
+
+def test_every_tool_runs_in_the_c_locale(data):
+    server = FakeServer(_tree(owner='shop'))
+    laravel_server.collect(server)
+    tools = [(argv[0], env) for (argv, _), env in zip(server.commands, server.envs) if argv[0] != 'getent']
+    assert tools and all(env.get('LC_ALL') == 'C' for _, env in tools), tools
+
+
+def test_a_missing_file_is_missing_on_a_utf8_server(data):
+    raw = laravel_server.collect(FakeServer(_tree(owner='shop'), locale='utf8'))
+    assert raw['projects'][APP]['lock']['status'] == 'missing'
+    assert raw['discovery']['partial'] is None and raw['discovery']['failed'] is None
