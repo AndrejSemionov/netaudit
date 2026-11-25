@@ -1023,3 +1023,27 @@ def test_a_missing_file_is_missing_on_a_utf8_server(data):
     raw = laravel_server.collect(FakeServer(_tree(owner='shop'), locale='utf8'))
     assert raw['projects'][APP]['lock']['status'] == 'missing'
     assert raw['discovery']['partial'] is None and raw['discovery']['failed'] is None
+
+
+# --- review #63 pass 4 (USER allowed): no folder writable by everyone on the way to a read as root -------
+
+@pytest.mark.parametrize(('mode', 'read'), [(0o1777, False), (0o777, False), (0o755, True)])
+def test_a_root_read_never_goes_through_a_folder_writable_by_everyone(data, mode, read):
+    # the sticky bit keeps others from removing a file, not its own owner from swapping it
+    files = _tree('/srv/app', owner='root')
+    files['/srv'] = {'type': 'd', 'mode': mode, 'owner': 'root', 'group': 'root'}
+    raw = laravel_server.collect(FakeServer(files))
+    composer = raw['projects']['/srv/app']['composer_json']
+    if read:
+        assert composer['status'] == 'ok'
+    else:
+        assert composer['status'] == 'skipped'
+        assert '/srv' in composer['reason'] and 'everyone' in composer['reason']
+
+
+def test_a_sticky_folder_still_does_not_stop_a_read_as_the_owner(data):
+    # reading as the project's owner reaches only what the owner can read: unchanged
+    files = _tree('/srv/app', owner='shop')
+    files['/srv'] = {'type': 'd', 'mode': 0o1777, 'owner': 'root', 'group': 'root'}
+    raw = laravel_server.collect(FakeServer(files))
+    assert raw['projects']['/srv/app']['composer_json']['status'] == 'ok'
