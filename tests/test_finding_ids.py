@@ -33,6 +33,7 @@ from netaudit_pkg.checks import (
     dns_audit,
     docker_audit,
     laravel,
+    laravel_server,
     log_discovery_audit,
     lynis_audit,
     rootkit_check,
@@ -70,6 +71,7 @@ IN_SCOPE = {
     # docs/research/laravel_audit.md: the shared web probe names each check's ids
     webprobe: None,
     laravel: None,
+    laravel_server: None,
 }
 # severities a finding may have without being a problem the trend counts
 NOT_PROBLEMS = ('ok', 'info', 'not_supported', 'third_party_repo')

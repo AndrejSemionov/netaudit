@@ -14,5 +14,8 @@ RUN apt-get update \
 COPY sshd_e2e.conf /etc/ssh/sshd_config.d/e2e.conf
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod 0755 /entrypoint.sh
+# Laravel projects for laravel_server (docs/research/laravel_audit.md §5)
+COPY laravel-projects.sh /stand/laravel-projects.sh
+RUN sh /stand/laravel-projects.sh
 EXPOSE 22
 ENTRYPOINT ["/entrypoint.sh"]

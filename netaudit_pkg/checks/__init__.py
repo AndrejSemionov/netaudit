@@ -12,6 +12,7 @@ from . import (
     kern_log_audit,  # noqa: F401
     kernel_hardening,  # noqa: F401
     laravel,  # noqa: F401
+    laravel_server,  # noqa: F401
     log_discovery_audit,  # noqa: F401
     lynis_audit,  # noqa: F401
     network,  # noqa: F401

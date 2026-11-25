@@ -106,18 +106,58 @@ gets no security fixes.
 
 ## 5. On the server (SSH)
 
+As approved, with the details settled when L4 was built (2026-11-24); the
+facts are from the Laravel 12 source.
+
 - Find **every** Laravel project: `artisan` next to a `composer.json` that
-  requires `laravel/framework`, under `/var/www`, `/home`, `/srv`, bounded
-  depth and count, `vendor/` excluded — not `head -1`.
-- Per project: `laravel/framework` version from `composer.lock` → support
-  status (endoflife.date); all locked packages → OSV (the existing
-  `query_osv` path).
-- `.env`: its mode and owner (readable by others → high); **only** the
-  values of `APP_DEBUG` and `APP_ENV` are read (a `grep` of those two
-  keys) — never `APP_KEY`, passwords or other lines; `APP_DEBUG=true` →
-  high, `APP_ENV=local` → medium.
-- `storage/` and `bootstrap/cache` writable by others (777) → medium.
+  requires `laravel/framework`, under `/var/www`, `/home`, `/srv`, depth 6,
+  `vendor/`, `node_modules/` and `.git/` pruned, at most 20 projects (more
+  is said). Zero-downtime deploys (Envoyer, Deployer: `releases/<n>` next
+  to a `current` symlink) are checked once, at the release `current`
+  points to; the earlier releases are counted, not judged.
+- Per project, versions as in §4 (L3, review of #62): `vendor/composer/
+  installed.json` first (what is installed), then `composer.lock`; support
+  from endoflife.date, every package to OSV.dev through `laravel_data` -
+  `cve_audit` is not changed.
+- `.env`: the mode and owner of every `.env*` file in the project root
+  (`.env.example` aside; a symlinked `.env` is judged by its target):
+  readable by others → high. **Only** the lines of `APP_DEBUG` and
+  `APP_ENV` are read (`grep -E` of those two keys) — never `APP_KEY`,
+  passwords or other lines; values follow Laravel's `Env` (`true`,
+  `(true)`, quotes, PHP's bool cast).
+- **Cached config:** when `bootstrap/cache/config.php` exists, Laravel does
+  not load `.env` at all (`LoadEnvironmentVariables::bootstrap`: `if
+  ($app->configurationIsCached()) return;`), so its `app.debug` and
+  `app.env` are the values in effect. The file is a `var_export` of every
+  setting, secrets included: only those two lines of the `app` block are
+  printed on the server (`awk`), never the rest.
+- `APP_DEBUG` on → high; `APP_ENV` `local` or `development` → medium (the
+  environments Ignition and Telescope open up for). A key set twice with
+  different values is not judged. A variable in the PHP process
+  environment would win over `.env` and is not visible here: the detail
+  says where the value was read.
+- `storage/` and `bootstrap/cache` writable by others → medium.
+- **Reading with the least rights (review #63 pass 1).** Names, modes and
+  owners are listed through sudo when it works. File *contents* are read
+  with no more rights than the project's owner: as the owner (plain, `sudo
+  -u`, `runuser` when connected as root), or as the SSH user when the owner
+  is root and there is no sudo. A file is read only when it is a regular
+  file and every folder on its path can be changed by the reader or root
+  alone (a folder of another account, writable by another group or by all,
+  or a link on the way, is not followed; as root, the file itself must be
+  confirmed a regular file and no folder on the way may be writable by
+  everyone, sticky or not - review #63 pass 2-4). Of `.env` and the cached config only normalized tokens leave
+  the server (`APP_DEBUG true`, `APP_ENV word:production`), never a line.
+  What may not or could not be read is "not checked", with the reason.
+- A cut or broken `composer.json` is a gap, not "no Laravel"; the limit is
+  20 Laravel projects among at most 60 folders with `artisan`.
+- Values from `.env` alone do not confirm the configuration in effect (a
+  value of the PHP process, or a `.env.<APP_ENV>` the environment chooses,
+  would win): an item says so; only a cached config confirms it.
 - Nothing is run in the project (no `php artisan`): reading files only.
+- Ids `LV-SRV-001`…`006` (subject: the project path; a vulnerability also
+  the package and the advisory id). The check sits in the Audit tab under
+  Laravel (the SSH form and saved hosts there); the Laravel tab points to it.
 
 ## 6. Result model and the tab
 

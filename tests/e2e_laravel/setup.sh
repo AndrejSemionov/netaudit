@@ -2,7 +2,7 @@
 # Laravel E2E stand (docs/research/laravel_audit.md §7, contract L6): two
 # sites from the official skeleton, the ground truth for laravel_external.
 #   lv1 http://127.0.0.1:8091/ - laravel/laravel 12 served from public/
-#       (php artisan serve), APP_ENV=production, APP_DEBUG=false
+#       (php artisan serve), APP_ENV=production, APP_DEBUG=false, config cached
 #   lv2 http://127.0.0.1:8092/ - the same project served from the project
 #       folder (router.php), the skeleton's own .env (APP_ENV=local,
 #       APP_DEBUG=true), Telescope, Debugbar and Ignition installed, a log
@@ -26,6 +26,8 @@ cp -a "$STAND/lv1" "$STAND/lv2"
 cd "$STAND/lv1"
 sed -i -e 's/^APP_ENV=.*/APP_ENV=production/' -e 's/^APP_DEBUG=.*/APP_DEBUG=false/' .env
 php artisan migrate --force
+# a real cached config: laravel_server reads only app.env and app.debug of it (CONFIG_AWK)
+php artisan config:cache
 nohup php artisan serve --host=127.0.0.1 --port=8091 > "$STAND/lv1.log" 2>&1 &
 
 # lv2: the skeleton's .env as it comes, debug tools, the project folder as the site root

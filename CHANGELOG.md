@@ -19,6 +19,18 @@
   "none". The same score and verdicts as the WordPress tab; ids `LV-*` in
   `docs/checks/finding_ids.md`. The WordPress check's request and transport
   code is now shared (`netaudit_pkg/webprobe.py`); its results are as before.
+- Laravel on the server: the SSH check `laravel_server` (Audit tab, Laravel
+  section) finds every Laravel project under `/var/www`, `/home` and `/srv`
+  - of a zero-downtime deploy only the live release - and checks each by
+  reading files: who can read its `.env` files; `APP_DEBUG` and `APP_ENV`,
+  from the cached config when there is one (Laravel ignores `.env` then);
+  `storage` and `bootstrap/cache` writable by everyone; whether its Laravel
+  release still gets security fixes and the known vulnerabilities of its
+  installed packages. File contents are read with no more rights than the
+  project's owner, never through a folder another account can change; of
+  `.env` and the cached config only normalized values of those two keys
+  leave the server - never `APP_KEY` or a password - and nothing is run in
+  a project. It says what it could not or may not read.
 
 - WordPress: known vulnerabilities of the core and of every plugin whose
   version is known, from Wordfence Intelligence. Each one is a finding with

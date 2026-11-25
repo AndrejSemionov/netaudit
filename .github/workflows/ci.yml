@@ -150,6 +150,7 @@ jobs:
         env:
           NETAUDIT_E2E_LV1: http://127.0.0.1:8091/
           NETAUDIT_E2E_LV2: http://127.0.0.1:8092/
+          NETAUDIT_E2E_LV_DIR: ${{ runner.temp }}/laravel-stand
         run: python -m pytest tests/e2e_laravel -v
       - name: Stand log
         if: always()
