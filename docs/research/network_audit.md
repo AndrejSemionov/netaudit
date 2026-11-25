@@ -1,9 +1,10 @@
 # Network section: research and draft contract
 
-Status: research and draft contract, rev. 2, MODE: MANUAL. Nothing here is
-approved yet: no code before USER approves the contract (§11). Researcher:
-Claude. Reviewer: GPT/Codex. Base: `main` @ `7788983`. Dates and versions are
-as of 2026-11-25.
+Status: contract approved, rev. 2, MODE: MANUAL (USER 2026-11-25 clarified
+the scenario - NetAudit finds everything itself - then answered «Утверждаю»
+to §11 with the defaults chosen by Claude); PR 1 is built as §12 says. Researcher and
+executor: Claude. Reviewer: GPT/Codex. Base: `main` @ `7788983`. Dates and
+versions are as of 2026-11-25.
 
 USER's request: "I have a network, it must be checked as a whole — where the
 staff are, where the office is, where accounting is, and so on; find the
