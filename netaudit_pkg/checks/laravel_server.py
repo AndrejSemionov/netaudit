@@ -199,9 +199,18 @@ def _wrap(ssh, command: str, timeout: int, stdin_data: str | None = None) -> _Ru
     return _Run(True, rc, body.removesuffix('\n'), err)
 
 
+def _c(argv: list[str]) -> list[str]:
+    """In the C locale: find and head say "No such file or directory" and
+    quote paths with ' only there; a UTF-8 or translated locale would hide a
+    missing file behind an unrecognised message."""
+    return ['env', 'LC_ALL=C', *argv]
+
+
 def _exec(ssh, argv: list[str], sudo: bool, timeout: int = TIMEOUT):
     """argv as root through sudo (run_sudo_with_exit_code) or as the SSH
-    user; every element is one argument (shlex.join), never shell syntax."""
+    user, in the C locale; every element is one argument (shlex.join),
+    never shell syntax."""
+    argv = _c(argv)
     if sudo:
         r = run_sudo_with_exit_code(ssh, argv, timeout=timeout)
         return _Run(r.completed, r.exit_code, r.stdout, r.stderr), r
@@ -232,10 +241,11 @@ def _reader(me: str, owner: str, sudo: bool) -> _Reader:
 
 
 def _as(ssh, argv: list[str], reader: _Reader) -> _Run:
-    if reader.via == 'plain':
-        return _wrap(ssh, shlex.join(argv), TIMEOUT)
     if reader.via == 'sudo':
         return _exec(ssh, argv, True)[0]
+    argv = _c(argv)
+    if reader.via == 'plain':
+        return _wrap(ssh, shlex.join(argv), TIMEOUT)
     if reader.via == 'runuser':
         return _wrap(ssh, shlex.join(['runuser', '-u', reader.user, '--', *argv]), TIMEOUT)
     secret = getattr(ssh, 'sudo_password', None) or getattr(ssh, 'password', '')
