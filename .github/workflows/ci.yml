@@ -128,6 +128,36 @@ jobs:
           docker logs wp1 2>&1 | tail -30
           docker logs wp2 2>&1 | tail -20
 
+  e2e-laravel:
+    # Laravel stand (docs/research/laravel_audit.md §7, contract L6): two
+    # sites from the official skeleton, the ground truth for laravel_external.
+    # The runner image's PHP and Composer; the app key is made per run.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install runtime + dev dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+      - name: Start the Laravel stand
+        run: bash tests/e2e_laravel/setup.sh
+      - name: E2E tests
+        env:
+          NETAUDIT_E2E_LV1: http://127.0.0.1:8091/
+          NETAUDIT_E2E_LV2: http://127.0.0.1:8092/
+        run: python -m pytest tests/e2e_laravel -v
+      - name: Stand log
+        if: always()
+        run: |
+          tail -30 "$RUNNER_TEMP/laravel-stand/lv1.log" || true
+          tail -30 "$RUNNER_TEMP/laravel-stand/lv2.log" || true
+          tail -30 "$RUNNER_TEMP/laravel-stand/lv2/storage/logs/laravel.log" || true
+
   security:
     runs-on: ubuntu-latest
     steps:

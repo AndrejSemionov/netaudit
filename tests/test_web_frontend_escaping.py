@@ -48,6 +48,7 @@ HTML_WRITERS = {
     'loadTrendUnits': 'escapes',
     'renderTrendUnit': 'escapes',
     'runWordPressCheck': 'escapes',  # renderWordPress(): escDeep() + wordPressHtml() (docs/research/wordpress_audit.md)
+    'runLaravelCheck': 'escapes',  # renderLaravel(): escDeep() + laravelHtml() (docs/research/laravel_audit.md)
 }
 
 # Interpolations allowed inside inline on*="..." handlers: check/tool ids from

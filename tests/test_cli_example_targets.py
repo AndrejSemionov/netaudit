@@ -19,6 +19,7 @@ from netaudit_pkg.engine import list_available
 EXAMPLE_CHECKS = {
     ('ssl', 'url'), ('http', 'url'), ('security_headers', 'url'), ('web_security_external', 'url'),
     ('dns_audit', 'domain'), ('cert_transparency', 'domain'), ('wordpress_external', 'url'),
+    ('laravel_external', 'url'),
 }
 
 
