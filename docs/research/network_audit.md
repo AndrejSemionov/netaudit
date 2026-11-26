@@ -456,5 +456,8 @@ N8 (basic) + N9.
   and level 2 are "not checked"; level 2 also names each device the scan
   did not cover. A TLS tunnel nmap saw on Telnet, FTP or the router API is
   not a clear-text finding; an anonymous FTP login over TLS still is.
+- **Review #65 pass 4** (narrow, allowed by USER): a host nmap marks
+  `timedout` has ports not fully known, so its scripts and level 2 are "not
+  checked" too, not only its services.
 - **Not in PR 1**: other subnets, segments and isolation (PR 2), known
   vulnerabilities by version (PR 3), trends for this check (no identity yet).

@@ -655,6 +655,11 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
         uncovered = [d['ip'] for d in others if not d['_scanned']]
         script_gaps += [f'{ip}: not port-scanned, no script ran on it' for ip in uncovered]
         level2_gaps += [f'{ip}: not port-scanned, level 2 did not run on it' for ip in uncovered]
+        # a timed-out host's ports are not fully known: which scripts apply to
+        # it, and whether they ran, is not known either (review #65 pass 3, R3-1)
+        timed_out = [d['ip'] for d in others if d['_scanned'] and d['_timedout']]
+        script_gaps += [f'{ip}: the port scan timed out on it, its scripts may not have run' for ip in timed_out]
+        level2_gaps += [f'{ip}: the port scan timed out on it, level 2 may not have run' for ip in timed_out]
         if script_gaps:
             checked.append({'item': 'scripts', 'status': 'not_checked', 'detail': _listed(script_gaps)})
         elif others:
