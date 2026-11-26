@@ -25,6 +25,9 @@
   commands), what was not checked, and next steps. The network report is not
   sent to AI analysis unless the run allows it. Needs `nmap` (`sudo apt
   install nmap`). Ids `NET-*`, `RTR-*` in `docs/checks/finding_ids.md`.
+
+## 1.3.0 — 2026-11-25
+
 - Laravel: a new **Laravel** tab next to WordPress and the check
   `laravel_external`, by site address, GET requests only. It tells Laravel
   by its cookies (or an open Laravel file) and looks for what a visitor can
