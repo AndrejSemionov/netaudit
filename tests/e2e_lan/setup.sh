@@ -54,6 +54,6 @@ for level in 1 2; do
     -v "$ROOT:/src:ro" -v "$OUT:/out" nalan-scanner sh -c \
     "ip route replace default via 172.30.10.254 \
      && exec setpriv --reuid=1000 --regid=1000 --init-groups --inh-caps=-all --bounding-set=-all -- \
-        env HOME=/tmp python3 /src/tests/e2e_lan/run_scan.py $level > /out/level$level.json 2> /out/level$level.log"
+        env HOME=/tmp python3 /src/tests/e2e_lan/run_scan.py $level /out/level$level.json > /out/level$level.log 2>&1"
 done
 ls -l "$OUT"
