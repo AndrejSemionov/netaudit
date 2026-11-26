@@ -847,6 +847,48 @@ def test_the_router_port_number_alone_does_not_prove_the_service():
     assert 'RTR-SVC-001:telnet' not in ids(build(ports=lan.parse_nmap_xml(nmap_xml(gw))))
 
 
+def test_a_failed_port_scan_leaves_no_device_and_no_level2_looking_checked():
+    """Review #65 pass 2, R2-1: the whole port scan failed - every device it
+    should have covered has a gap (a ring on the map), and level 2 and the
+    scripts are "not checked", never ok."""
+    res = build(discovery=lan.parse_nmap_xml(nmap_xml(host('192.168.88.1'), host('192.168.88.20'))),
+                neighbours={}, broadcast=lan.parse_nmap_xml(nmap_xml()), vendors={},
+                ports={'hosts': [], 'prescripts': {}, 'error': 'nmap exit code -1: timeout'}, level2=True)
+    for ip in ('192.168.88.1', '192.168.88.20'):
+        assert any('timeout' in g for g in device(res, ip)['gaps']), ip
+    gaps = _gap_items(res)
+    assert {'services', 'scripts', 'level2'} <= set(gaps)
+    assert 'timeout' in gaps['level2']
+
+
+def test_level2_names_devices_the_port_scan_did_not_cover():
+    res = build(discovery=lan.parse_nmap_xml(nmap_xml(host('192.168.88.1'), host('192.168.88.20'))),
+                ports=lan.parse_nmap_xml(nmap_xml(GATEWAY)), neighbours={},
+                broadcast=lan.parse_nmap_xml(nmap_xml()), level2=True)
+    assert '192.168.88.20' in _gap_items(res)['level2']
+
+
+def test_ftp_and_telnet_over_tls_are_not_clear_text():
+    """R2-2: a TLS tunnel nmap saw on the port is not a clear-text login; an
+    anonymous login it allows is still a finding."""
+    tls = host('192.168.88.20', port(21, 'ftp', product='vsftpd', tunnel='ssl', scripts=FTP_ANON)
+               + port(23, 'telnet', tunnel='ssl'))
+    found = ids(build(ports=lan.parse_nmap_xml(nmap_xml(GATEWAY, tls)), level2=True))
+    assert 'NET-FTP-001:192.168.88.20' not in found and 'NET-TEL-001:192.168.88.20' not in found
+    assert 'NET-FTP-002:192.168.88.20' in found
+    plain = host('192.168.88.20', port(21, 'ftp', product='vsftpd') + port(23, 'telnet'))
+    found = ids(build(ports=lan.parse_nmap_xml(nmap_xml(GATEWAY, plain))))
+    assert {'NET-FTP-001:192.168.88.20', 'NET-TEL-001:192.168.88.20'} <= found
+
+
+def test_router_management_over_tls_is_not_clear_text():
+    gw = host('192.168.88.1', port(21, 'ftp', product='MikroTik router ftpd', version='6.49.7', tunnel='ssl',
+                                   devicetype='router')
+              + port(8728, 'mikrotik-routeros-api', tunnel='ssl', product='MikroTik RouterOS API'))
+    found = ids(build(ports=lan.parse_nmap_xml(nmap_xml(gw))))
+    assert 'RTR-SVC-001:ftp' not in found and 'RTR-SVC-001:api' not in found
+
+
 # ---------------------------------------------------------------------------
 # the check: permission first, then the steps
 # ---------------------------------------------------------------------------

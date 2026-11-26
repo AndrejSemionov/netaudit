@@ -128,4 +128,3 @@ def test_announced_devices_and_per_device_gaps_are_shown():
     assert 'd.gaps' in svg and 'stroke-dasharray' in svg
     assert 'd.gaps' in card and "t('lan.gaps')" in card
     assert "'announced'" in svg and "t('lan.answered.announced')" in functions['lanHtml']
-
