@@ -114,3 +114,18 @@ def test_findings_use_the_translated_title_and_advice_by_control():
     view = _functions(_script())['lanHtml'] + _functions(_script())['lanFindingHtml']
     assert "lanControl(f.id)" in view
     assert "'lan.fix.' + control" in view and "'lan.title.' + control" in view
+
+
+def test_announced_devices_and_per_device_gaps_are_shown():
+    """Review #65 pass 1 (P1, P3): a device seen only by its announcement, and
+    what could not be checked on a device, are visible on the map and the card."""
+    for lang in ('ru', 'en'):
+        block = _lang_block(lang)
+        for key in ('lan.answered.announced', 'lan.gaps', 'lan.legend.gaps', 'lan.item.scripts'):
+            assert f"'{key}':" in block, (lang, key)
+    functions = _functions(_script())
+    svg, card = functions['lanMapSvg'], functions['lanDeviceCard']
+    assert 'd.gaps' in svg and 'stroke-dasharray' in svg
+    assert 'd.gaps' in card and "t('lan.gaps')" in card
+    assert "'announced'" in svg and "t('lan.answered.announced')" in functions['lanHtml']
+

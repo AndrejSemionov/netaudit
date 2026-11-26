@@ -77,13 +77,14 @@ def port(portid: int, name: str, *, product='', version='', method='probed', con
 
 
 def host(ip: str, ports: str = '', *, hostscripts: str = '', mac: str | None = None,
-         vendor: str | None = None, names: tuple = ()) -> str:
+         vendor: str | None = None, names: tuple = (), timedout: bool = False) -> str:
     mac_xml = ''
     if mac:
         mac_xml = f'<address addr="{mac.upper()}" addrtype="mac"' + (f' vendor="{vendor}"' if vendor else '') + '/>'
     names_xml = ''.join(f'<hostname name="{n}" type="PTR"/>' for n in names)
     hs = f'<hostscript>{hostscripts}</hostscript>' if hostscripts else ''
-    return (f'<host><status state="up" reason="syn-ack" reason_ttl="0"/><address addr="{ip}" addrtype="ipv4"/>'
+    attrs = ' timedout="true"' if timedout else ''
+    return (f'<host{attrs}><status state="up" reason="syn-ack" reason_ttl="0"/><address addr="{ip}" addrtype="ipv4"/>'
             f'{mac_xml}<hostnames>{names_xml}</hostnames><ports>{ports}</ports>{hs}</host>')
 
 
@@ -430,7 +431,11 @@ def test_ports_command_names_scripts_one_by_one():
     two = lan.ports_command(['192.168.88.20'], 'eth0', level2=True)
     for cmd in (one, two):
         assert {'-sT', '-sV', '--version-light', '-Pn', '--host-timeout'} <= set(cmd)
-        assert not FORBIDDEN & set(cmd)
+        assert not (FORBIDDEN - {'--script-args'}) & set(cmd)
+    # a silent smb-vuln-ms17-010 is "not vulnerable" and "the check failed" alike;
+    # vulns.showall makes it say which (review #65 pass 1, P1) - fixed in code, never from a user
+    assert '--script-args' not in one
+    assert two[two.index('--script-args') + 1] == 'vulns.showall'
     def scripts(cmd):
         return set(cmd[cmd.index('--script') + 1].split(','))
     assert scripts(one) == set(lan.LEVEL1_SCRIPTS)
@@ -678,6 +683,168 @@ def test_a_cut_range_is_a_gap():
 
 def test_level2_on_is_not_a_limit():
     assert 'level2' not in build(level2=True)['limits']
+
+
+# ---------------------------------------------------------------------------
+# review #65 pass 1: no false "complete", announcements, the listener's scope,
+# the protocol a port really speaks
+# ---------------------------------------------------------------------------
+
+SMB_ERROR = script('smb-protocols', 'ERROR: Script execution failed (use -d to debug)')
+
+
+def _gap_items(result):
+    return {c['item']: c['detail'] for c in result['checked'] if c['status'] == 'not_checked'}
+
+
+def test_a_target_missing_from_the_port_scan_is_a_gap():
+    """P1: discovery saw .20, the port-scan XML holds only the gateway."""
+    res = build(discovery=lan.parse_nmap_xml(nmap_xml(host('192.168.88.1'), host('192.168.88.20'))),
+                ports=lan.parse_nmap_xml(nmap_xml(GATEWAY)), neighbours={})
+    gaps = _gap_items(res)
+    assert 'services' in gaps and '192.168.88.20' in gaps['services']
+    assert device(res, '192.168.88.20')['gaps']
+    assert res['verdict'] != 'ok' and res['score']['complete'] is False
+
+
+def test_a_timed_out_host_is_a_gap():
+    timed = host('192.168.88.20', port(445, 'microsoft-ds'), timedout=True)
+    res = build(ports=lan.parse_nmap_xml(nmap_xml(GATEWAY, timed)), neighbours={})
+    assert '192.168.88.20' in _gap_items(res)['services']
+    assert any('timed out' in g for g in device(res, '192.168.88.20')['gaps'])
+
+
+def test_a_failed_script_is_a_gap_not_a_clean_answer():
+    """P1: 445 open, smb-protocols failed, smb2-security-mode silent - SMB was not checked."""
+    pc = host('192.168.88.20', port(445, 'microsoft-ds', product='Samba smbd'), hostscripts=SMB_ERROR)
+    res = build(discovery=lan.parse_nmap_xml(nmap_xml(host('192.168.88.1'), host('192.168.88.20'))),
+                ports=lan.parse_nmap_xml(nmap_xml(host('192.168.88.1'), pc)), neighbours={},
+                broadcast=lan.parse_nmap_xml(nmap_xml()))
+    gaps = _gap_items(res)
+    assert 'scripts' in gaps and 'smb-protocols' in gaps['scripts'] and 'smb2-security-mode' in gaps['scripts']
+    assert res['verdict'] == 'incomplete' and res['score']['complete'] is False
+
+
+def test_every_applicable_script_must_answer():
+    srv = host('192.168.88.40', port(22, 'ssh', product='OpenSSH') + port(443, 'https', tunnel='ssl')
+               + port(3389, 'ms-wbt-server') + port(5900, 'vnc'))
+    gaps = _gap_items(build(ports=lan.parse_nmap_xml(nmap_xml(GATEWAY, srv))))['scripts']
+    for name in ('ssh2-enum-algos', 'ssl-cert', 'rdp-enum-encryption', 'vnc-info'):
+        assert name in gaps, name
+
+
+def test_level2_answers_and_silences():
+    patched = script('smb-vuln-ms17-010', 'NOT VULNERABLE', '<table key="CVE-2017-0143">'
+                     '<elem key="state">NOT VULNERABLE</elem><table key="check_results">'
+                     '<elem>This system is patched.</elem></table></table>')
+    failed = script('smb-vuln-ms17-010', 'NOT VULNERABLE', '<table key="CVE-2017-0143">'
+                    "<elem key=\"state\">NOT VULNERABLE</elem><table key=\"check_results\">"
+                    "<elem>Could not connect to 'IPC$'</elem></table></table>")
+    clean = host('192.168.88.20', port(445, 'microsoft-ds') + port(6379, 'redis', scripts=REDIS_AUTH),
+                 hostscripts=SMB_V2_ONLY + SIGNING_REQUIRED + patched)
+    res = build(ports=lan.parse_nmap_xml(nmap_xml(GATEWAY, clean)), level2=True)
+    assert 'level2' not in _gap_items(res)
+    broken = host('192.168.88.20', port(21, 'ftp', product='vsftpd') + port(445, 'microsoft-ds'),
+                  hostscripts=SMB_V2_ONLY + SIGNING_REQUIRED + failed)
+    gaps = _gap_items(build(ports=lan.parse_nmap_xml(nmap_xml(GATEWAY, broken)), level2=True))
+    # ms17-010 could not check; ftp-anon is silent for a refusal and for a lost connection alike
+    assert 'smb-vuln-ms17-010' in gaps['level2'] and 'ftp-anon' in gaps['level2']
+
+
+def test_devices_seen_only_by_announcements_are_kept():
+    """P3: broadcast announced .1, .31 and .21; TCP and ARP saw only .1."""
+    res = build(discovery=lan.parse_nmap_xml(nmap_xml(host('192.168.88.1'))), neighbours={},
+                ports=lan.parse_nmap_xml(nmap_xml(GATEWAY)))
+    for ip in ('192.168.88.21', '192.168.88.31'):
+        d = device(res, ip)
+        assert d is not None and d['answered'] == 'announced' and d['gaps'], ip
+    assert device(res, '192.168.88.31')['kind'] == 'printer'
+
+
+def test_mndp_only_device_and_foreign_announcements():
+    heard = {**HEARD_NOTHING, 'mndp': [{'ip': '192.168.88.2', 'identity': 'ap-2', 'board': 'cAP'},
+                                       {'ip': '10.99.0.4', 'identity': 'other-site'}],
+             'llmnr': [{'ip': '10.99.0.4', 'name': 'OTHER-NETWORK'}]}
+    res = build(heard=heard)
+    assert device(res, '192.168.88.2')['answered'] == 'announced'
+    assert device(res, '10.99.0.4') is None
+    # P4: a query from outside the scanned range is not this network's problem
+    assert 'NET-NAME-001' not in ids(res)
+    assert all(x['ip'] != '10.99.0.4' for x in res['heard']['mndp'] + res['heard']['llmnr'])
+
+
+def test_announced_devices_are_port_scanned(monkeypatch, tmp_path):
+    ip = fake_ip(neigh=[])
+    scanned = []
+
+    def run(cmd, timeout=30):
+        if cmd[0] == 'ip':
+            return ip(cmd, timeout)
+        if '-sn' in cmd and '--script' not in cmd:
+            return 0, nmap_xml(host('192.168.88.1')), ''
+        if '--version-light' in cmd:
+            scanned.append(cmd)
+            return 0, nmap_xml(GATEWAY, PRINTER), ''
+        return 0, BROADCAST, ''
+    monkeypatch.setattr(lan_audit, '_run', run)
+    monkeypatch.setattr(lan_audit, '_listen', lambda seconds, **kw: HEARD_NOTHING)
+    monkeypatch.setattr(lan_audit, '_tool', lambda name: True)
+    monkeypatch.setattr(lan_audit, '_support', supported)
+    monkeypatch.setattr(lan, 'RESOLV_PATHS', (str(tmp_path / 'none'),))
+    lan_audit.check_lan_audit(authorization=lan_audit.AUTH_CONFIRM)
+    assert '192.168.88.31' in scanned[0] and '192.168.88.21' in scanned[0]
+
+
+def test_the_listener_is_scoped_to_the_interface_and_the_range():
+    """P4, with real sockets on loopback and free ports."""
+    import socket
+    import threading
+    import time
+
+    def free_port():
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.bind(('127.0.0.1', 0))
+            return s.getsockname()[1]
+
+    payload = _mndp((5, b'gw'), (7, b'7.16'))
+
+    def heard(**scope):
+        ports = {'mndp': free_port(), 'llmnr': free_port()}
+        box = {}
+        th = threading.Thread(target=lambda: box.update(lan.listen(1, ports=ports, **scope)))
+        th.start()
+        time.sleep(0.3)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.sendto(payload, ('127.0.0.1', ports['mndp']))
+        th.join()
+        return box['mndp']
+
+    assert [m['identity'] for m in heard(interface='lo', network='127.0.0.0/8')] == ['gw']
+    assert heard(interface='lo', network='192.168.88.0/24') == []
+    loopback = socket.if_nameindex()
+    other = next((name for _, name in loopback if name != 'lo'), None)
+    if other:
+        assert heard(interface=other, network='127.0.0.0/8') == []
+
+
+def test_a_port_number_alone_does_not_prove_the_protocol():
+    """P5: port 23 answered as HTTP is not Telnet; a port nmap only guessed is
+    a possible service, not a proven one."""
+    web23 = host('192.168.88.20', port(23, 'http', product='nginx') + port(3306, 'http', product='nginx'))
+    found = ids(build(ports=lan.parse_nmap_xml(nmap_xml(GATEWAY, web23))))
+    assert 'NET-TEL-001:192.168.88.20' not in found and 'NET-DB-001:192.168.88.20:3306' not in found
+    guess = host('192.168.88.20', port(23, 'telnet', method='table', conf=3))
+    f = next(f for f in build(ports=lan.parse_nmap_xml(nmap_xml(GATEWAY, guess)))['findings']
+             if f.get('id') == 'NET-TEL-001:192.168.88.20')
+    assert f['confidence'] == 'low' and f['requires_manual_verification'] is True
+    sure = next(f for f in build()['findings'] if f.get('id') == 'NET-TEL-001:192.168.88.20')
+    assert sure['confidence'] == 'high' and 'requires_manual_verification' not in sure
+
+
+def test_the_router_port_number_alone_does_not_prove_the_service():
+    gw = host('192.168.88.1', port(21, 'ftp', product='MikroTik router ftpd', version='6.49.7', devicetype='router')
+              + port(23, 'http', product='lighttpd'))
+    assert 'RTR-SVC-001:telnet' not in ids(build(ports=lan.parse_nmap_xml(nmap_xml(gw))))
 
 
 # ---------------------------------------------------------------------------
