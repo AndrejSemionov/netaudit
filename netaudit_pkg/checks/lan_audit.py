@@ -540,19 +540,20 @@ def check_lan_audit(client: str = '', authorization: str = 'no', level2: str = '
     heard: dict = {}
     listener = threading.Thread(target=lambda: heard.update(_listen(lan.LISTEN_SECONDS)), daemon=True)
     listener.start()
+    # the neighbour table is watched the whole time: the kernel drops stale
+    # entries once a /24 of probes has filled it (lan.NeighbourWatch)
+    watch = lan.NeighbourWatch(vantage['interface'], run=_run).start()
     discovery = _nmap(lan.discovery_command(scanned, vantage['interface']), DISCOVERY_TIMEOUT)
+    watch.read()
     broadcast = _nmap(lan.broadcast_command(vantage['interface']), BROADCAST_TIMEOUT)
-    neighbour_error = None
-    try:
-        neighbours = lan.neighbours(vantage['interface'], run=_run)
-    except lan.LanError as e:
-        neighbours, neighbour_error = {}, str(e)
+    seen = watch.read()
     net = ipaddress.ip_network(scanned)
-    found = {h['ip'] for h in discovery['hosts'] if h.get('state') == 'up'} | set(neighbours)
+    found = {h['ip'] for h in discovery['hosts'] if h.get('state') == 'up'} | set(seen)
     targets = sorted((ip for ip in found if ipaddress.ip_address(ip) in net and ip != vantage['address']),
                      key=_ip_key)
     ports = (_nmap(lan.ports_command(targets, vantage['interface'], level2_on), PORTS_TIMEOUT) if targets
              else {'hosts': [], 'prescripts': {}, 'error': None})
+    neighbours, neighbour_error = watch.stop()
     listener.join(timeout=lan.LISTEN_SECONDS + 10)
     if not heard:
         heard = {'mndp': [], 'llmnr': [], 'seconds': lan.LISTEN_SECONDS,

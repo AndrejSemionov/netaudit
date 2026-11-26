@@ -14,8 +14,9 @@ Everything here runs without root, as the NetAudit service does:
   one - and no user-supplied nmap option.
 - parse_nmap_xml(): nmap's XML, with any DOCTYPE other than nmap's own
   refused before parsing (no entity is ever expanded).
-- neighbours(): devices that answered ARP while nmap probed them - a PC
-  whose firewall drops every TCP probe still answers ARP (§3.3).
+- neighbours(), NeighbourWatch: devices that answered ARP while nmap probed
+  them - a PC whose firewall drops every TCP probe still answers ARP (§3.3);
+  watched during the whole scan, the kernel drops entries as it goes.
 - listen(): MikroTik's MNDP announcements and LLMNR name queries, heard on
   UDP 5678 and 5355. NetAudit only listens; it never answers a query
   (answering is the name-poisoning attack, §3.4).
@@ -29,6 +30,7 @@ import re
 import select
 import socket
 import struct
+import threading
 import time
 import xml.etree.ElementTree as ET  # nosec B405 - parses our own nmap's output; DOCTYPE/ENTITY refused first (parse_nmap_xml)
 
@@ -251,6 +253,59 @@ def neighbours(interface: str, *, run=None) -> dict:
         if states & _ANSWERED:
             out[e['dst']] = {'mac': e['lladdr'].lower(), 'state': min(states & _ANSWERED)}
     return out
+
+
+class NeighbourWatch:
+    """The neighbour table read at start, every `every` seconds, on demand
+    and at stop, keeping every answered entry any read saw. Probing a whole
+    /24 fills the table past the kernel's gc_thresh1 (128 entries), and the
+    kernel then drops stale entries while the scan goes on (CI e2e-lan run
+    45893044669): one late read lost MACs at random, and could lose a device
+    seen only by ARP."""
+
+    def __init__(self, interface: str, *, run=None, every: float = 3.0):
+        self.interface, self.run, self.every = interface, run or run_cmd, every
+        self._found: dict = {}
+        self._errors: list[str] = []
+        self._reads_ok = 0
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def read(self) -> dict:
+        """One read now; returns everything seen so far."""
+        try:
+            table = neighbours(self.interface, run=self.run)
+        except LanError as e:
+            with self._lock:
+                self._errors.append(str(e))
+        else:
+            with self._lock:
+                self._reads_ok += 1
+                self._found.update(table)       # the latest MAC of an address wins
+        with self._lock:
+            return {ip: dict(entry) for ip, entry in self._found.items()}
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self.every):
+            self.read()
+
+    def start(self) -> NeighbourWatch:
+        self.read()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+        return self
+
+    def stop(self) -> tuple[dict, str | None]:
+        """(everything seen, an error only when no read worked)."""
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=self.every + 20)
+        found = self.read()
+        with self._lock:
+            error = None if self._reads_ok else (self._errors[-1] if self._errors
+                                                 else 'the neighbour table was not read')
+        return found, error
 
 
 def load_vendors(path: str = MAC_PREFIXES) -> dict:
