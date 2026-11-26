@@ -49,6 +49,8 @@ HTML_WRITERS = {
     'renderTrendUnit': 'escapes',
     'runWordPressCheck': 'escapes',  # renderWordPress(): escDeep() + wordPressHtml() (docs/research/wordpress_audit.md)
     'runLaravelCheck': 'escapes',  # renderLaravel(): escDeep() + laravelHtml() (docs/research/laravel_audit.md)
+    'runLanAudit': 'escapes',  # renderLan(): escDeep() + lanHtml() (docs/research/network_audit.md)
+    'showLanDevice': 'escapes',  # LAN_VIEW: the copy renderLan()/renderResult() escaped once
 }
 
 # Interpolations allowed inside inline on*="..." handlers: check/tool ids from

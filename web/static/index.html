@@ -26,7 +26,7 @@
     font-family: -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 16px;
   }
   header {
-    display: flex; align-items: baseline; gap: 14px;
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;  /* seven tabs: wrap, never scroll sideways */
     padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--panel);
   }
   header h1 { margin: 0; font-size: 21px; letter-spacing: 0.5px; }
@@ -102,7 +102,7 @@
   .rec .why { color: var(--muted); font-size: 14px; margin-top: 2px; }
   .timing { color: var(--muted); font-family: var(--mono); font-size: 13px; }
   .sev-high { color: var(--bad); } .sev-medium { color: var(--warn); } .sev-low { color: var(--muted); }
-  .tabs-nav { margin-left: auto; display: flex; gap: 4px; }
+  .tabs-nav { margin-left: auto; display: flex; gap: 4px; flex-wrap: wrap; }
   .donate-link { margin-left: 14px; font-size: 15px; color: var(--muted); text-decoration: none;
     padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); white-space: nowrap; }
   .donate-link:hover { color: #ffb454; border-color: #ffb454; }
@@ -140,6 +140,21 @@
   .wp-score.ok { color: var(--ok); } .wp-score.warn { color: var(--warn); } .wp-score.bad { color: var(--bad); }
   .wp-facts { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 10px; font-size: 14px; }
   .wp-facts div span { display: block; color: var(--muted); font-size: 12px; }
+  .lan-check { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 2px; cursor: pointer; }
+  .lan-check input { margin-top: 4px; }
+  .lan-map { width: 100%; height: auto; display: block; }
+  .lan-box { fill: var(--panel-2); stroke: var(--border); stroke-width: 2; }
+  .lan-segment { fill: none; stroke: var(--accent-dim); stroke-width: 2; stroke-dasharray: 6 4; }
+  .lan-link { stroke: var(--border); stroke-width: 2; }
+  .lan-label { fill: var(--text); font-size: 13px; font-family: var(--mono); }
+  .lan-sub { fill: var(--muted); font-size: 11px; }
+  .lan-node { cursor: pointer; }
+  .lan-node:hover circle, .lan-node:hover rect { stroke: var(--accent); stroke-width: 3; }
+  .lan-you { fill: var(--bg); font-size: 14px; font-weight: 700; }
+  .lan-legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .lan-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
+  tr.lan-row { cursor: pointer; }
+  tr.lan-row:hover td { background: var(--panel-2); }
   .settings-group { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin-bottom: 18px; }
   .settings-group h2 { margin: 0 0 4px; font-size: 17px; }
   .settings-group .hint { color: var(--muted); font-size: 14px; margin: 0 0 14px; }
@@ -177,6 +192,7 @@
     <button class="tab-btn active" data-tab="audit" onclick="switchTab('audit')" data-i18n="tab.audit">Аудит</button>
     <button class="tab-btn" data-tab="wordpress" onclick="switchTab('wordpress')" data-i18n="tab.wordpress">WordPress</button>
     <button class="tab-btn" data-tab="laravel" onclick="switchTab('laravel')" data-i18n="tab.laravel">Laravel</button>
+    <button class="tab-btn" data-tab="lan" onclick="switchTab('lan')" data-i18n="tab.lan">Аудит сети</button>
     <button class="tab-btn" data-tab="trends" onclick="switchTab('trends')" data-i18n="tab.trends">Динамика</button>
     <button class="tab-btn" data-tab="settings" onclick="switchTab('settings')" data-i18n="tab.settings">Настройки</button>
     <button class="tab-btn" data-tab="help" onclick="switchTab('help')" data-i18n="tab.help">Помощь</button>
@@ -268,6 +284,27 @@
       <p class="hint" data-i18n="lv.server_hint">Версии, .env и права файлов на самом сервере — проверка «Laravel на сервере (SSH)» во вкладке «Аудит», раздел Laravel.</p>
     </div>
     <div id="lvResult"></div>
+  </div>
+</div>
+
+<div class="tab-page" id="tab-lan">
+  <div class="settings-wrap" style="max-width:1000px">
+    <div class="settings-group">
+      <h2 data-i18n="lan.title">Аудит сети</h2>
+      <p class="hint" data-i18n="lan.hint">Подключите этот компьютер к сети клиента (кабелем или по Wi-Fi) и запустите аудит. NetAudit сам найдёт устройства этого сегмента, роутер и его прошивку, открытые службы и ошибки настройки — без паролей и без root. Другие подсети и уязвимости по версиям появятся в следующих версиях.</p>
+      <label for="lanClient" class="hint" data-i18n="lan.client">Клиент / название сети</label>
+      <div class="wp-form"><input id="lanClient" type="text" maxlength="120"></div>
+      <label for="lanIface" class="hint" data-i18n="lan.iface">Интерфейс (пусто — тот, через который идёт интернет)</label>
+      <div class="wp-form"><input id="lanIface" type="text" maxlength="64" placeholder="eth0"></div>
+      <label class="lan-check"><input id="lanAuth" type="checkbox"> <span data-i18n="lan.auth">Владелец сети дал мне письменное разрешение на этот аудит</span></label>
+      <p class="hint" data-i18n="lan.auth_hint">Без этой отметки аудит не запускается. Сканировать чужую сеть без разрешения незаконно; антивирус на компьютерах клиента может сообщить о скане.</p>
+      <label class="lan-check"><input id="lanLevel2" type="checkbox"> <span data-i18n="lan.level2">Уровень 2: проверить анонимный доступ и уязвимости (MS17-010, анонимный FTP, Redis без пароля)</span></label>
+      <p class="hint" data-i18n="lan.level2_hint">Отдельное подтверждение. Без подбора паролей и без атак — только проверки, которые nmap считает безопасными.</p>
+      <label class="lan-check"><input id="lanAi" type="checkbox"> <span data-i18n="lan.ai">Разрешить ИИ-анализ этого отчёта (уйдут адреса и имена устройств клиента)</span></label>
+      <div class="wp-form" style="margin-top:12px"><button id="lanBtn" onclick="runLanAudit()" data-i18n="lan.start">Начать аудит</button></div>
+      <div class="status" id="lanStatus"></div>
+    </div>
+    <div id="lanResult"></div>
   </div>
 </div>
 
@@ -945,7 +982,7 @@ async function loadChecks() {
 function renderCheckList() {
   const byCat = {};
   CHECKS.forEach(c => { (byCat[c.category] ||= []).push(c); });
-  const catNames = { network: t('cat.network'), site: t('cat.site'), security: t('cat.security'), performance: t('cat.performance'), server: t('cat.server'), capture: t('cat.capture'), hardening: t('cat.hardening'), wordpress: t('cat.wordpress'), laravel: t('cat.laravel') };
+  const catNames = { network: t('cat.network'), site: t('cat.site'), security: t('cat.security'), performance: t('cat.performance'), server: t('cat.server'), capture: t('cat.capture'), hardening: t('cat.hardening'), wordpress: t('cat.wordpress'), laravel: t('cat.laravel'), lan: t('cat.lan') };
 
   const container = document.getElementById('checkList');
   container.innerHTML = '';
@@ -1383,6 +1420,7 @@ function renderResult(id, r, canvasId) {
   // the same view as the WordPress tab; r is already the escaped display copy
   if (id === 'wordpress_external') return { html: wordPressHtml(r) };
   if (id === 'laravel_external') return { html: laravelHtml(r) };
+  if (id === 'lan_audit') { LAN_VIEW = r; return { html: lanHtml(r) }; }
   if (id === 'laravel_server') return { html: laravelServerHtml(r) };
   if (r.error) return { html: `<span class="pill bad">${t('run.error')}</span> <span class="timing">${r.error}</span>` };
 
@@ -2084,6 +2122,250 @@ async function runLaravelCheck() {
 }
 
 // ---- Вкладки ----
+// ---- Network audit (docs/research/network_audit.md, contract N8) ----
+// One view of a lan_audit result for the Network audit tab and the Audit
+// tab. lanHtml(), lanMapSvg() and lanFindingHtml() take the escaped display
+// copy and return markup; LAN_VIEW keeps that copy for showLanDevice().
+// Common words (score, statuses, severities) are the WordPress tab's.
+const LAN_AUTH = 'yes — the network owner gave me written permission';
+const LAN_LEVEL2 = 'yes — also try anonymous access and vulnerability probes';
+const LAN_VERDICT_PILL = { ok: 'ok', warn: 'warn', danger: 'bad', incomplete: 'warn', not_started: 'bad' };
+const LAN_SEV_COLOR = { critical: 'var(--bad)', high: 'var(--bad)', medium: 'var(--warn)', low: 'var(--warn)' };
+let LAN_VIEW = null;
+
+function lanControl(id) {
+  return String(id || '').split(':')[0];
+}
+
+function lanText(key, fallback) {
+  const text = t(key);
+  return text === key ? fallback : text;
+}
+
+function lanFindingHtml(f) {
+  const control = lanControl(f.id);
+  const title = control ? lanText('lan.title.' + control, f.title) : f.title;
+  const fix = control ? lanText('lan.fix.' + control, f.recommendation || '') : (f.recommendation || '');
+  const pillClass = WP_SEVERITY_PILL[f.severity] || '';
+  return `<div class="wp-finding"><span class="pill ${pillClass}">${t('wp.sev.' + f.severity)}</span> <b>${title}</b>
+    ${f.device ? ` <span class="timing">${f.device}</span>` : ''}
+    ${f.detail ? `<div class="timing">${f.detail}</div>` : ''}
+    ${fix ? `<div>${t('wp.fix')}: ${fix}</div>` : ''}</div>`;
+}
+
+function lanDeviceName(d) {
+  return (d.names && d.names[0] && d.names[0].name) || t('lan.kind.' + d.kind);
+}
+
+function lanMapSvg(r) {
+  const devices = Array.isArray(r.devices) ? r.devices : [];
+  const v = r.vantage || {};
+  const router = r.router || null;
+  const cols = 6, cellW = 140, cellH = 80, W = 40 + cols * cellW, cx = W / 2;
+  const others = [];
+  devices.forEach((d, i) => { if (d.kind !== 'router') others.push(i); });
+  const rows = Math.max(1, Math.ceil(others.length / cols));
+  const segTop = 150, H = segTop + 60 + rows * cellH + 10;
+  // a device seen only by ARP or by its announcement is grey: nothing about it was judged
+  const fill = d => d.worst ? (LAN_SEV_COLOR[d.worst] || 'var(--warn)')
+    : (d.answered === 'neighbour' || d.answered === 'announced') ? 'var(--muted)' : 'var(--ok)';
+  const routerLabel = router
+    ? [router.vendor || t('lan.unknown_vendor'), router.model, router.version].filter(Boolean).join(' ')
+    : t('lan.unknown_vendor');
+  let svg = `<svg class="lan-map" viewBox="0 0 ${W} ${H}" role="img" aria-label="${t('lan.map')}">`
+    + `<rect x="${cx - 70}" y="6" width="140" height="32" rx="8" class="lan-box"/>`
+    + `<text x="${cx}" y="27" text-anchor="middle" class="lan-label">Internet</text>`
+    + `<line x1="${cx}" y1="38" x2="${cx}" y2="60" class="lan-link"/>`;
+  let routerDrawn = false;
+  devices.forEach((d, i) => {
+    if (d.kind !== 'router' || routerDrawn) return;
+    routerDrawn = true;
+    svg += `<g class="lan-node" onclick="showLanDevice(${i})">`
+      + `<rect x="${cx - 160}" y="60" width="320" height="52" rx="10" class="lan-box" style="stroke:${fill(d)}"/>`
+      + `<text x="${cx}" y="81" text-anchor="middle" class="lan-label">${t('lan.router')} ${d.ip}</text>`
+      + `<text x="${cx}" y="100" text-anchor="middle" class="lan-sub">${routerLabel}</text></g>`;
+  });
+  if (!routerDrawn) {
+    svg += `<rect x="${cx - 160}" y="60" width="320" height="52" rx="10" class="lan-box"/>`
+      + `<text x="${cx}" y="81" text-anchor="middle" class="lan-label">${t('lan.router')} ${router ? router.ip : (v.gateway || '?')}</text>`
+      + `<text x="${cx}" y="100" text-anchor="middle" class="lan-sub">${routerLabel}</text>`;
+  }
+  const where = v.interface ? ` · ${v.interface} (${v.wireless ? t('lan.wifi') : t('lan.cable')})` : '';
+  svg += `<line x1="${cx}" y1="112" x2="${cx}" y2="${segTop}" class="lan-link"/>`
+    + `<rect x="10" y="${segTop}" width="${W - 20}" height="${H - segTop - 6}" rx="12" class="lan-segment"/>`
+    + `<text x="24" y="${segTop + 24}" class="lan-label">${r.scanned || ''}${where}</text>`;
+  others.forEach((i, n) => {
+    const d = devices[i];
+    const x = 20 + (n % cols) * cellW + cellW / 2;
+    const y = segTop + 62 + Math.floor(n / cols) * cellH;
+    const you = d.kind === 'this_machine';
+    // a dashed ring: something on this device could not be checked
+    const gapRing = Array.isArray(d.gaps) && d.gaps.length
+      ? `<circle cx="${x}" cy="${y}" r="18" fill="none" style="stroke:var(--warn)" stroke-width="2" stroke-dasharray="4 3"/>` : '';
+    svg += `<g class="lan-node" onclick="showLanDevice(${i})">` + gapRing
+      + `<circle cx="${x}" cy="${y}" r="13" style="fill:${fill(d)};opacity:${d.answered === 'tcp' ? 1 : 0.55}"/>`
+      + (you ? `<text x="${x}" y="${y + 5}" text-anchor="middle" class="lan-you">★</text>` : '')
+      + `<text x="${x}" y="${y + 31}" text-anchor="middle" class="lan-label">${d.ip}</text>`
+      + `<text x="${x}" y="${y + 47}" text-anchor="middle" class="lan-sub">${you ? t('lan.you') : lanDeviceName(d).slice(0, 20)}</text></g>`;
+  });
+  svg += '</svg>';
+  const legend = [['var(--bad)', 'lan.legend.bad'], ['var(--warn)', 'lan.legend.warn'], ['var(--ok)', 'lan.legend.ok'],
+    ['var(--muted)', 'lan.legend.quiet']].map(([c, k]) => `<span><span class="lan-dot" style="background:${c}"></span>${t(k)}</span>`).join('')
+    + `<span><span class="lan-dot" style="border:2px dashed var(--warn)"></span>${t('lan.legend.gaps')}</span>`;
+  return svg + `<div class="lan-legend">${legend}</div>`;
+}
+
+function lanHtml(r) {
+  const verdict = Object.hasOwn(LAN_VERDICT_PILL, r.verdict) ? r.verdict : 'not_started';
+  if (verdict === 'not_started' || !Array.isArray(r.devices)) {
+    return `<div class="card"><h2><span class="pill bad">${t('lan.verdict.not_started')}</span></h2>
+      ${r.error ? `<p class="timing">${r.error}</p>` : ''}</div>`;
+  }
+  const pillClass = LAN_VERDICT_PILL[verdict];
+  const checked = Array.isArray(r.checked) ? r.checked : [];
+  let head = '';
+  if (r.score && Number.isFinite(r.score.value)) {
+    const value = Math.round(r.score.value);
+    const grade = value >= 80 ? 'good' : value >= 50 ? 'medium' : 'bad';
+    const scoreClass = { good: 'ok', medium: 'warn', bad: 'bad' }[grade];
+    head = `<div><div class="timing">${t('wp.score')}</div><div class="wp-score ${scoreClass}">${value}<small>/100</small></div>
+      <span class="pill ${scoreClass}">${t('wp.grade.' + grade)}</span></div>`;
+  }
+  const v = r.vantage || {};
+  const router = r.router;
+  let routerText = '—';
+  if (router) {
+    routerText = [router.vendor || t('lan.unknown_vendor'), router.os, router.model, router.version].filter(Boolean).join(' ');
+    if (router.version_source) routerText += ` <span class="timing">(${t('lan.version_from')} ${router.version_source})</span>`;
+    const s = router.support;
+    if (s && s.status === 'ended') routerText += ` <span class="pill bad">${t('lv.support_ended')}${s.eol ? ' ' + s.eol : ''}</span>`;
+  }
+  const stats = r.stats || {};
+  r.cards = r.devices.map(d => lanDeviceCard(d, r.findings || []));
+  let html = `<div class="card"><div class="wp-head">${head}<div>
+      <h2><span class="pill ${pillClass}">${t('lan.verdict.' + verdict)}</span> ${r.client || ''}</h2>
+      <div class="wp-facts">
+        <div><span>${t('lan.vantage')}</span>${v.address || ''} · ${v.interface || ''} (${v.wireless ? t('lan.wifi') : t('lan.cable')})</div>
+        <div><span>${t('lan.scanned')}</span>${r.scanned || ''}</div>
+        <div><span>${t('lan.gateway')}</span>${v.gateway || '—'}</div>
+        <div><span>${t('lan.router')}</span>${routerText}</div>
+        <div><span>${t('lan.devices')}</span>${stats.devices ?? 0}</div>
+      </div>
+      ${r.scan_note ? `<div class="timing">${r.scan_note}</div>` : ''}
+    </div></div></div>`;
+  html += `<div class="card"><h2>${t('lan.map')}</h2>${lanMapSvg(r)}<div class="lan-device-card"></div></div>`;
+  const findings = (r.findings || []).filter(f => f.severity !== 'ok');
+  if (findings.length) {
+    html += `<div class="card"><h2>${t('wp.findings')}: ${findings.length}</h2>`
+      + findings.map(f => lanFindingHtml({ ...f, control: lanControl(f.id) })).join('') + '</div>';
+  }
+  const rows = r.devices.map((d, i) => {
+    const problems = (r.findings || []).filter(f => f.device === d.ip && f.severity !== 'ok').length;
+    const ports = (d.ports || []).map(p => p.port).join(', ')
+      || (d.answered === 'neighbour' ? t('lan.answered.neighbour') : d.answered === 'announced' ? t('lan.answered.announced') : '—');
+    const mac = d.mac ? `${d.mac}${d.vendor ? ' · ' + d.vendor : ''}` : '—';
+    return `<tr class="lan-row" onclick="showLanDevice(${i})"><td>${d.ip}</td><td>${lanDeviceName(d)}</td><td>${mac}</td>
+      <td>${t('lan.kind.' + d.kind)}</td><td>${ports}</td><td>${problems || ''}</td></tr>`;
+  }).join('');
+  html += `<div class="card"><h2>${t('lan.devices')}: ${r.devices.length}</h2><table><tr><th>${t('lan.col.ip')}</th>
+    <th>${t('lan.col.name')}</th><th>${t('lan.col.mac')}</th><th>${t('lan.col.kind')}</th><th>${t('lan.col.ports')}</th>
+    <th>${t('lan.col.problems')}</th></tr>${rows}</table></div>`;
+  for (const [status, title] of [['not_checked', t('wp.not_checked')], ['ok', t('wp.fine')]]) {
+    const items = checked.filter(c => c.status === status);
+    if (!items.length) continue;
+    const pillClass = WP_STATUS_PILL[status];
+    html += `<div class="card"><h2>${title}: ${items.length}</h2><div class="wp-checks">` + items.map(c =>
+      `<div><span class="pill ${pillClass}">${t('wp.status.' + status)}</span> ${t('lan.item.' + c.item)}
+        <div class="timing">${c.detail || ''}</div></div>`).join('') + '</div></div>';
+  }
+  const limits = Array.isArray(r.limits) ? r.limits : [];
+  if (limits.length) {
+    html += `<div class="card"><h2>${t('lan.limits')}</h2><ul>`
+      + limits.map(x => `<li>${t('lan.limit.' + x)}</li>`).join('') + '</ul></div>';
+  }
+  const steps = Array.isArray(r.next_steps) ? r.next_steps : [];
+  if (steps.length) {
+    html += `<div class="card"><h2>${t('lan.next')}</h2><ul>` + steps.map(s =>
+      `<li>${t('lan.next.' + s.id)}${s.host ? ` <span class="timing">${s.host}</span>` : ''}`
+      + `${Array.isArray(s.hosts) ? ` <span class="timing">${s.hosts.join(', ')}</span>` : ''}</li>`).join('') + '</ul></div>';
+  }
+  return html;
+}
+
+function renderLan(r) {
+  r = escDeep(r);
+  LAN_VIEW = r;
+  return lanHtml(r);
+}
+
+function lanDeviceCard(d, all) {
+  const findings = all.filter(f => f.device === d.ip && f.severity !== 'ok');
+  const names = (d.names || []).map(n => `${n.name} <span class="timing">(${n.source})</span>`).join(', ') || '—';
+  const ports = (d.ports || []).map(p => `<tr><td>${p.port}</td><td>${p.service || ''}${p.tunnel ? ' (' + p.tunnel + ')' : ''}</td>
+    <td>${[p.product, p.version].filter(Boolean).join(' ')}${p.guessed ? ` <span class="timing">${t('lan.guessed')}</span>` : ''}</td></tr>`).join('');
+  return `<div class="card"><h2>${t('lan.device')} ${d.ip} · ${t('lan.kind.' + d.kind)}</h2>
+    <div class="wp-facts"><div><span>${t('lan.col.name')}</span>${names}</div>
+      <div><span>${t('lan.col.mac')}</span>${d.mac || '—'}${d.vendor ? ' · ' + d.vendor : ''}${d.random_mac ? ` <span class="timing">${t('lan.random_mac')}</span>` : ''}</div></div>
+    ${d.answered === 'neighbour' ? `<p class="timing">${t('lan.no_answer')}</p>` : ''}
+    ${d.answered === 'announced' ? `<p class="timing">${t('lan.answered.announced')}</p>` : ''}
+    ${Array.isArray(d.gaps) && d.gaps.length ? `<div class="wp-finding"><span class="pill warn">${t('wp.status.not_checked')}</span> <b>${t('lan.gaps')}</b>
+      <ul>${d.gaps.map(g => `<li class="timing">${g}</li>`).join('')}</ul></div>` : ''}
+    ${ports ? `<table><tr><th>Port</th><th>Service</th><th>Product</th></tr>${ports}</table>` : ''}
+    ${findings.map(f => lanFindingHtml(f)).join('')}</div>`;
+}
+
+// the cards were built by lanHtml() from the copy escaped once (LAN_VIEW);
+// only a row index comes in here
+function showLanDevice(i) {
+  const cards = LAN_VIEW && Array.isArray(LAN_VIEW.cards) ? LAN_VIEW.cards : [];
+  const html = cards[i] || '';
+  document.querySelectorAll('.lan-device-card').forEach(box => {
+    box.innerHTML = html;
+  });
+}
+
+async function runLanAudit() {
+  const status = document.getElementById('lanStatus');
+  const out = document.getElementById('lanResult');
+  const btn = document.getElementById('lanBtn');
+  if (!document.getElementById('lanAuth').checked) { status.textContent = t('lan.need_auth'); return; }
+  const params = {
+    client: document.getElementById('lanClient').value.trim(),
+    authorization: LAN_AUTH,
+    level2: document.getElementById('lanLevel2').checked ? LAN_LEVEL2 : 'no',
+    interface: document.getElementById('lanIface').value.trim(),
+    share_with_ai: document.getElementById('lanAi').checked ? 'yes' : 'no',
+  };
+  btn.disabled = true;
+  out.textContent = '';
+  status.textContent = t('lan.running');
+  const res = await fetch('/api/stream/start', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ checks: [{ id: 'lan_audit', params }] })
+  });
+  const started = await res.json().catch(() => ({}));
+  if (!res.ok || !started.task_id) {
+    btn.disabled = false;
+    status.textContent = t('run.error') + ': ' + (started.detail || t('run.unknown'));
+    return;
+  }
+  const es = new EventSource('/api/stream/' + started.task_id);
+  es.onmessage = (e) => {
+    const ev = JSON.parse(e.data);
+    if (ev.type === 'all_done' || ev.type === 'stopped' || ev.type === 'error') {
+      es.close();
+      btn.disabled = false;
+      const result = ev.report && ev.report.results && ev.report.results.lan_audit;
+      if (result) {
+        status.textContent = '';
+        out.innerHTML = renderLan(result);
+      } else {
+        status.textContent = t('run.error') + ': ' + (ev.message || t('run.unknown'));
+      }
+    }
+  };
+}
+
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab-page').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));

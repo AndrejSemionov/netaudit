@@ -263,3 +263,29 @@ Contract: `docs/research/laravel_audit.md` §5 (L4).
 | LV-SRV-004 | medium | project path, directory | storage/ or bootstrap/cache can be written by every user on the server |
 | LV-SRV-005 | high | project path | the project's Laravel release line no longer gets security fixes (endoflife.date) |
 | LV-SRV-006 | critical, high, medium, low | project path, package, OSV id | a known vulnerability (OSV.dev, Packagist) affects an installed or locked package |
+
+## lan_audit
+
+Contract: `docs/research/network_audit.md` §7, §11–12 (N3, N4). Subject: the
+device's IP address (and the port where one device can have several).
+
+| Control id | Severities | Subject | Control |
+|---|---|---|---|
+| NET-SMB-001 | high | address | SMBv1 is enabled |
+| NET-SMB-002 | medium | address | SMB message signing is not required |
+| NET-SMB-003 | critical | address | MS17-010 is not patched (level 2) |
+| NET-NAME-001 | medium | — | computers on the network ask names by LLMNR |
+| NET-TEL-001 | high | address | Telnet is open |
+| NET-FTP-001 | medium | address | FTP is open (clear text) |
+| NET-FTP-002 | high | address | anonymous FTP login is allowed (level 2) |
+| NET-RDP-001 | low | address | RDP is reachable from this segment |
+| NET-RDP-002 | medium | address | RDP accepts connections without NLA |
+| NET-VNC-001 | high | address, port | VNC accepts connections without a password |
+| NET-DB-001 | medium | address, port | a database or cache port is reachable from this segment |
+| NET-DB-002 | high | address, port | Redis answers without a password (level 2) |
+| NET-WEB-001 | low | address, port | a device's web interface is plain HTTP, no redirect to HTTPS |
+| NET-TLS-001 | medium, low | address, port | the certificate has expired (medium) or is self-signed (low) |
+| NET-SSH-001 | low | address, port | SSH offers weak algorithms |
+| RTR-SVC-001 | high, medium, low | service | a management service of the router is reachable from this segment |
+| RTR-UPNP-001 | medium | — | the router answers UPnP (devices can open ports to the internet) |
+| RTR-VER-001 | high | — | the router's firmware release line no longer gets fixes (endoflife.date) |

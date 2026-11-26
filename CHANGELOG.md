@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- Network audit: a new **Network audit** tab and the check `lan_audit` for
+  an auditor plugged into a client's network (cable or Wi-Fi). After the
+  auditor confirms the owner's written permission it finds, with no password
+  and no root: where this machine is (interface, subnet, gateway, DNS), the
+  devices of this segment - by TCP probes and by ARP, so a PC whose firewall
+  drops every probe is still found - the router and its model and firmware
+  (MAC vendor, service banners, UPnP, MikroTik's MNDP) and whether that
+  firmware line still gets fixes (endoflife.date), every device's common TCP
+  ports and services, and misconfigurations: SMBv1, SMB signing not required,
+  Telnet, FTP, RDP and RDP without NLA, VNC without a password, databases
+  open to the segment, plain-HTTP admin pages of printers and network
+  devices, expired or self-signed certificates, weak SSH algorithms, router
+  management open to the segment, UPnP; LLMNR name queries heard on the
+  network. Level 2, with its own confirmation, also tries anonymous FTP,
+  Redis without a password and MS17-010. nmap runs as a normal user (TCP
+  connect only), scripts are named one by one, no login is ever tried at
+  level 1, only private (RFC 1918) networks are scanned and a subnet bigger
+  than /22 is cut to the /24 around this machine. The result: a map of the
+  segment (router, devices coloured by their worst problem), device cards,
+  findings with advice in Russian and English (Windows, MikroTik and Linux
+  commands), what was not checked, and next steps. The network report is not
+  sent to AI analysis unless the run allows it. Needs `nmap` (`sudo apt
+  install nmap`). Ids `NET-*`, `RTR-*` in `docs/checks/finding_ids.md`.
+
 ## 1.3.0 — 2026-11-25
 
 - Laravel: a new **Laravel** tab next to WordPress and the check
