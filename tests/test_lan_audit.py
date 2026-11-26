@@ -578,6 +578,20 @@ def test_devices_merge_nmap_and_the_neighbour_table():
     assert res['stats'] == {'addresses': 254, 'devices': 7, 'neighbour_only': 1}
 
 
+def test_the_pn_scan_does_not_make_an_arp_only_device_a_tcp_one():
+    """-Pn reports every target as up; only the discovery answer or an open
+    port means the device answered TCP (CI e2e-lan run 45892042011: the host
+    that drops every probe read as 'tcp')."""
+    quiet = host('192.168.88.30')                               # in the -Pn scan, no open port
+    printer = host('192.168.88.31', port(9100, 'jetdirect'))    # missed by discovery, a port answered
+    res = build(discovery=lan.parse_nmap_xml(nmap_xml(host('192.168.88.1'))),
+                ports=lan.parse_nmap_xml(nmap_xml(quiet, printer)),
+                neighbours={**NEIGHBOURS, '192.168.88.31': {'mac': '00:11:22:33:44:55', 'state': 'STALE'}})
+    assert device(res, '192.168.88.30')['answered'] == 'neighbour'
+    assert device(res, '192.168.88.31')['answered'] == 'tcp'
+    assert res['stats']['neighbour_only'] == 1
+
+
 def test_a_service_guessed_from_the_port_is_marked():
     smb = next(p for p in device(build(), '192.168.88.21')['ports'] if p['port'] == 445)
     assert smb['guessed'] is True
