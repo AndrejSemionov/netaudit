@@ -871,6 +871,22 @@ def test_level2_names_devices_the_port_scan_did_not_cover():
     assert '192.168.88.20' in _gap_items(res)['level2']
 
 
+def test_a_timed_out_host_leaves_scripts_and_level2_not_checked():
+    """Review #65 pass 3, R3-1: a host nmap gave up on (timedout) has ports
+    not fully known, so neither its scripts nor level 2 can read ok; the same
+    host without the timeout is a legitimate ok."""
+    only = {'discovery': lan.parse_nmap_xml(nmap_xml(host('192.168.88.1'), host('192.168.88.20'))),
+            'neighbours': {}, 'broadcast': lan.parse_nmap_xml(nmap_xml())}
+    timed = build(ports=lan.parse_nmap_xml(nmap_xml(GATEWAY, host('192.168.88.20', timedout=True))),
+                  level2=True, **only)
+    gaps = _gap_items(timed)
+    assert {'services', 'scripts', 'level2'} <= set(gaps)
+    assert '192.168.88.20' in gaps['scripts'] and 'timed out' in gaps['scripts']
+    assert '192.168.88.20' in gaps['level2'] and 'timed out' in gaps['level2']
+    control = build(ports=lan.parse_nmap_xml(nmap_xml(GATEWAY, host('192.168.88.20'))), level2=True, **only)
+    assert not {'services', 'scripts', 'level2'} & set(_gap_items(control))
+
+
 def test_ftp_and_telnet_over_tls_are_not_clear_text():
     """R2-2: a TLS tunnel nmap saw on the port is not a clear-text login; an
     anonymous login it allows is still a finding."""
