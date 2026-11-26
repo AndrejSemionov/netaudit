@@ -116,15 +116,17 @@ scans and says what was visible from where.
 So without root: TCP only; no UDP (SNMP, NetBIOS), no OS detection, no MACs
 from nmap; discovery must probe more ports than 80/443.
 
-### 3.3 MACs of the whole segment without root — HYPOTHESIS
+### 3.3 MACs of the whole segment without root — FACT (CI stand)
 
 A `connect()` to an address on the local subnet makes the kernel ARP for it
 first. A device that answers ARP but drops TCP (Windows with its firewall on)
 should then be in `ip neigh` as REACHABLE/STALE with its MAC; empty addresses
 as FAILED/INCOMPLETE. That would find firewalled devices and give every MAC on
 the auditor's segment. The gateway case above is FACT; the whole-subnet case is
-proven on the CI stand (§10). Other segments are behind the router: their MACs
-are never seen from here.
+FACT since CI run 45892042011 (§10): the stand's host that drops every TCP and
+ICMP packet was found by an unprivileged scan, with its MAC, from the
+neighbour table only. Other segments are behind the router: their MACs are
+never seen from here.
 
 ### 3.4 Listening and asking on the local segment
 
