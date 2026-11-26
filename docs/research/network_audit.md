@@ -451,5 +451,10 @@ N8 (basic) + N9.
     service gives no finding of the port's usual service; a port nmap only
     guessed (`method="table"`) gives a finding with confidence low, "to
     verify".
+- **Review #65 pass 2**: a port scan that failed as a whole is a gap of
+  every device it should have covered (a ring on the map), and the scripts
+  and level 2 are "not checked"; level 2 also names each device the scan
+  did not cover. A TLS tunnel nmap saw on Telnet, FTP or the router API is
+  not a clear-text finding; an anonymous FTP login over TLS still is.
 - **Not in PR 1**: other subnets, segments and isolation (PR 2), known
   vulnerabilities by version (PR 3), trends for this check (no identity yet).

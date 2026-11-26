@@ -204,6 +204,7 @@ def identify_router(gateway: str | None, dev: dict | None, heard: dict) -> dict 
 
 
 UNIDENTIFIED = ('', 'unknown', 'tcpwrapped')
+CLEAR_TEXT = ('telnet', 'ftp', 'api')        # router services judged for their clear text
 
 
 def _protocol(p: dict, names: tuple, products: tuple = ()) -> str:
@@ -259,7 +260,9 @@ def _router_findings(router: dict, dev: dict | None, broadcast_info: dict, findi
         if p['port'] in ROUTER_SERVICES:
             name, sev, why, names, products = ROUTER_SERVICES[p['port']]
             state = _protocol(p, names, products)
-            if state == 'other':
+            # Telnet, FTP and the plain API are findings for their clear text:
+            # not over a TLS tunnel nmap saw (review #65 pass 2, R2-2)
+            if state == 'other' or (name in CLEAR_TEXT and p['tunnel'] == 'ssl'):
                 continue
             c = _certainty(state, p['port'])
             title = f'router management over {name} is reachable from this segment'
@@ -328,19 +331,22 @@ def _device_findings(dev: dict, level2: bool, findings: list):
         findings.append(_finding('critical', 'MS17-010 is not patched (EternalBlue)',
                                  'remote code execution over SMBv1, used by WannaCry',
                                  id=subject_id('NET-SMB-003', ip), extra={'device': ip}))
+    # a TLS tunnel nmap saw on the port is not a clear-text login (review #65 pass 2, R2-2)
     state = _protocol(ports[23], ('telnet',)) if 23 in ports else 'other'
-    if state != 'other':
+    if state != 'other' and ports[23]['tunnel'] != 'ssl':
         c = _certainty(state, 23)
         findings.append(_finding('high', 'Telnet is open', 'logins cross the network in clear text' + c['note'],
                                  c['confidence'], id=subject_id('NET-TEL-001', ip), extra={'device': ip},
                                  requires_manual_verification=c['requires_manual_verification']))
     state = _protocol(ports[21], ('ftp',), ('ftpd', 'ftp server')) if 21 in ports else 'other'
     if state != 'other':
-        c = _certainty(state, 21)
-        findings.append(_finding('medium', 'FTP is open',
-                                 'logins and files cross the network in clear text' + c['note'], c['confidence'],
-                                 id=subject_id('NET-FTP-001', ip), extra={'device': ip},
-                                 requires_manual_verification=c['requires_manual_verification']))
+        if ports[21]['tunnel'] != 'ssl':
+            c = _certainty(state, 21)
+            findings.append(_finding('medium', 'FTP is open',
+                                     'logins and files cross the network in clear text' + c['note'],
+                                     c['confidence'], id=subject_id('NET-FTP-001', ip), extra={'device': ip},
+                                     requires_manual_verification=c['requires_manual_verification']))
+        # an anonymous login is a finding over TLS too
         anon = ports[21]['scripts'].get('ftp-anon')
         if level2 and anon and anon['output'].startswith('Anonymous FTP login allowed'):
             findings.append(_finding('high', 'anonymous FTP login is allowed', 'anyone here can read the files',
@@ -539,6 +545,9 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
     for d in devices:
         d['gaps'] = []
     if ports.get('error'):
+        # nothing about these devices' ports is known (review #65 pass 2, R2-1)
+        for d in others:
+            d['gaps'].append(f"the port scan failed: {ports['error']}")
         checked.append({'item': 'services', 'status': 'not_checked', 'detail': ports['error']})
     elif others:
         missing = []
@@ -636,13 +645,24 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
         d['gaps'] += one + two
         script_gaps += [f"{d['ip']} {g}" for g in one]
         level2_gaps += [f"{d['ip']} {g}" for g in two]
-    if script_gaps:
-        checked.append({'item': 'scripts', 'status': 'not_checked', 'detail': _listed(script_gaps)})
-    elif not ports.get('error') and others:
-        checked.append({'item': 'scripts', 'status': 'ok', 'detail': 'every applicable script answered'})
-    if level2:
-        checked.append({'item': 'level2', 'status': 'not_checked', 'detail': _listed(level2_gaps)} if level2_gaps
-                       else {'item': 'level2', 'status': 'ok', 'detail': ', '.join(lan.LEVEL2_SCRIPTS)})
+    if ports.get('error'):
+        # no script ran anywhere: never "every script answered" (R2-1)
+        reason = f"the port scan failed: {ports['error']}"
+        checked.append({'item': 'scripts', 'status': 'not_checked', 'detail': reason})
+        if level2:
+            checked.append({'item': 'level2', 'status': 'not_checked', 'detail': reason})
+    else:
+        uncovered = [d['ip'] for d in others if not d['_scanned']]
+        script_gaps += [f'{ip}: not port-scanned, no script ran on it' for ip in uncovered]
+        level2_gaps += [f'{ip}: not port-scanned, level 2 did not run on it' for ip in uncovered]
+        if script_gaps:
+            checked.append({'item': 'scripts', 'status': 'not_checked', 'detail': _listed(script_gaps)})
+        elif others:
+            checked.append({'item': 'scripts', 'status': 'ok', 'detail': 'every applicable script answered'})
+        if level2:
+            checked.append({'item': 'level2', 'status': 'not_checked', 'detail': _listed(level2_gaps)}
+                           if level2_gaps else
+                           {'item': 'level2', 'status': 'ok', 'detail': ', '.join(lan.LEVEL2_SCRIPTS)})
 
     for d in devices:
         d['worst'] = _worst({f['severity'] for f in findings if f.get('device') == d['ip']})

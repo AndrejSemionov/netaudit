@@ -742,7 +742,10 @@ def test_level2_answers_and_silences():
                     "<elem>Could not connect to 'IPC$'</elem></table></table>")
     clean = host('192.168.88.20', port(445, 'microsoft-ds') + port(6379, 'redis', scripts=REDIS_AUTH),
                  hostscripts=SMB_V2_ONLY + SIGNING_REQUIRED + patched)
-    res = build(ports=lan.parse_nmap_xml(nmap_xml(GATEWAY, clean)), level2=True)
+    # only the scanned devices are in the segment: an unscanned one is a level-2 gap (R2-1)
+    only = {'discovery': lan.parse_nmap_xml(nmap_xml(host('192.168.88.1'), host('192.168.88.20'))),
+            'neighbours': {}, 'broadcast': lan.parse_nmap_xml(nmap_xml())}
+    res = build(ports=lan.parse_nmap_xml(nmap_xml(GATEWAY, clean)), level2=True, **only)
     assert 'level2' not in _gap_items(res)
     broken = host('192.168.88.20', port(21, 'ftp', product='vsftpd') + port(445, 'microsoft-ds'),
                   hostscripts=SMB_V2_ONLY + SIGNING_REQUIRED + failed)
