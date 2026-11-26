@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.3.0 — 2026-11-25
+
 - Laravel: a new **Laravel** tab next to WordPress and the check
   `laravel_external`, by site address, GET requests only. It tells Laravel
   by its cookies (or an open Laravel file) and looks for what a visitor can
