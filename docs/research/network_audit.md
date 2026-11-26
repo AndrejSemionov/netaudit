@@ -426,5 +426,30 @@ N8 (basic) + N9.
   endoflife.date only; KEV and NVD need version ranges and come with N7.
 - **AI**: the stored report is unchanged; `ai_analyze` replaces a
   `lan_audit` result with a note unless the run had `share_with_ai = yes`.
+- **Review #65 pass 1** (GPT/Codex), as built:
+  - *Coverage, not silence*: a device missing from the port-scan XML, a
+    host nmap marks `timedout="true"` (nmap.dtd), and every applicable
+    script that failed (`ERROR…`) or said nothing (SMB scripts on 139/445,
+    `ssh2-enum-algos`, `ssl-cert`, `rdp-enum-encryption`, `vnc-info`,
+    `http-title` where a finding needs it) are gaps of that device - listed
+    in "not checked", in its card and as a dashed ring on the map. Level 2
+    runs `smb-vuln-ms17-010` with `--script-args vulns.showall`, the only
+    script argument, fixed in code: without it the script is silent both
+    for a patched system and for a check that could not run, with it
+    `check_results` tells them apart (smb-vuln-ms17-010.nse, vulns.lua);
+    `ftp-anon` is silent both for a refused login and for a lost connection
+    (ftp-anon.nse), so its silence is a gap, not "anonymous refused".
+  - *Announced devices*: an address seen only in mDNS / UPnP / WS-Discovery
+    answers or MNDP (inside the range) is a device ("found only by its
+    announcement"); broadcast ones are added to the port scan, an MNDP one
+    heard after it is a gap.
+  - *The listener's scope*: each packet's receiving interface is read
+    (IP_PKTINFO) and must be the audited one, its source must be in the
+    scanned range; LLMNR's group is joined on the interface's address with
+    IP_MULTICAST_ALL off; the result drops anything from outside the range.
+  - *A port number proves nothing alone*: a port nmap identified as another
+    service gives no finding of the port's usual service; a port nmap only
+    guessed (`method="table"`) gives a finding with confidence low, "to
+    verify".
 - **Not in PR 1**: other subnets, segments and isolation (PR 2), known
   vulnerabilities by version (PR 3), trends for this check (no identity yet).

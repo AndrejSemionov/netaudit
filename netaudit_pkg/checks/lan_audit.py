@@ -42,6 +42,11 @@ PORTS_TIMEOUT = 1800
 LIMITS = ('udp', 'os_detection', 'other_subnets', 'known_vulns')
 DB_PORTS = {1433: 'SQL Server', 1521: 'Oracle', 3306: 'MySQL', 5432: 'PostgreSQL', 6379: 'Redis',
             9200: 'Elasticsearch', 11211: 'memcached', 27017: 'MongoDB'}
+# port -> (nmap service names, product words) that prove the database answered
+DB_PROTOCOLS = {1433: (('ms-sql-s',), ('sql server',)), 1521: (('oracle-tns', 'oracle'), ('oracle',)),
+                3306: (('mysql',), ('mysql', 'mariadb')), 5432: (('postgresql',), ('postgresql',)),
+                6379: (('redis',), ('redis',)), 9200: (('elasticsearch',), ('elasticsearch',)),
+                11211: (('memcached',), ('memcached',)), 27017: (('mongodb', 'mongod'), ('mongodb',))}
 SEVERITY_ORDER = ('critical', 'high', 'medium', 'low')
 
 # seams for the tests: nothing here runs a tool or opens a socket directly
@@ -87,7 +92,9 @@ def _kind(dev: dict, vantage: dict, gateway: str | None) -> str:
     upnp = ' '.join(announced.get('upnp', {}).values()).lower()
     vendor = f"{dev.get('vendor') or ''} {upnp}".lower()
     wsdd = ' '.join(announced.get('wsdd', [])).lower()
-    if ports & {9100, 515} or 'printer' in words or 'printdevice' in wsdd:
+    mdns = ' '.join(announced.get('mdns', [])).lower()
+    if (ports & {9100, 515} or 'printer' in words or 'printdevice' in wsdd or ' ipp' in f' {mdns}'
+            or any(w in upnp for w in ('printer', 'laserjet', 'officejet'))):
         return 'printer'
     if 554 in ports or 'webcam' in words or 'camera' in words or any(v in vendor for v in ('hikvision', 'dahua',
                                                                                              'axis comm')):
@@ -105,13 +112,20 @@ def _kind(dev: dict, vantage: dict, gateway: str | None) -> str:
     return 'unknown'
 
 
+def _in(net, ip) -> bool:
+    try:
+        return ipaddress.ip_address(ip) in net
+    except ValueError:
+        return False
+
+
 def _devices(vantage, net, discovery, neighbours, ports, broadcast, heard, vendors) -> list[dict]:
     answered = {h['ip'] for h in discovery['hosts'] if h.get('state') == 'up'}
     scanned = {h['ip']: h for h in ports['hosts']}
     announced = lan.broadcast_devices(broadcast.get('prescripts', {}))
     mndp = {m['ip']: m for m in heard.get('mndp', []) if m.get('ip')}
-    ips = {ip for ip in answered | set(neighbours) | set(scanned)
-           if ipaddress.ip_address(ip) in net}
+    # a device seen only by its announcement is a device too (review #65 P3)
+    ips = {ip for ip in answered | set(neighbours) | set(scanned) | set(announced) | set(mndp) if _in(net, ip)}
     devices = []
     for ip in sorted(ips, key=_ip_key):
         host = scanned.get(ip) or next((h for h in discovery['hosts'] if h['ip'] == ip), None) or {}
@@ -128,9 +142,11 @@ def _devices(vantage, net, discovery, neighbours, ports, broadcast, heard, vendo
             'random_mac': lan.is_random_mac(mac), 'names': names,
             # -Pn reports every target as up: only the discovery answer or an
             # open port means the device answered TCP
-            'answered': 'tcp' if ip in answered or scanned.get(ip, {}).get('ports') else 'neighbour',
+            'answered': ('tcp' if ip in answered or scanned.get(ip, {}).get('ports')
+                         else 'neighbour' if ip in neighbours else 'announced'),
             'announced': info,
             '_ports': host.get('ports', []), '_hostscripts': host.get('hostscripts', {}),
+            '_scanned': ip in scanned, '_timedout': bool(scanned.get(ip, {}).get('timedout')),
         })
     return devices
 
@@ -187,14 +203,41 @@ def identify_router(gateway: str | None, dev: dict | None, heard: dict) -> dict 
                          for p in dev['_ports']]}
 
 
-# management services of a router seen from this segment: port -> (name, severity, why)
+UNIDENTIFIED = ('', 'unknown', 'tcpwrapped')
+
+
+def _protocol(p: dict, names: tuple, products: tuple = ()) -> str:
+    """What a port is known to speak (review #65 P5): 'confirmed' - nmap read
+    the service's own answer and it is this one; 'other' - it answered as
+    another service, so the port number proves nothing; 'possible' - nmap only
+    guessed from the port number."""
+    said = f"{p['product']} {p['version']}".lower()
+    if p['method'] == 'probed' and p['service'] not in UNIDENTIFIED:
+        if p['service'] in names or any(x in said for x in products):
+            return 'confirmed'
+        return 'other'
+    return 'possible'
+
+
+def _certainty(state: str, port: int) -> dict:
+    """Finding fields for a confirmed or a possible service."""
+    if state == 'confirmed':
+        return {'confidence': 'high', 'requires_manual_verification': False, 'note': ''}
+    return {'confidence': 'low', 'requires_manual_verification': True,
+            'note': f'; port {port}: nmap did not identify the service from its answer - '
+                    'a guess by the port number, check it'}
+
+
+# management services of a router seen from this segment:
+# port -> (name, severity, why, service names, product words)
 ROUTER_SERVICES = {
-    23: ('telnet', 'high', 'Telnet sends the admin password in clear text'),
-    21: ('ftp', 'medium', 'FTP sends passwords in clear text'),
-    8728: ('api', 'medium', 'the router API without TLS'),
-    2000: ('btest', 'medium', 'the bandwidth-test server (a known-exploited RouterOS service in 2026)'),
-    8291: ('winbox', 'low', 'WinBox management is open to this segment'),
-    8729: ('api-ssl', 'low', 'the router API is open to this segment'),
+    23: ('telnet', 'high', 'Telnet sends the admin password in clear text', ('telnet',), ()),
+    21: ('ftp', 'medium', 'FTP sends passwords in clear text', ('ftp',), ()),
+    8728: ('api', 'medium', 'the router API without TLS', ('mikrotik-routeros-api',), ('mikrotik',)),
+    2000: ('btest', 'medium', 'the bandwidth-test server (a known-exploited RouterOS service in 2026)',
+           ('bandwidth-test',), ('bandwidth-test',)),
+    8291: ('winbox', 'low', 'WinBox management is open to this segment', ('winbox',), ('winbox',)),
+    8729: ('api-ssl', 'low', 'the router API is open to this segment', ('mikrotik-routeros-api',), ('mikrotik',)),
 }
 
 
@@ -214,16 +257,24 @@ def _router_findings(router: dict, dev: dict | None, broadcast_info: dict, findi
     start = len(findings)
     for p in (dev or {}).get('_ports', []):
         if p['port'] in ROUTER_SERVICES:
-            name, sev, why = ROUTER_SERVICES[p['port']]
+            name, sev, why, names, products = ROUTER_SERVICES[p['port']]
+            state = _protocol(p, names, products)
+            if state == 'other':
+                continue
+            c = _certainty(state, p['port'])
+            title = f'router management over {name} is reachable from this segment'
             if sev == 'high':
-                findings.append(_finding('high', f'router management over {name} is reachable from this segment',
-                                         why, id=subject_id('RTR-SVC-001', name), extra={'device': router['ip']}))
+                findings.append(_finding('high', title, why + c['note'], c['confidence'],
+                                         id=subject_id('RTR-SVC-001', name), extra={'device': router['ip']},
+                                         requires_manual_verification=c['requires_manual_verification']))
             elif sev == 'medium':
-                findings.append(_finding('medium', f'router management over {name} is reachable from this segment',
-                                         why, id=subject_id('RTR-SVC-001', name), extra={'device': router['ip']}))
+                findings.append(_finding('medium', title, why + c['note'], c['confidence'],
+                                         id=subject_id('RTR-SVC-001', name), extra={'device': router['ip']},
+                                         requires_manual_verification=c['requires_manual_verification']))
             else:
-                findings.append(_finding('low', f'router management over {name} is reachable from this segment',
-                                         why, id=subject_id('RTR-SVC-001', name), extra={'device': router['ip']}))
+                findings.append(_finding('low', title, why + c['note'], c['confidence'],
+                                         id=subject_id('RTR-SVC-001', name), extra={'device': router['ip']},
+                                         requires_manual_verification=c['requires_manual_verification']))
         elif p['service'].startswith('http') and _http_without_tls(p):
             findings.append(_finding('medium', 'the router admin page is plain HTTP, reachable from this segment',
                                      f'port {p["port"]}: the admin password crosses the network unencrypted',
@@ -273,27 +324,35 @@ def _device_findings(dev: dict, level2: bool, findings: list):
         findings.append(_finding('medium', 'SMB message signing is not required',
                                  'an attacker inside can relay a login to this computer',
                                  id=subject_id('NET-SMB-002', ip), extra={'device': ip}))
-    ms17 = hs.get('smb-vuln-ms17-010')
-    if level2 and ms17 and isinstance(ms17['data'], dict) and any(
-            isinstance(v, dict) and re.match(r'(LIKELY )?VULNERABLE', str(v.get('state', '')))
-            for v in ms17['data'].values()):
+    if level2 and _ms17(hs)[0] == 'vulnerable':
         findings.append(_finding('critical', 'MS17-010 is not patched (EternalBlue)',
                                  'remote code execution over SMBv1, used by WannaCry',
                                  id=subject_id('NET-SMB-003', ip), extra={'device': ip}))
-    if 23 in ports:
-        findings.append(_finding('high', 'Telnet is open', 'logins cross the network in clear text',
-                                 id=subject_id('NET-TEL-001', ip), extra={'device': ip}))
-    if 21 in ports:
-        findings.append(_finding('medium', 'FTP is open', 'logins and files cross the network in clear text',
-                                 id=subject_id('NET-FTP-001', ip), extra={'device': ip}))
+    state = _protocol(ports[23], ('telnet',)) if 23 in ports else 'other'
+    if state != 'other':
+        c = _certainty(state, 23)
+        findings.append(_finding('high', 'Telnet is open', 'logins cross the network in clear text' + c['note'],
+                                 c['confidence'], id=subject_id('NET-TEL-001', ip), extra={'device': ip},
+                                 requires_manual_verification=c['requires_manual_verification']))
+    state = _protocol(ports[21], ('ftp',), ('ftpd', 'ftp server')) if 21 in ports else 'other'
+    if state != 'other':
+        c = _certainty(state, 21)
+        findings.append(_finding('medium', 'FTP is open',
+                                 'logins and files cross the network in clear text' + c['note'], c['confidence'],
+                                 id=subject_id('NET-FTP-001', ip), extra={'device': ip},
+                                 requires_manual_verification=c['requires_manual_verification']))
         anon = ports[21]['scripts'].get('ftp-anon')
         if level2 and anon and anon['output'].startswith('Anonymous FTP login allowed'):
             findings.append(_finding('high', 'anonymous FTP login is allowed', 'anyone here can read the files',
                                      id=subject_id('NET-FTP-002', ip), extra={'device': ip}))
-    if 3389 in ports:
+    state = (_protocol(ports[3389], ('ms-wbt-server',), ('terminal services', 'remote desktop', 'xrdp'))
+             if 3389 in ports else 'other')
+    if state != 'other':
+        c = _certainty(state, 3389)
         findings.append(_finding('low', 'RDP is reachable from this segment',
-                                 'remote desktop is a common way in for ransomware',
-                                 id=subject_id('NET-RDP-001', ip), extra={'device': ip}))
+                                 'remote desktop is a common way in for ransomware' + c['note'], c['confidence'],
+                                 id=subject_id('NET-RDP-001', ip), extra={'device': ip},
+                                 requires_manual_verification=c['requires_manual_verification']))
         rdp = ports[3389]['scripts'].get('rdp-enum-encryption')
         if rdp and re.search(r'(Native RDP|SSL):\s*SUCCESS', rdp['output']):
             findings.append(_finding('medium', 'RDP accepts connections without NLA',
@@ -307,10 +366,14 @@ def _device_findings(dev: dict, level2: bool, findings: list):
                 findings.append(_finding('high', 'VNC accepts connections without a password',
                                          f'port {number}: anyone here can see and control this screen',
                                          id=subject_id('NET-VNC-001', ip, number), extra={'device': ip}))
-        if number in DB_PORTS:
+        state = _protocol(p, *DB_PROTOCOLS[number]) if number in DB_PORTS else 'other'
+        if state != 'other':
+            c = _certainty(state, number)
             findings.append(_finding('medium', f'{DB_PORTS[number]} is reachable from this segment',
-                                     f'port {number}: a database should answer only the servers that need it',
-                                     id=subject_id('NET-DB-001', ip, number), extra={'device': ip}))
+                                     f'port {number}: a database should answer only the servers that need it'
+                                     + c['note'], c['confidence'], id=subject_id('NET-DB-001', ip, number),
+                                     extra={'device': ip},
+                                     requires_manual_verification=c['requires_manual_verification']))
             redis = p['scripts'].get('redis-info')
             if level2 and redis and 'Version' in redis['output'] and 'ERROR' not in redis['output']:
                 findings.append(_finding('high', 'Redis answers without a password',
@@ -341,6 +404,95 @@ def _device_findings(dev: dict, level2: bool, findings: list):
                                          id=subject_id('NET-SSH-001', ip, number), extra={'device': ip}))
 
 
+# ---- what could not be checked (review #65 P1) ------------------------------------
+
+def _failed(result: dict | None) -> str | None:
+    """Why a script gave no usable answer, or None when it answered."""
+    if result is None:
+        return 'no result'
+    out = (result.get('output') or '').strip()
+    if out.startswith('ERROR'):
+        return out[:160]
+    return None
+
+
+def _ms17(hs: dict) -> tuple[str, str]:
+    """('vulnerable'|'patched'|'unknown', why). Run with vulns.showall:
+    NOT VULNERABLE is said for a patched system and for a failed check alike,
+    only check_results tells them apart (smb-vuln-ms17-010.nse)."""
+    s = hs.get('smb-vuln-ms17-010')
+    why = _failed(s)
+    if why:
+        return 'unknown', why
+    entries = [v for v in (s['data'].values() if isinstance(s['data'], dict) else [])
+               if isinstance(v, dict) and 'state' in v]
+    if any(re.match(r'(LIKELY )?VULNERABLE', str(v['state'])) for v in entries):
+        return 'vulnerable', ''
+    results = [r for v in entries for r in _texts(v.get('check_results', []))]
+    if any('patched' in r.lower() for r in results):
+        return 'patched', ''
+    return 'unknown', '; '.join(results)[:160] or 'NOT VULNERABLE without a reason: the check may not have run'
+
+
+def _script_gaps(dev: dict, level2: bool) -> tuple[list[str], list[str]]:
+    """(level-1 gaps, level-2 gaps) of one device: an applicable script that
+    failed or said nothing never reads as a clean answer."""
+    one, two = [], []
+    ports, hs = {p['port']: p for p in dev['_ports']}, dev['_hostscripts']
+    router = dev['kind'] == 'router'
+    smb = [n for n in (445, 139) if n in ports]
+    if smb and not router:
+        for sid in ('smb-protocols', 'smb2-security-mode'):
+            why = _failed(hs.get(sid))
+            if why:
+                one.append(f'{sid} (SMB {smb[0]}): {why}')
+        if level2:
+            state, why = _ms17(hs)
+            if state == 'unknown':
+                two.append(f'smb-vuln-ms17-010 (SMB {smb[0]}): {why}')
+    for number, p in sorted(ports.items()):
+        wanted = []
+        if router:
+            if p['service'].startswith('http') and p['tunnel'] != 'ssl':
+                wanted.append('http-title')
+        else:
+            if p['service'] == 'ssh' or (number == 22 and _protocol(p, ('ssh',)) != 'other'):
+                wanted.append('ssh2-enum-algos')
+            if p['tunnel'] == 'ssl' or p['service'] in ('https', 'https-alt'):
+                wanted.append('ssl-cert')
+            if number == 3389 or p['service'] == 'ms-wbt-server':
+                wanted.append('rdp-enum-encryption')
+            if p['service'] == 'vnc':
+                wanted.append('vnc-info')
+            if (dev['kind'] in ('printer', 'camera', 'nas', 'network') and p['service'].startswith('http')
+                    and p['tunnel'] != 'ssl' and p['service'] not in ('https', 'https-alt')):
+                wanted.append('http-title')
+        for sid in wanted:
+            why = _failed(p['scripts'].get(sid))
+            if why:
+                one.append(f'{sid} (port {number}): {why}')
+        if level2 and not router:
+            if (number == 21 or p['service'] == 'ftp') and _protocol(p, ('ftp',), ('ftpd',)) != 'other':
+                anon = p['scripts'].get('ftp-anon')
+                if anon is None:
+                    two.append(f'ftp-anon (port {number}): no answer - nmap is silent both for a refused '
+                               'login and for a lost connection')
+                elif not anon['output'].startswith('Anonymous FTP login allowed'):
+                    two.append(f'ftp-anon (port {number}): {anon["output"].strip()[:120]}')
+            if number == 6379 and _protocol(p, ('redis',), ('redis',)) != 'other':
+                redis = p['scripts'].get('redis-info')
+                why = _failed(redis)
+                if redis is not None and 'Authentication required' in redis['output']:
+                    why = None
+                if why:
+                    two.append(f'redis-info (port {number}): {why}')
+    return one, two
+
+
+def _listed(entries: list[str], limit: int = 12) -> str:
+    return '; '.join(entries[:limit]) + (f' … (+{len(entries) - limit})' if len(entries) > limit else '')
+
+
 # ---- the result -------------------------------------------------------------------
 
 def _worst(severities) -> str | None:
@@ -351,6 +503,9 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
                  neighbours: dict, ports: dict, broadcast: dict, heard: dict, level2: bool, support,
                  vendors: dict, neighbour_error: str | None = None) -> dict:
     net = ipaddress.ip_network(scanned)
+    # only what came from the scanned range is this network's (review #65 P4)
+    heard = {**heard, 'mndp': [m for m in heard.get('mndp', []) if _in(net, m.get('ip', ''))],
+             'llmnr': [x for x in heard.get('llmnr', []) if _in(net, x.get('ip', ''))]}
     devices = _devices(vantage, net, discovery, neighbours, ports, broadcast, heard, vendors)
     gateway = vantage.get('gateway')
     for d in devices:
@@ -381,13 +536,27 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
         quiet = sum(1 for d in devices if d['answered'] == 'neighbour')
         checked.append({'item': 'neighbours', 'status': 'ok',
                         'detail': f'{quiet} devices answered only ARP (their TCP ports are filtered)'})
-    targets = others
+    for d in devices:
+        d['gaps'] = []
     if ports.get('error'):
         checked.append({'item': 'services', 'status': 'not_checked', 'detail': ports['error']})
-    elif targets:
-        checked.append({'item': 'services', 'status': 'ok',
-                        'detail': f'{len(targets)} devices: {len(lan.SCAN_PORTS)} TCP ports, services, '
-                                  f'{len(lan.LEVEL1_SCRIPTS)} read-only scripts'})
+    elif others:
+        missing = []
+        for d in others:
+            if not d['_scanned']:
+                why = ('found only by its announcement; the port scan has no result for it'
+                       if d['answered'] == 'announced' else 'the port scan returned nothing for it')
+                d['gaps'].append(why)
+                missing.append(f"{d['ip']}: {why}")
+            elif d['_timedout']:
+                d['gaps'].append('the port scan timed out on it: its ports may be incomplete')
+                missing.append(f"{d['ip']}: timed out")
+        if missing:
+            checked.append({'item': 'services', 'status': 'not_checked', 'detail': _listed(missing)})
+        else:
+            checked.append({'item': 'services', 'status': 'ok',
+                            'detail': f'{len(others)} devices: {len(lan.SCAN_PORTS)} TCP ports, services, '
+                                      f'{len(lan.LEVEL1_SCRIPTS)} read-only scripts'})
     if broadcast.get('error'):
         checked.append({'item': 'broadcast', 'status': 'not_checked', 'detail': broadcast['error']})
     else:
@@ -459,15 +628,29 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
         if d['kind'] in ('this_machine', 'router'):
             continue
         _device_findings(d, level2, findings)
+    script_gaps, level2_gaps = [], []
+    for d in devices:
+        if d['kind'] == 'this_machine' or not d['_scanned']:
+            continue
+        one, two = _script_gaps(d, level2)
+        d['gaps'] += one + two
+        script_gaps += [f"{d['ip']} {g}" for g in one]
+        level2_gaps += [f"{d['ip']} {g}" for g in two]
+    if script_gaps:
+        checked.append({'item': 'scripts', 'status': 'not_checked', 'detail': _listed(script_gaps)})
+    elif not ports.get('error') and others:
+        checked.append({'item': 'scripts', 'status': 'ok', 'detail': 'every applicable script answered'})
     if level2:
-        checked.append({'item': 'level2', 'status': 'ok', 'detail': ', '.join(lan.LEVEL2_SCRIPTS)})
+        checked.append({'item': 'level2', 'status': 'not_checked', 'detail': _listed(level2_gaps)} if level2_gaps
+                       else {'item': 'level2', 'status': 'ok', 'detail': ', '.join(lan.LEVEL2_SCRIPTS)})
 
     for d in devices:
         d['worst'] = _worst({f['severity'] for f in findings if f.get('device') == d['ip']})
         d['ports'] = [{'port': p['port'], 'service': p['service'], 'product': p['product'],
                        'version': p['version'], 'tunnel': p['tunnel'], 'guessed': p['method'] == 'table'}
                       for p in sorted(d.pop('_ports'), key=lambda p: p['port'])]
-        d.pop('_hostscripts')
+        for key in ('_hostscripts', '_scanned', '_timedout'):
+            d.pop(key)
 
     next_steps = []
     if router and router['vendor'] == 'MikroTik':
@@ -485,7 +668,7 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
         'router': router, 'devices': devices,
         'stats': {'addresses': addresses, 'devices': len(devices),
                   'neighbour_only': sum(1 for d in devices if d['answered'] == 'neighbour')},
-        'heard': {'llmnr': asked, 'mndp': heard.get('mndp', [])},
+        'heard': {'llmnr': asked, 'mndp': heard['mndp']},
         'findings': findings, 'checked': checked,
         'limits': list(LIMITS) + ([] if level2 else ['level2']),
         'score': webprobe.score(findings, checked), 'verdict': webprobe.verdict(findings, checked),
@@ -538,7 +721,9 @@ def check_lan_audit(client: str = '', authorization: str = 'no', level2: str = '
 
     level2_on = level2 == LEVEL2_CONFIRM
     heard: dict = {}
-    listener = threading.Thread(target=lambda: heard.update(_listen(lan.LISTEN_SECONDS)), daemon=True)
+    listener = threading.Thread(target=lambda: heard.update(_listen(
+        lan.LISTEN_SECONDS, interface=vantage['interface'], network=scanned, address=vantage['address'])),
+        daemon=True)
     listener.start()
     # the neighbour table is watched the whole time: the kernel drops stale
     # entries once a /24 of probes has filled it (lan.NeighbourWatch)
@@ -548,9 +733,9 @@ def check_lan_audit(client: str = '', authorization: str = 'no', level2: str = '
     broadcast = _nmap(lan.broadcast_command(vantage['interface']), BROADCAST_TIMEOUT)
     seen = watch.read()
     net = ipaddress.ip_network(scanned)
-    found = {h['ip'] for h in discovery['hosts'] if h.get('state') == 'up'} | set(seen)
-    targets = sorted((ip for ip in found if ipaddress.ip_address(ip) in net and ip != vantage['address']),
-                     key=_ip_key)
+    announced = lan.broadcast_devices(broadcast.get('prescripts', {}))
+    found = {h['ip'] for h in discovery['hosts'] if h.get('state') == 'up'} | set(seen) | set(announced)
+    targets = sorted((ip for ip in found if _in(net, ip) and ip != vantage['address']), key=_ip_key)
     ports = (_nmap(lan.ports_command(targets, vantage['interface'], level2_on), PORTS_TIMEOUT) if targets
              else {'hosts': [], 'prescripts': {}, 'error': None})
     neighbours, neighbour_error = watch.stop()

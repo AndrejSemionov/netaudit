@@ -2166,8 +2166,9 @@ function lanMapSvg(r) {
   devices.forEach((d, i) => { if (d.kind !== 'router') others.push(i); });
   const rows = Math.max(1, Math.ceil(others.length / cols));
   const segTop = 150, H = segTop + 60 + rows * cellH + 10;
+  // a device seen only by ARP or by its announcement is grey: nothing about it was judged
   const fill = d => d.worst ? (LAN_SEV_COLOR[d.worst] || 'var(--warn)')
-    : d.answered === 'neighbour' ? 'var(--muted)' : 'var(--ok)';
+    : (d.answered === 'neighbour' || d.answered === 'announced') ? 'var(--muted)' : 'var(--ok)';
   const routerLabel = router
     ? [router.vendor || t('lan.unknown_vendor'), router.model, router.version].filter(Boolean).join(' ')
     : t('lan.unknown_vendor');
@@ -2198,15 +2199,19 @@ function lanMapSvg(r) {
     const x = 20 + (n % cols) * cellW + cellW / 2;
     const y = segTop + 62 + Math.floor(n / cols) * cellH;
     const you = d.kind === 'this_machine';
-    svg += `<g class="lan-node" onclick="showLanDevice(${i})">`
-      + `<circle cx="${x}" cy="${y}" r="13" style="fill:${fill(d)};opacity:${d.answered === 'neighbour' ? 0.55 : 1}"/>`
+    // a dashed ring: something on this device could not be checked
+    const gapRing = Array.isArray(d.gaps) && d.gaps.length
+      ? `<circle cx="${x}" cy="${y}" r="18" fill="none" style="stroke:var(--warn)" stroke-width="2" stroke-dasharray="4 3"/>` : '';
+    svg += `<g class="lan-node" onclick="showLanDevice(${i})">` + gapRing
+      + `<circle cx="${x}" cy="${y}" r="13" style="fill:${fill(d)};opacity:${d.answered === 'tcp' ? 1 : 0.55}"/>`
       + (you ? `<text x="${x}" y="${y + 5}" text-anchor="middle" class="lan-you">★</text>` : '')
       + `<text x="${x}" y="${y + 31}" text-anchor="middle" class="lan-label">${d.ip}</text>`
       + `<text x="${x}" y="${y + 47}" text-anchor="middle" class="lan-sub">${you ? t('lan.you') : lanDeviceName(d).slice(0, 20)}</text></g>`;
   });
   svg += '</svg>';
   const legend = [['var(--bad)', 'lan.legend.bad'], ['var(--warn)', 'lan.legend.warn'], ['var(--ok)', 'lan.legend.ok'],
-    ['var(--muted)', 'lan.legend.quiet']].map(([c, k]) => `<span><span class="lan-dot" style="background:${c}"></span>${t(k)}</span>`).join('');
+    ['var(--muted)', 'lan.legend.quiet']].map(([c, k]) => `<span><span class="lan-dot" style="background:${c}"></span>${t(k)}</span>`).join('')
+    + `<span><span class="lan-dot" style="border:2px dashed var(--warn)"></span>${t('lan.legend.gaps')}</span>`;
   return svg + `<div class="lan-legend">${legend}</div>`;
 }
 
@@ -2256,7 +2261,8 @@ function lanHtml(r) {
   }
   const rows = r.devices.map((d, i) => {
     const problems = (r.findings || []).filter(f => f.device === d.ip && f.severity !== 'ok').length;
-    const ports = (d.ports || []).map(p => p.port).join(', ') || (d.answered === 'neighbour' ? t('lan.answered.neighbour') : '—');
+    const ports = (d.ports || []).map(p => p.port).join(', ')
+      || (d.answered === 'neighbour' ? t('lan.answered.neighbour') : d.answered === 'announced' ? t('lan.answered.announced') : '—');
     const mac = d.mac ? `${d.mac}${d.vendor ? ' · ' + d.vendor : ''}` : '—';
     return `<tr class="lan-row" onclick="showLanDevice(${i})"><td>${d.ip}</td><td>${lanDeviceName(d)}</td><td>${mac}</td>
       <td>${t('lan.kind.' + d.kind)}</td><td>${ports}</td><td>${problems || ''}</td></tr>`;
@@ -2301,6 +2307,9 @@ function lanDeviceCard(d, all) {
     <div class="wp-facts"><div><span>${t('lan.col.name')}</span>${names}</div>
       <div><span>${t('lan.col.mac')}</span>${d.mac || '—'}${d.vendor ? ' · ' + d.vendor : ''}${d.random_mac ? ` <span class="timing">${t('lan.random_mac')}</span>` : ''}</div></div>
     ${d.answered === 'neighbour' ? `<p class="timing">${t('lan.no_answer')}</p>` : ''}
+    ${d.answered === 'announced' ? `<p class="timing">${t('lan.answered.announced')}</p>` : ''}
+    ${Array.isArray(d.gaps) && d.gaps.length ? `<div class="wp-finding"><span class="pill warn">${t('wp.status.not_checked')}</span> <b>${t('lan.gaps')}</b>
+      <ul>${d.gaps.map(g => `<li class="timing">${g}</li>`).join('')}</ul></div>` : ''}
     ${ports ? `<table><tr><th>Port</th><th>Service</th><th>Product</th></tr>${ports}</table>` : ''}
     ${findings.map(f => lanFindingHtml(f)).join('')}</div>`;
 }

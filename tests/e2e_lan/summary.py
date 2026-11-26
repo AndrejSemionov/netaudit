@@ -12,6 +12,8 @@ for path in sorted(Path(sys.argv[1]).glob('level*.json')):
     for d in r.get('devices', []):
         print(f'  {d["ip"]:15} {d["kind"]:12} {d["answered"]:9} mac={d.get("mac")} '
               f'ports={[p["port"] for p in d["ports"]]} worst={d.get("worst")}')
+        for gap in d.get('gaps', []):
+            print(f'      gap: {gap}')
     print('findings:', sorted(f.get('id', f['title']) for f in r.get('findings', [])))
     for c in r.get('checked', []):
         if c['status'] != 'ok':

@@ -767,7 +767,7 @@ def test_mndp_only_device_and_foreign_announcements():
              'llmnr': [{'ip': '10.99.0.4', 'name': 'OTHER-NETWORK'}]}
     res = build(heard=heard)
     assert device(res, '192.168.88.2')['answered'] == 'announced'
-    assert device(res, '10.99.0.4') is None
+    assert all(d['ip'] != '10.99.0.4' for d in res['devices'])
     # P4: a query from outside the scanned range is not this network's problem
     assert 'NET-NAME-001' not in ids(res)
     assert all(x['ip'] != '10.99.0.4' for x in res['heard']['mndp'] + res['heard']['llmnr'])

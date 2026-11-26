@@ -147,10 +147,14 @@ def discovery_command(target: str, interface: str) -> list[str]:
 
 def ports_command(hosts: list[str], interface: str, level2: bool) -> list[str]:
     scripts = LEVEL1_SCRIPTS + (LEVEL2_SCRIPTS if level2 else ())
+    # vulns.showall: smb-vuln-ms17-010 is silent both for a patched system
+    # and for a check that could not run; with it, it says which (review #65
+    # P1). The only script argument, fixed here - never taken from a user.
+    args = ['--script-args', 'vulns.showall'] if level2 else []
     # no -n: nmap asks the client's DNS for each device's name (PTR)
     return ['nmap', '-sT', '-Pn', '-sV', '--version-light', '-T3', '--max-rate', MAX_RATE,
             '--host-timeout', HOST_TIMEOUT, '-e', interface, '-p', ','.join(map(str, SCAN_PORTS)),
-            '--script', ','.join(scripts), '-oX', '-', *hosts]
+            '--script', ','.join(scripts), *args, '-oX', '-', *hosts]
 
 
 def broadcast_command(interface: str) -> list[str]:
@@ -203,7 +207,8 @@ def parse_nmap_xml(text: str) -> dict:
     hosts = []
     for h in root.findall('host'):
         status = h.find('status')
-        rec = {'ip': None, 'mac': None, 'mac_vendor': None, 'state': status.get('state') if status is not None else None,
+        rec = {'ip': None, 'mac': None, 'mac_vendor': None, 'timedout': h.get('timedout') == 'true',
+               'state': status.get('state') if status is not None else None,
                'reason': status.get('reason') if status is not None else None, 'hostnames': [], 'ports': [],
                'hostscripts': _scripts(h.find('hostscript'))}
         for a in h.findall('address'):
@@ -427,28 +432,64 @@ def parse_llmnr(payload: bytes) -> str | None:
     return None
 
 
-def _udp_socket(port: int, group: str | None = None) -> socket.socket:
+IP_PKTINFO = getattr(socket, 'IP_PKTINFO', 8)              # Linux <netinet/in.h>
+IP_MULTICAST_ALL = getattr(socket, 'IP_MULTICAST_ALL', 49)  # Linux: 0 = only groups this socket joined
+
+
+def _udp_socket(port: int, group: str | None = None, address: str | None = None) -> socket.socket:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(('0.0.0.0', port))  # nosec B104 - a listener for broadcasts/multicast on the audited segment
-    if group:
-        mreq = socket.inet_aton(group) + struct.pack('=I', socket.INADDR_ANY)  # any interface joins
-        s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-    s.setblocking(False)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.setsockopt(socket.IPPROTO_IP, IP_PKTINFO, 1)      # each packet says which interface it came in on
+        s.bind(('0.0.0.0', port))  # nosec B104 - a listener for broadcasts/multicast; packets filtered by interface
+        if group:
+            try:
+                s.setsockopt(socket.IPPROTO_IP, IP_MULTICAST_ALL, 0)
+            except OSError:
+                pass                                            # older kernels: the interface filter still applies
+            local = socket.inet_aton(address) if address else struct.pack('=I', socket.INADDR_ANY)
+            s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton(group) + local)
+        s.setblocking(False)
+    except OSError:
+        s.close()
+        raise
     return s
 
 
-def listen(seconds: int = LISTEN_SECONDS) -> dict:
+def _arrival(s: socket.socket) -> tuple[bytes, str, int | None]:
+    """(payload, source address, index of the interface it came in on)."""
+    data, ancillary, _flags, source = s.recvmsg(2048, socket.CMSG_SPACE(12))
+    index = None
+    for level, kind, value in ancillary:
+        if level == socket.IPPROTO_IP and kind == IP_PKTINFO and len(value) >= 4:
+            index = struct.unpack('=i', value[:4])[0]
+    return data, source[0], index
+
+
+def listen(seconds: int = LISTEN_SECONDS, *, interface: str | None = None, network: str | None = None,
+           address: str | None = None, ports: dict | None = None) -> dict:
     """Listen for MNDP and LLMNR for `seconds`; never send anything.
     {'mndp': [{'ip', ...}], 'llmnr': [{'ip', 'name'}], 'gaps': {what: why},
-    'seconds': n}. A port that cannot be opened is a gap with its reason."""
+    'seconds': n}. Only packets that came in on `interface` from `network`
+    count (review #65 P4); LLMNR's group is joined on `address`. A port that
+    cannot be opened is a gap with its reason. `ports` overrides the
+    well-known ports (tests)."""
+    ports = {'mndp': MNDP_PORT, 'llmnr': LLMNR_PORT, **(ports or {})}
     out = {'mndp': [], 'llmnr': [], 'gaps': {}, 'seconds': seconds}
-    socks = {}
-    for name, port, group in (('mndp', MNDP_PORT, None), ('llmnr', LLMNR_PORT, LLMNR_GROUP)):
+    wanted_index = None
+    if interface:
         try:
-            socks[name] = _udp_socket(port, group)
+            wanted_index = socket.if_nametoindex(interface)
+        except OSError:
+            out['gaps'] = {name: f'interface {interface} not found' for name in ('mndp', 'llmnr')}
+            return out
+    scope = ipaddress.ip_network(network, strict=False) if network else None
+    socks = {}
+    for name, group in (('mndp', None), ('llmnr', LLMNR_GROUP)):
+        try:
+            socks[name] = _udp_socket(ports[name], group, address)
         except OSError as e:
-            out['gaps'][name] = f'UDP {port} could not be opened: {e.strerror or e}'
+            out['gaps'][name] = f'UDP {ports[name]} could not be opened: {e.strerror or e}'
     seen = set()
     deadline = time.monotonic() + seconds
     try:
@@ -456,8 +497,12 @@ def listen(seconds: int = LISTEN_SECONDS) -> dict:
             ready, _, _ = select.select(list(socks.values()), [], [], max(0.0, min(1.0, deadline - time.monotonic())))
             for s in ready:
                 try:
-                    data, (ip, _port) = s.recvfrom(2048)
+                    data, ip, index = _arrival(s)
                 except OSError:
+                    continue
+                if wanted_index is not None and index != wanted_index:
+                    continue                    # another interface: not the audited segment
+                if scope is not None and ipaddress.ip_address(ip) not in scope:
                     continue
                 if s is socks.get('mndp'):
                     info = parse_mndp(data)
