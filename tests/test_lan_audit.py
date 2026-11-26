@@ -284,6 +284,44 @@ def test_neighbours_failure_raises():
         lan.neighbours('eth0', run=run)
 
 
+def _neigh_reads(*tables):
+    """`ip -j neigh` that answers with the given tables in turn, then the
+    last one again - the kernel dropping entries as the scan goes on."""
+    calls = []
+
+    def run(cmd, timeout=30):
+        calls.append(cmd)
+        table = tables[min(len(calls), len(tables)) - 1]
+        if isinstance(table, str):
+            return 1, '', table
+        return 0, json.dumps(table), ''
+    run.calls = calls
+    return run
+
+
+QUIET_ONLY = [{'dst': '192.168.88.30', 'dev': 'eth0', 'lladdr': '00:11:32:aa:bb:cc', 'state': ['STALE']}]
+
+
+def test_neighbour_watch_keeps_what_the_kernel_dropped():
+    """CI e2e-lan run 45893044669: after 254 probes the neighbour table holds
+    more than gc_thresh1 (128) entries and the kernel drops stale ones before
+    a single late read - MACs went missing, a device seen only by ARP could too."""
+    run = _neigh_reads(QUIET_ONLY, [])
+    watch = lan.NeighbourWatch('eth0', run=run, every=0.01)
+    watch.start()
+    found, error = watch.stop()
+    assert error is None
+    assert found == {'192.168.88.30': {'mac': '00:11:32:aa:bb:cc', 'state': 'STALE'}}
+    assert len(run.calls) >= 2                                  # a read at start and one at stop
+
+
+def test_neighbour_watch_error_only_when_no_read_worked():
+    found, error = lan.NeighbourWatch('eth0', run=_neigh_reads('boom'), every=0.01).start().stop()
+    assert found == {} and 'boom' in error
+    found, error = lan.NeighbourWatch('eth0', run=_neigh_reads('boom', QUIET_ONLY), every=0.01).start().stop()
+    assert '192.168.88.30' in found and error is None
+
+
 def test_mac_vendor_and_random_mac(tmp_path):
     prefixes = tmp_path / 'nmap-mac-prefixes'
     prefixes.write_text('# comment\n4C5E0C Routerboard.com\n001132 Synology Incorporated\n')
@@ -721,6 +759,36 @@ def test_full_run_with_fake_tools(monkeypatch, tmp_path):
     # every device found is scanned, the neighbour-only one too; this machine is not
     assert '192.168.88.30' in port_scan and '192.168.88.10' not in port_scan
     assert res['router']['vendor'] == 'MikroTik'
+
+
+def test_a_device_seen_only_while_discovery_ran_is_kept(monkeypatch, tmp_path):
+    """The neighbour table is watched during the scan, not read once after it."""
+    ip = fake_ip()
+    state = {'phase': 'before'}        # the entry exists from discovery until the kernel drops it
+    scanned = []
+
+    def run(cmd, timeout=30):
+        if cmd[:3] == ['ip', '-j', 'neigh']:
+            return 0, json.dumps(QUIET_ONLY if state['phase'] == 'seen' else []), ''
+        if cmd[0] == 'ip':
+            return ip(cmd, timeout)
+        if '-sn' in cmd and '--script' not in cmd:
+            state['phase'] = 'seen'
+            return 0, nmap_xml(host('192.168.88.1')), ''
+        state['phase'] = 'dropped'      # broadcast or port scan: later reads no longer see it
+        if '--version-light' in cmd:
+            scanned.append(cmd)
+            return 0, nmap_xml(host('192.168.88.30')), ''
+        return 0, nmap_xml(), ''
+    monkeypatch.setattr(lan_audit, '_run', run)
+    monkeypatch.setattr(lan_audit, '_listen', lambda seconds, **kw: HEARD_NOTHING)
+    monkeypatch.setattr(lan_audit, '_tool', lambda name: True)
+    monkeypatch.setattr(lan_audit, '_support', supported)
+    monkeypatch.setattr(lan, 'RESOLV_PATHS', (str(tmp_path / 'none'),))
+    res = lan_audit.check_lan_audit(authorization=lan_audit.AUTH_CONFIRM)
+    assert scanned and '192.168.88.30' in scanned[0]
+    d = device(res, '192.168.88.30')
+    assert d is not None and d['answered'] == 'neighbour' and d['mac'] == '00:11:32:aa:bb:cc'
 
 
 def test_nmap_timeout_is_a_gap(monkeypatch, tmp_path):
