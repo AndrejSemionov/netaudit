@@ -401,10 +401,14 @@ N8 (basic) + N9.
   not checked; a public subnet is refused.
 - **Steps**: vantage (`ip -j route/addr/neigh`, resolv.conf) → discovery
   (`nmap -sn -n -PS<ports>`) while listening for MNDP (UDP 5678) and LLMNR
-  (UDP 5355) and running the three broadcast scripts → the neighbour table →
-  ports, `-sV --version-light` and the level-1 scripts on every device found
-  (`-Pn`, so a device seen only by ARP is scanned too) → judgment. `-T3`,
-  `--max-rate`, `--host-timeout`; every command has a process timeout.
+  (UDP 5355) and running the three broadcast scripts → ports, `-sV
+  --version-light` and the level-1 scripts on every device found (`-Pn`, so
+  a device seen only by ARP is scanned too; an open port, not `-Pn`'s "up",
+  means it answered TCP) → judgment. The neighbour table is watched the
+  whole time (start, every 3 s, after each step, stop): a /24 of probes
+  fills it past the kernel's gc_thresh1 and stale entries are dropped
+  mid-scan (CI run 45893044669). `-T3`, `--max-rate`, `--host-timeout`;
+  every command has a process timeout.
 - **Two kinds of "not checked"**: *gaps* (something this run should have
   done and could not: a listener port busy, nmap failed, a host timed out,
   the range was cut, support lookup failed) make the verdict "incomplete";
