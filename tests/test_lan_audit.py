@@ -589,7 +589,9 @@ def test_the_pn_scan_does_not_make_an_arp_only_device_a_tcp_one():
                 neighbours={**NEIGHBOURS, '192.168.88.31': {'mac': '00:11:22:33:44:55', 'state': 'STALE'}})
     assert device(res, '192.168.88.30')['answered'] == 'neighbour'
     assert device(res, '192.168.88.31')['answered'] == 'tcp'
-    assert res['stats']['neighbour_only'] == 1
+    # .30 and .40: in the neighbour table, not in discovery, no open port
+    assert device(res, '192.168.88.40')['answered'] == 'neighbour'
+    assert res['stats']['neighbour_only'] == 2
 
 
 def test_a_service_guessed_from_the_port_is_marked():

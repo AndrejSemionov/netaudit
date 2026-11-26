@@ -126,7 +126,9 @@ def _devices(vantage, net, discovery, neighbours, ports, broadcast, heard, vendo
             'ip': ip, 'mac': mac, 'mac_source': 'nmap' if host.get('mac') else ('neighbour' if mac else None),
             'vendor': host.get('mac_vendor') or lan.mac_vendor(mac, vendors),
             'random_mac': lan.is_random_mac(mac), 'names': names,
-            'answered': 'tcp' if ip in answered or ip in scanned else 'neighbour',
+            # -Pn reports every target as up: only the discovery answer or an
+            # open port means the device answered TCP
+            'answered': 'tcp' if ip in answered or scanned.get(ip, {}).get('ports') else 'neighbour',
             'announced': info,
             '_ports': host.get('ports', []), '_hostscripts': host.get('hostscripts', {}),
         })
