@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.4.0 — 2026-11-27
+
 - Network audit: a new **Network audit** tab and the check `lan_audit` for
   an auditor plugged into a client's network (cable or Wi-Fi). After the
   auditor confirms the owner's written permission it finds, with no password
