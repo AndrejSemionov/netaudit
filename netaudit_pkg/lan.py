@@ -140,9 +140,92 @@ def scan_range(subnet: str, address: str) -> tuple[str, str | None]:
     return str(cut), f'{net} is larger than /{MAX_SUBNET}: only {cut} around this machine was scanned'
 
 
-def discovery_command(target: str, interface: str) -> list[str]:
+def discovery_command(target: str | list[str], interface: str) -> list[str]:
+    targets = [target] if isinstance(target, str) else list(target)
     return ['nmap', '-sn', '-n', '-T3', '--max-rate', MAX_RATE, '-e', interface,
-            '-PS' + ','.join(map(str, DISCOVERY_PORTS)), '-oX', '-', target]
+            '-PS' + ','.join(map(str, DISCOVERY_PORTS)), '-oX', '-', *targets]
+
+
+# ---- other subnets through the router (research §5.1, §13) ------------------
+
+SUBNET_PORTS = (22, 53, 80, 443, 8291)   # what a router interface usually answers on
+MAX_SUBNETS = 8                           # found subnets swept in one run; the rest are named
+
+
+def is_private(ip: str) -> bool:
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(address in net for net in PRIVATE if address.version == net.version)
+
+
+def candidate_gateways(vantage: dict, extra: list[str] | tuple = ()) -> list[str]:
+    """`.1` and `.254` of every /24 of the auditor's /16, of every /24 of
+    192.168/16 when the auditor is outside it, and of the /24 of each DNS
+    server or domain controller in another private range - never the own
+    subnet, never a public address."""
+    own = ipaddress.ip_network(vantage['subnet'], strict=False)
+    address = ipaddress.ip_address(vantage['address'])
+    nets = set(ipaddress.ip_network(f'{address}/16', strict=False).subnets(new_prefix=24))
+    home = ipaddress.ip_network('192.168.0.0/16')
+    if address not in home:
+        nets.update(home.subnets(new_prefix=24))
+    for ip in list(vantage.get('dns') or []) + list(extra):
+        if is_private(ip):
+            nets.add(ipaddress.ip_network(f'{ip}/24', strict=False))
+    out = []
+    for net in sorted(n for n in nets if not n.overlaps(own) and is_private(str(n.network_address))):
+        out += [str(net.network_address + 1), str(net.network_address + 254)]
+    return out
+
+
+def subnet_probe_command(targets: list[str], interface: str) -> list[str]:
+    return ['nmap', '-sn', '-n', '-T3', '--max-rate', MAX_RATE, '-e', interface,
+            '-PS' + ','.join(map(str, SUBNET_PORTS)), '-oX', '-', *targets]
+
+
+def found_subnets(probe: dict, own: str) -> list[dict]:
+    """[{'cidr', 'gateway'}] - a /24 where `.1` or `.254` answered, in
+    address order, the own subnet left out."""
+    own_net = ipaddress.ip_network(own, strict=False)
+    found: dict = {}
+    for h in sorted((h for h in probe.get('hosts', []) if h.get('state') == 'up'),
+                    key=lambda h: ipaddress.ip_address(h['ip'])):
+        net = ipaddress.ip_network(f"{h['ip']}/24", strict=False)
+        if net.overlaps(own_net) or str(net) in found:
+            continue
+        found[str(net)] = {'cidr': str(net), 'gateway': h['ip']}
+    return list(found.values())
+
+
+_DOMAIN = re.compile(r'(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?'
+                     r'(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?)+')
+
+
+def domain_controllers(domain: str, *, run=None) -> tuple[list[dict], str | None]:
+    """The domain's controllers from its SRV records, asked of the client's
+    DNS only (research §5.2): ([{'name', 'ip'}], error). A value that is not a
+    plain domain name is never asked (it would be a dig argument)."""
+    if not isinstance(domain, str) or not _DOMAIN.fullmatch(domain):
+        return [], 'the search domain is not a plain domain name: not asked'
+    run = run or run_cmd
+    code, out, err = run(['dig', '+short', '+time=2', '+tries=1', 'SRV', f'_ldap._tcp.dc._msdcs.{domain}'],
+                         timeout=15)
+    if code != 0:
+        return [], f'dig failed: {(err or out).strip()[:200] or f"exit code {code}"}'
+    names = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 4 and _DOMAIN.fullmatch(parts[3].rstrip('.')) and parts[3] not in names:
+            names.append(parts[3])
+    found = []
+    for name in names[:10]:
+        code, out, _err = run(['dig', '+short', '+time=2', '+tries=1', 'A', name], timeout=15)
+        for ip in (out.split() if code == 0 else []):
+            if is_private(ip):
+                found.append({'name': name.rstrip('.'), 'ip': ip})
+    return found, None
 
 
 def ports_command(hosts: list[str], interface: str, level2: bool) -> list[str]:

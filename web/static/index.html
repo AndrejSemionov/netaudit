@@ -291,7 +291,7 @@
   <div class="settings-wrap" style="max-width:1000px">
     <div class="settings-group">
       <h2 data-i18n="lan.title">Аудит сети</h2>
-      <p class="hint" data-i18n="lan.hint">Подключите этот компьютер к сети клиента (кабелем или по Wi-Fi) и запустите аудит. NetAudit сам найдёт устройства этого сегмента, роутер и его прошивку, открытые службы и ошибки настройки — без паролей и без root. Другие подсети и уязвимости по версиям появятся в следующих версиях.</p>
+      <p class="hint" data-i18n="lan.hint">Подключите этот компьютер к сети клиента (кабелем или по Wi-Fi) и запустите аудит. NetAudit сам найдёт устройства этого сегмента и других подсетей за роутером, роутер и его прошивку, открытые службы, ошибки настройки и нарушенную изоляцию сегментов — без паролей и без root. Уязвимости по версиям появятся в следующей версии.</p>
       <label for="lanClient" class="hint" data-i18n="lan.client">Клиент / название сети</label>
       <div class="wp-form"><input id="lanClient" type="text" maxlength="120"></div>
       <label for="lanIface" class="hint" data-i18n="lan.iface">Интерфейс (пусто — тот, через который идёт интернет)</label>
@@ -2157,28 +2157,46 @@ function lanDeviceName(d) {
   return (d.names && d.names[0] && d.names[0].name) || t('lan.kind.' + d.kind);
 }
 
+// what a segment is called: the auditor's name, else NetAudit's guess (marked "?"), else its subnet
+function lanSegName(s) {
+  if (s.name) return s.name;
+  if (s.suggestion) return `${t('lan.seg.suggest.' + s.suggestion)}?`;
+  return s.cidr;
+}
+
 function lanMapSvg(r) {
   const devices = Array.isArray(r.devices) ? r.devices : [];
   const v = r.vantage || {};
   const router = r.router || null;
-  const cols = 6, cellW = 140, cellH = 80, W = 40 + cols * cellW, cx = W / 2;
-  const others = [];
-  devices.forEach((d, i) => { if (d.kind !== 'router') others.push(i); });
-  const rows = Math.max(1, Math.ceil(others.length / cols));
-  const segTop = 150, H = segTop + 60 + rows * cellH + 10;
-  // a device seen only by ARP or by its announcement is grey: nothing about it was judged
+  const segments = Array.isArray(r.segments) && r.segments.length ? r.segments
+    : [{ cidr: r.scanned || '', own: true, devices: devices.map(d => d.ip) }];
+  const cols = 6, cellW = 140, cellH = 80, W = 80 + cols * cellW, cx = W / 2;
+  // a device seen only by ARP, by its announcement or by DNS is grey: nothing about it was judged
   const fill = d => d.worst ? (LAN_SEV_COLOR[d.worst] || 'var(--warn)')
-    : (d.answered === 'neighbour' || d.answered === 'announced') ? 'var(--muted)' : 'var(--ok)';
+    : (d.answered === 'neighbour' || d.answered === 'announced' || d.answered === 'dns') ? 'var(--muted)' : 'var(--ok)';
   const routerLabel = router
     ? [router.vendor || t('lan.unknown_vendor'), router.model, router.version].filter(Boolean).join(' ')
     : t('lan.unknown_vendor');
+  // where each segment's box goes: own first, then the others, stacked
+  const order = segments.map((s, k) => k).sort((a, b) => (segments[b].own ? 1 : 0) - (segments[a].own ? 1 : 0));
+  const boxes = {};
+  let y = 150;
+  order.forEach(k => {
+    const s = segments[k];
+    const members = devices.map((d, i) => i).filter(i => devices[i].segment === s.cidr || (!devices[i].segment && s.own));
+    const shown = members.filter(i => devices[i].kind !== 'router');
+    const rows = Math.max(1, Math.ceil(shown.length / cols));
+    boxes[k] = { top: y, height: 60 + rows * cellH, shown };
+    y += boxes[k].height + 24;
+  });
+  const H = y;
   let svg = `<svg class="lan-map" viewBox="0 0 ${W} ${H}" role="img" aria-label="${t('lan.map')}">`
     + `<rect x="${cx - 70}" y="6" width="140" height="32" rx="8" class="lan-box"/>`
     + `<text x="${cx}" y="27" text-anchor="middle" class="lan-label">Internet</text>`
     + `<line x1="${cx}" y1="38" x2="${cx}" y2="60" class="lan-link"/>`;
   let routerDrawn = false;
   devices.forEach((d, i) => {
-    if (d.kind !== 'router' || routerDrawn) return;
+    if (d.kind !== 'router' || routerDrawn || !router || d.ip !== router.ip) return;
     routerDrawn = true;
     svg += `<g class="lan-node" onclick="showLanDevice(${i})">`
       + `<rect x="${cx - 160}" y="60" width="320" height="52" rx="10" class="lan-box" style="stroke:${fill(d)}"/>`
@@ -2190,28 +2208,58 @@ function lanMapSvg(r) {
       + `<text x="${cx}" y="81" text-anchor="middle" class="lan-label">${t('lan.router')} ${router ? router.ip : (v.gateway || '?')}</text>`
       + `<text x="${cx}" y="100" text-anchor="middle" class="lan-sub">${routerLabel}</text>`;
   }
-  const where = v.interface ? ` · ${v.interface} (${v.wireless ? t('lan.wifi') : t('lan.cable')})` : '';
-  svg += `<line x1="${cx}" y1="112" x2="${cx}" y2="${segTop}" class="lan-link"/>`
-    + `<rect x="10" y="${segTop}" width="${W - 20}" height="${H - segTop - 6}" rx="12" class="lan-segment"/>`
-    + `<text x="24" y="${segTop + 24}" class="lan-label">${r.scanned || ''}${where}</text>`;
-  others.forEach((i, n) => {
-    const d = devices[i];
-    const x = 20 + (n % cols) * cellW + cellW / 2;
-    const y = segTop + 62 + Math.floor(n / cols) * cellH;
-    const you = d.kind === 'this_machine';
-    // a dashed ring: something on this device could not be checked
-    const gapRing = Array.isArray(d.gaps) && d.gaps.length
-      ? `<circle cx="${x}" cy="${y}" r="18" fill="none" style="stroke:var(--warn)" stroke-width="2" stroke-dasharray="4 3"/>` : '';
-    svg += `<g class="lan-node" onclick="showLanDevice(${i})">` + gapRing
-      + `<circle cx="${x}" cy="${y}" r="13" style="fill:${fill(d)};opacity:${d.answered === 'tcp' ? 1 : 0.55}"/>`
-      + (you ? `<text x="${x}" y="${y + 5}" text-anchor="middle" class="lan-you">★</text>` : '')
-      + `<text x="${x}" y="${y + 31}" text-anchor="middle" class="lan-label">${d.ip}</text>`
-      + `<text x="${x}" y="${y + 47}" text-anchor="middle" class="lan-sub">${you ? t('lan.you') : lanDeviceName(d).slice(0, 20)}</text></g>`;
+  // the router's trunk to every segment, on the left
+  svg += `<line x1="${cx}" y1="112" x2="${cx}" y2="130" class="lan-link"/>`
+    + `<line x1="24" y1="130" x2="${cx}" y2="130" class="lan-link"/>`
+    + `<line x1="24" y1="130" x2="24" y2="${H - 30}" class="lan-link"/>`;
+  order.forEach(k => {
+    const s = segments[k];
+    const box = boxes[k];
+    const where = s.own && v.interface ? ` · ★ ${t('lan.you')} · ${v.interface} (${v.wireless ? t('lan.wifi') : t('lan.cable')})` : '';
+    const mark = s.sensitive ? ` · ${t('lan.seg.sensitive')}` : '';
+    const gw = s.gateway ? ` · ${t('lan.seg.gateway')} ${s.gateway}` : '';
+    svg += `<line x1="24" y1="${box.top + 20}" x2="44" y2="${box.top + 20}" class="lan-link"/>`
+      + `<rect x="44" y="${box.top}" width="${W - 60}" height="${box.height}" rx="12" class="lan-segment"`
+      + `${s.sensitive ? ' style="stroke:var(--bad)"' : ''}/>`
+      + `<text x="58" y="${box.top + 24}" class="lan-label">${lanSegName(s)} · ${s.cidr}${gw}${where}${mark}</text>`;
+    if (s.scanned === false) {
+      svg += `<text x="58" y="${box.top + 50}" class="lan-sub">${t('lan.seg.not_scanned')}</text>`;
+    }
+    box.shown.forEach((i, n) => {
+      const d = devices[i];
+      const x = 60 + (n % cols) * cellW + cellW / 2;
+      const yy = box.top + 62 + Math.floor(n / cols) * cellH;
+      const you = d.kind === 'this_machine';
+      // a dashed ring: something on this device could not be checked
+      const gapRing = Array.isArray(d.gaps) && d.gaps.length
+        ? `<circle cx="${x}" cy="${yy}" r="18" fill="none" style="stroke:var(--warn)" stroke-width="2" stroke-dasharray="4 3"/>` : '';
+      svg += `<g class="lan-node" onclick="showLanDevice(${i})">` + gapRing
+        + `<circle cx="${x}" cy="${yy}" r="13" style="fill:${fill(d)};opacity:${d.answered === 'tcp' ? 1 : 0.55}"/>`
+        + (you ? `<text x="${x}" y="${yy + 5}" text-anchor="middle" class="lan-you">★</text>` : '')
+        + `<text x="${x}" y="${yy + 31}" text-anchor="middle" class="lan-label">${d.ip}</text>`
+        + `<text x="${x}" y="${yy + 47}" text-anchor="middle" class="lan-sub">${you ? t('lan.you') : lanDeviceName(d).slice(0, 20)}</text></g>`;
+    });
+  });
+  // isolation broken: a red dashed arrow from the vantage segment to the segment whose service answers
+  const ownKey = order.find(k => segments[k].own);
+  const reach = {};
+  (r.findings || []).forEach(f => {
+    if (lanControl(f.id) !== 'NET-SEG-001' || !f.segment) return;
+    (reach[f.segment] ||= []).push(String(f.id).split(':').pop());
+  });
+  order.forEach((k, lane) => {
+    const s = segments[k];
+    if (ownKey === undefined || k === ownKey || !reach[s.cidr]) return;
+    const x = W - 30 - lane * 6;
+    const y1 = boxes[ownKey].top + 30, y2 = boxes[k].top + 30;
+    svg += `<path d="M ${W - 16} ${y1} H ${x} V ${y2} H ${W - 16}" fill="none" style="stroke:var(--bad)" stroke-width="2" stroke-dasharray="6 4"/>`
+      + `<text x="${W - 22}" y="${y2 - 6}" text-anchor="end" class="lan-sub" style="fill:var(--bad)">${t('lan.isolation')}: ${reach[s.cidr].join(', ')}</text>`;
   });
   svg += '</svg>';
   const legend = [['var(--bad)', 'lan.legend.bad'], ['var(--warn)', 'lan.legend.warn'], ['var(--ok)', 'lan.legend.ok'],
     ['var(--muted)', 'lan.legend.quiet']].map(([c, k]) => `<span><span class="lan-dot" style="background:${c}"></span>${t(k)}</span>`).join('')
-    + `<span><span class="lan-dot" style="border:2px dashed var(--warn)"></span>${t('lan.legend.gaps')}</span>`;
+    + `<span><span class="lan-dot" style="border:2px dashed var(--warn)"></span>${t('lan.legend.gaps')}</span>`
+    + `<span><span class="lan-dot" style="border:2px dashed var(--bad);border-radius:2px"></span>${t('lan.legend.isolation')}</span>`;
   return svg + `<div class="lan-legend">${legend}</div>`;
 }
 
@@ -2252,8 +2300,22 @@ function lanHtml(r) {
         <div><span>${t('lan.devices')}</span>${stats.devices ?? 0}</div>
       </div>
       ${r.scan_note ? `<div class="timing">${r.scan_note}</div>` : ''}
+      ${Array.isArray(r.vantages) ? `<div class="timing">${t('lan.merged')}: ${r.vantages.map(x => `${x.subnet} (${x.timestamp})`).join('; ')}</div>` : ''}
     </div></div></div>`;
   html += `<div class="card"><h2>${t('lan.map')}</h2>${lanMapSvg(r)}<div class="lan-device-card"></div></div>`;
+  const segs = Array.isArray(r.segments) ? r.segments : [];
+  if (segs.length) {
+    const segRows = segs.map((s, i) => `<tr><td>${s.cidr}${s.own ? ` <span class="timing">★ ${t('lan.seg.own')}</span>` : ''}</td>
+      <td><input id="lanSegName${i}" type="text" maxlength="60" value="${s.name || ''}" placeholder="${lanSegName(s)}"></td>
+      <td><label class="lan-check"><input id="lanSegSens${i}" type="checkbox"${s.sensitive ? ' checked' : ''}> ${t('lan.seg.sensitive')}</label></td>
+      <td>${(s.devices || []).length}${s.scanned === false ? ` <span class="timing">${t('lan.seg.not_scanned')}</span>` : ''}</td>
+      <td>${Array.isArray(s.seen_from) ? `<span class="timing">${t('lan.seg.seen_from')} ${s.seen_from.join(', ')}</span>` : ''}</td>
+      <td><button onclick="saveLanSegment(${i})">${t('lan.seg.save')}</button></td></tr>`).join('');
+    html += `<div class="card"><h2>${t('lan.segments')}: ${segs.length}</h2><table><tr><th>${t('lan.scanned')}</th>
+      <th>${t('lan.seg.name')}</th><th></th><th>${t('lan.devices')}</th><th></th><th></th></tr>${segRows}</table>
+      <div class="status" id="lanSegStatus"></div>
+      <div class="wp-form" style="margin-top:10px"><button onclick="loadLanMerged()">${t('lan.merge')}</button></div></div>`;
+  }
   const findings = (r.findings || []).filter(f => f.severity !== 'ok');
   if (findings.length) {
     html += `<div class="card"><h2>${t('wp.findings')}: ${findings.length}</h2>`
@@ -2262,7 +2324,8 @@ function lanHtml(r) {
   const rows = r.devices.map((d, i) => {
     const problems = (r.findings || []).filter(f => f.device === d.ip && f.severity !== 'ok').length;
     const ports = (d.ports || []).map(p => p.port).join(', ')
-      || (d.answered === 'neighbour' ? t('lan.answered.neighbour') : d.answered === 'announced' ? t('lan.answered.announced') : '—');
+      || (d.answered === 'tcp' ? '—' : d.answered === 'announced' ? t('lan.answered.announced')
+          : t('lan.answered.' + d.answered));
     const mac = d.mac ? `${d.mac}${d.vendor ? ' · ' + d.vendor : ''}` : '—';
     return `<tr class="lan-row" onclick="showLanDevice(${i})"><td>${d.ip}</td><td>${lanDeviceName(d)}</td><td>${mac}</td>
       <td>${t('lan.kind.' + d.kind)}</td><td>${ports}</td><td>${problems || ''}</td></tr>`;
@@ -2296,6 +2359,43 @@ function renderLan(r) {
   r = escDeep(r);
   LAN_VIEW = r;
   return lanHtml(r);
+}
+
+// the escaped display copy back to text (esc()'s five entities): the client and
+// the subnet go back to the server as JSON, never into HTML
+function lanUnesc(s) {
+  return String(s || '').replace(/&#39;|&quot;|&gt;|&lt;|&amp;/g,
+    m => ({ '&#39;': "'", '&quot;': '"', '&gt;': '>', '&lt;': '<', '&amp;': '&' }[m]));
+}
+
+async function saveLanSegment(i) {
+  const status = document.getElementById('lanSegStatus');
+  const segs = LAN_VIEW && Array.isArray(LAN_VIEW.segments) ? LAN_VIEW.segments : [];
+  if (!segs[i]) return;
+  const cidr = lanUnesc(segs[i].cidr);
+  const client = lanUnesc(LAN_VIEW.client);
+  const body = { client, cidr, name: document.getElementById('lanSegName' + i).value.trim(),
+                 sensitive: document.getElementById('lanSegSens' + i).checked };
+  const res = await fetch('/api/lan/segments', {
+    method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+  });
+  const answer = await res.json().catch(() => ({}));
+  if (status) status.textContent = res.ok ? t('lan.seg.saved') : t('run.error') + ': ' + (answer.detail || t('run.unknown'));
+}
+
+async function loadLanMerged() {
+  const out = document.getElementById('lanResult');
+  const status = document.getElementById('lanStatus');
+  const client = LAN_VIEW ? lanUnesc(LAN_VIEW.client) : document.getElementById('lanClient').value.trim();
+  const res = await fetch('/api/lan/merged?client=' + encodeURIComponent(client));
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data) {
+    status.textContent = t('run.error') + ': ' + t('run.unknown');
+    return;
+  }
+  switchTab('lan');
+  status.textContent = '';
+  out.innerHTML = renderLan(data);
 }
 
 function lanDeviceCard(d, all) {

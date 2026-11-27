@@ -10,6 +10,8 @@ Tables:
   presets        - saved check sets
   targets        - default targets
   ssh_hosts      - saved SSH hosts for multi-host runs, never secrets (B2.3)
+  lan_segments   - the auditor's names and sensitive marks for a client's
+                   network segments (docs/research/network_audit.md §13)
 
 Schema is versioned (PRAGMA user_version) - migrations are added to MIGRATIONS.
 DB: ~/.netaudit/netaudit.db
@@ -199,7 +201,21 @@ def _m5(conn: sqlite3.Connection) -> None:
     """)
 
 
-MIGRATIONS = [_m1, _m2, _m3, _m4, _m5]
+def _m6(conn: sqlite3.Connection) -> None:
+    # network audit segment labels (docs/research/network_audit.md §13): a
+    # name and a sensitive mark per client and subnet, nothing else
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS lan_segments (
+        client TEXT NOT NULL,
+        cidr TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        sensitive INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (client, cidr)
+    );
+    """)
+
+
+MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6]
 
 
 def _seed_presets(conn: sqlite3.Connection) -> None:
@@ -769,3 +785,53 @@ def traffic_history_prune(older_than: str) -> int:
     cur = conn.execute('DELETE FROM traffic_history WHERE seen_at < ?', (older_than,))
     conn.commit()
     return cur.rowcount
+
+
+# --- network audit: segment labels and the client's audits (network_audit.md §13) ---
+
+LAN_CLIENT_MAX = 120
+LAN_NAME_MAX = 60
+_LAN_PRIVATE = ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16')
+
+
+def lan_segment_label_set(client: str, cidr: str, name: str, sensitive: bool) -> None:
+    """Name a client's segment and mark it sensitive or not. Raises
+    ValueError for anything but a private subnet and a short name."""
+    import ipaddress
+    if not isinstance(client, str) or len(client) > LAN_CLIENT_MAX:
+        raise ValueError(f'client: at most {LAN_CLIENT_MAX} characters')
+    try:
+        net = ipaddress.ip_network(str(cidr), strict=False)
+    except ValueError:
+        raise ValueError('cidr: not a subnet') from None
+    if not any(net.version == 4 and net.subnet_of(ipaddress.ip_network(p)) for p in _LAN_PRIVATE):
+        raise ValueError('cidr: only private subnets (10/8, 172.16/12, 192.168/16)')
+    if not isinstance(name, str) or len(name.strip()) > LAN_NAME_MAX:
+        raise ValueError(f'name: at most {LAN_NAME_MAX} characters')
+    conn = _conn()
+    conn.execute('INSERT INTO lan_segments (client, cidr, name, sensitive) VALUES (?,?,?,?) '
+                 'ON CONFLICT(client, cidr) DO UPDATE SET name=excluded.name, sensitive=excluded.sensitive',
+                 (client, str(net), name.strip(), int(bool(sensitive))))
+    conn.commit()
+
+
+def lan_segment_labels(client: str) -> dict:
+    """{cidr: {'name', 'sensitive'}} for one client."""
+    rows = _conn().execute('SELECT cidr, name, sensitive FROM lan_segments WHERE client=? ORDER BY cidr',
+                           (client,)).fetchall()
+    return {r['cidr']: {'name': r['name'], 'sensitive': bool(r['sensitive'])} for r in rows}
+
+
+def reports_with_check(check_id: str, limit: int = 200) -> list[dict]:
+    """The newest reports that hold a result of `check_id`, secrets removed."""
+    rows = _conn().execute("SELECT data FROM reports WHERE ',' || checks || ',' LIKE ? ORDER BY id DESC LIMIT ?",
+                           (f'%,{check_id},%', limit)).fetchall()
+    out = []
+    for r in rows:
+        try:
+            report = json.loads(r['data'])
+        except ValueError:
+            continue
+        if isinstance(report, dict) and check_id in (report.get('results') or {}):
+            out.append(redact_report(report))
+    return out
