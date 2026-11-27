@@ -241,3 +241,20 @@ def test_merged_policy_and_allowed_arrows_from_each_place():
     assert 'pol.vantages' in functions['lanHtml']
     svg = functions['lanMapSvg']
     assert 'keyOf[x.from]' in svg and 'ownSeg' not in svg
+
+
+def test_the_rules_editor_does_one_thing_at_a_time():
+    """Review PR A pass 2 (A1, async): while a load or a save is in flight
+    nothing else is loaded, added, removed or saved, the table is locked,
+    and an answer that is no longer the editor's is dropped. The runtime
+    proof is tests/test_web_lan_rules_runtime.py (node, on CI)."""
+    for lang in ('ru', 'en'):
+        assert "'lan.rules.busy':" in _lang_block(lang), lang
+    functions = _functions(_script())
+    for name in ('loadLanRules', 'saveLanRules', 'addLanRule', 'removeLanRule'):
+        assert 'if (LAN_RULES_BUSY)' in functions[name], name
+    for name in ('loadLanRules', 'saveLanRules'):
+        body = functions[name]
+        assert 'finally' in body and 'const ticket = ++LAN_RULES_TICKET;' in body, name
+        assert 'if (ticket !== LAN_RULES_TICKET) return;' in body, name
+    assert 'id="lanRulesSet"' in functions['renderLanRules']
