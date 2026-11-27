@@ -644,7 +644,7 @@ def _kev_text(entry: dict | None) -> str:
 
 
 def _known_vulns(devices: list[dict], router: dict | None, lookup, findings: list, checked: list):
-    services, versionless = [], 0
+    services, versionless = [], []
     for d in devices:
         if d['kind'] in ('router', 'this_machine') or not d['_scanned']:
             continue
@@ -653,12 +653,12 @@ def _known_vulns(devices: list[dict], router: dict | None, lookup, findings: lis
             if src:
                 services.append({'ip': d['ip'], 'port': p['port'], **src})
             else:
-                versionless += 1
+                versionless.append(f"{d['ip']}:{p['port']}")
     router_version = router['version'] if router and router.get('os') == 'RouterOS' else None
     result = lookup(services, router_version)
     kev = result.get('kev') or {}
     problems, more = [], 0
-    nvd_count = osv_count = 0
+    nvd_count = osv_count = fixed_count = unfixed_count = 0
     for s in result.get('services', []):
         where = f"{s['ip']}:{s['port']}"
         if s.get('error'):
@@ -680,13 +680,13 @@ def _known_vulns(devices: list[dict], router: dict | None, lookup, findings: lis
                                          requires_manual_verification=True, extra={'device': s['ip']}))
         elif s['kind'] == 'osv':
             osv_count += 1
-            fixed = s.get('fixed') or []
+            fixed, unfixed = s.get('fixed') or [], s.get('unfixed') or []
+            fixed_count, unfixed_count = fixed_count + len(fixed), unfixed_count + len(unfixed)
             if fixed:
                 hot = [c for c in fixed if c in kev]
                 detail = (f"{len(fixed)} vulnerabilities of the Debian package {s['package']} {s['version']} "
                           f"({s['ecosystem']}) are fixed in newer revisions: {', '.join(fixed[:15])}"
-                          f"{' …' if len(fixed) > 15 else ''}; {s.get('open') or 0} more have no fix yet - update "
-                          "the package (apt upgrade)"
+                          f"{' …' if len(fixed) > 15 else ''} - update the package (apt upgrade)"
                           + (f"; exploited in the wild (CISA KEV): {', '.join(hot)}" if hot else ''))
                 fid = subject_id('NET-VULN-002', s['ip'], s['port'])
                 if hot:
@@ -695,6 +695,24 @@ def _known_vulns(devices: list[dict], router: dict | None, lookup, findings: lis
                 else:
                     findings.append(_finding('medium', f"{s['package']} needs security updates", detail, 'medium',
                                              id=fid, extra={'device': s['ip']}))
+            if unfixed:
+                # affected, and no Debian revision fixes it yet: never silent, never
+                # gated on a fixable one (review #67 R1)
+                hot = [c for c in unfixed if c in kev]
+                detail = (f"{len(unfixed)} vulnerabilities affect the Debian package {s['package']} {s['version']} "
+                          f"({s['ecosystem']}) and no revision fixes them yet: {', '.join(unfixed[:15])}"
+                          f"{' …' if len(unfixed) > 15 else ''} - an update does not help; check each in Debian's "
+                          "security tracker (many are minor or need a setting) and limit who reaches the service"
+                          + (f"; exploited in the wild (CISA KEV): {', '.join(hot)}" if hot else ''))
+                fid = subject_id('NET-VULN-003', s['ip'], s['port'])
+                if hot:
+                    findings.append(_finding('high', f"{s['package']} has an exploited vulnerability with no fix yet",
+                                             detail, 'medium', id=fid, requires_manual_verification=True,
+                                             extra={'device': s['ip']}))
+                else:
+                    findings.append(_finding('low', f"{s['package']} has vulnerabilities with no fix yet", detail,
+                                             'medium', id=fid, requires_manual_verification=True,
+                                             extra={'device': s['ip']}))
     r = result.get('router')
     if r and router:
         if r.get('error'):
@@ -713,17 +731,19 @@ def _known_vulns(devices: list[dict], router: dict | None, lookup, findings: lis
     problems += [f'{where}: over the lookup limit' for where in result.get('cut', [])]
     if result.get('kev_error'):
         problems.append(result['kev_error'])
-    skipped = result.get('skipped', [])
-    tail = (f"; {versionless} services without a version not looked up"
-            + (f"; {len(skipped)} not looked up: {'; '.join(skipped[:5])}" if skipped else '')
+    # a service whose version was not looked up is not covered: a gap that
+    # names it, never "ok" (review #67 R2)
+    problems += result.get('skipped', [])
+    if versionless:
+        problems.append(f"no product version to look up: {', '.join(versionless[:12])}"
+                        f"{f' … (+{len(versionless) - 12})' if len(versionless) > 12 else ''}")
+    done = (f"{nvd_count} versions looked up in NVD (possible matches), {osv_count} Debian packages in OSV "
+            f"({fixed_count} vulnerabilities with a fix, {unfixed_count} without a fix), CISA KEV marks"
             + (f"; {more} more possible matches not listed" if more else ''))
     if problems:
-        checked.append({'item': 'known_vulns', 'status': 'not_checked',
-                        'detail': _listed(problems) + tail})
+        checked.append({'item': 'known_vulns', 'status': 'not_checked', 'detail': f'{_listed(problems)}; {done}'})
     else:
-        checked.append({'item': 'known_vulns', 'status': 'ok',
-                        'detail': f"{nvd_count} versions looked up in NVD (possible matches), {osv_count} Debian "
-                                  f"packages in OSV, CISA KEV marks" + tail})
+        checked.append({'item': 'known_vulns', 'status': 'ok', 'detail': done})
 
 
 # ---- the result -------------------------------------------------------------------
@@ -962,7 +982,9 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
         'findings': findings, 'checked': checked,
         'limits': [x for x in (([y for y in LIMITS if y != 'other_subnets'] + ['traceroute'])
                                if subnet_search is not None else list(LIMITS))
-                   if not (x == 'known_vulns' and vulns is not None)] + ([] if level2 else ['level2']),
+                   if not (x == 'known_vulns' and vulns is not None)]
+                  # looked up: what matching by version cannot see stays a limit (review #67 R2)
+                  + (['vuln_versions'] if vulns is not None else []) + ([] if level2 else ['level2']),
         'notices': lan_vulns.NOTICES if vulns is not None else [],
         'score': webprobe.score(findings, checked), 'verdict': webprobe.verdict(findings, checked),
         'summary': webprobe.summary(findings), 'next_steps': next_steps,

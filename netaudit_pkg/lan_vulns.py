@@ -50,6 +50,7 @@ NOTICES = [
 
 _CPE_PART = re.compile(r'[A-Za-z0-9._~%-]+')
 _CVE = re.compile(r'CVE-\d{4}-\d{4,}')
+_RECORD = re.compile(r'[A-Z]{2,10}-[A-Z0-9][A-Z0-9-]{0,38}')     # DLA-3694-1, DSA-5586-1
 # nmap product (lower case) -> (Debian source package, its epoch)
 _DEBIAN_PACKAGES = {'openssh': ('openssh', '1:')}
 _SEVERITIES = ('critical', 'high', 'medium', 'low')
@@ -208,10 +209,11 @@ def kev() -> tuple[dict, str | None]:
 
 
 def osv_debian(ecosystem: str, package: str, version: str) -> tuple[dict | None, str | None]:
-    """({'fixed': [CVE...], 'open': n}, None) - the records affecting this
-    exact Debian package version, split into fixed in a newer revision and
-    not fixed yet - or (None, why)."""
-    key = f'osvdeb::{ecosystem}::{package}::{version}'
+    """({'fixed': [CVE...], 'unfixed': [CVE...]}, None) - the records
+    affecting this exact Debian package version, split into fixed in a newer
+    revision and not fixed yet, both by id (review #67 R1: an unfixed one is
+    reported and matched against KEV too) - or (None, why)."""
+    key = f'osvdeb2::{ecosystem}::{package}::{version}'
     cached = _cached(key)
     if cached is not None:
         return cached, None
@@ -221,7 +223,7 @@ def osv_debian(ecosystem: str, package: str, version: str) -> tuple[dict | None,
         return None, f'OSV: {type(e).__name__}'
     if code != 200 or not isinstance(data, dict):
         return None, f'OSV: HTTP {code}' if code != 200 else 'OSV: unexpected answer'
-    fixed, still_open = [], 0
+    fixed, unfixed = [], []
     for record in data.get('vulns') or []:
         if not isinstance(record, dict):
             continue
@@ -232,13 +234,15 @@ def osv_debian(ecosystem: str, package: str, version: str) -> tuple[dict | None,
                       for ev in r.get('events') or [])
         cves = [x for x in record.get('aliases') or [] if _CVE.fullmatch(str(x))]
         if not cves:
-            m = _CVE.search(str(record.get('id', '')))
-            cves = [m.group(0)] if m else []
+            rid = str(record.get('id', ''))
+            m = _CVE.search(rid)
+            # a record with no CVE keeps its own id (DLA-..., DSA-...), never a raw odd one
+            cves = [m.group(0)] if m else [rid if _RECORD.fullmatch(rid) else 'OSV record']
         if has_fix:
             fixed += cves
         else:
-            still_open += 1
-    out = {'fixed': sorted(set(fixed)), 'open': still_open}
+            unfixed += cves
+    out = {'fixed': sorted(set(fixed)), 'unfixed': sorted(set(unfixed) - set(fixed))}
     storage.cve_set(key, out)
     return out, None
 
@@ -282,7 +286,7 @@ def lookup(services: list[dict], router_version: str | None) -> dict:
                 continue
             osv_count += 1
             result, error = osv_debian(s['ecosystem'], s['package'], s['version'])
-            out['services'].append({**s, 'fixed': (result or {}).get('fixed'), 'open': (result or {}).get('open'),
-                                    'error': error})
+            out['services'].append({**s, 'fixed': (result or {}).get('fixed'),
+                                    'unfixed': (result or {}).get('unfixed'), 'error': error})
     out['kev'], out['kev_error'] = kev()
     return out

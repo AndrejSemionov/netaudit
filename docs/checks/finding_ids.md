@@ -293,4 +293,5 @@ device's IP address (and the port where one device can have several).
 | NET-SEG-002 | medium | — | one flat network: no other subnet answered and workstations or servers share the segment with phones or printers |
 | NET-VULN-001 | critical, high, medium, low | address, port, CVE | a known vulnerability may affect the service's version (NVD by CPE: possible, to verify; at least high when in CISA KEV) |
 | NET-VULN-002 | high, medium | address, port | the Debian package behind the banner has vulnerabilities fixed in newer revisions (OSV; high when one is in CISA KEV) |
+| NET-VULN-003 | high, low | address, port | the Debian package behind the banner has vulnerabilities no revision fixes yet (OSV; to check by hand in Debian's security tracker; high when one is in CISA KEV) |
 | RTR-VULN-001 | critical, high, medium, low | CVE | a known vulnerability may affect the router's RouterOS version (NVD: possible, to verify; at least high when in CISA KEV) |

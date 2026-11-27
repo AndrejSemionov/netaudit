@@ -532,7 +532,10 @@ USER 2026-11-27: «давай pr2 и потом 3». Built as §7.2 says:
   `1:9.2p1-2+deb12u3`), never in NVD by the upstream version - Debian
   backports fixes without changing it. An Ubuntu banner cannot tell its
   release, so it is named as not checked. A service without a version is
-  not looked up (counted in the report).
+  not looked up. Each of them is a gap of `known_vulns` naming the address
+  and port - never "ok" (review #67 R2); with the lookups on, the limit
+  `vuln_versions` says what matching by version cannot see (a fix without
+  a new version, Ubuntu, router firmware other than RouterOS).
 - **NVD** (`virtualMatchString`): "possible" only - `NET-VULN-001:<ip>:<port>:<cve>`,
   severity from CVSS, confidence low, "to verify"; at most 10 per service,
   the rest counted. Without an API key NVD allows 5 requests in 30 s: at
@@ -540,7 +543,12 @@ USER 2026-11-27: «давай pr2 и потом 3». Built as §7.2 says:
   `cve_cache`; the rest are a gap.
 - **OSV Debian**: the records whose fix is in a newer Debian revision -
   `NET-VULN-002:<ip>:<port>`, one finding per service listing the CVEs
-  ("update the package"); records with no fix yet are counted.
+  ("update the package"). The records that affect the version and have no
+  fixed revision yet are `NET-VULN-003:<ip>:<port>` (review #67 R1): listed
+  by id, low and to check by hand in Debian's security tracker (many are
+  minor or need a setting), high when one is in CISA KEV; mitigation, not
+  `apt upgrade`. It is reported whether or not the package also has fixable
+  ones. A record without a CVE keeps its own id (`DLA-...`).
 - **Router**: RouterOS CVEs from NVD as `RTR-VULN-001:<cve>` (possible).
 - **CISA KEV**: a CVE in the catalog raises the finding to at least high and
   says "exploited in the wild"; the catalog is downloaded at most once a day
@@ -549,7 +557,9 @@ USER 2026-11-27: «давай pr2 и потом 3». Built as §7.2 says:
   Debian package versions) - never an address or a name of the client's
   devices. A run can turn the lookups off (`vuln_lookup = no`); then
   "known vulnerabilities" stays a limit.
-- **Gaps**: a lookup that failed (NVD down, rate limit, OSV down) is "not
-  checked" for that service; KEV unavailable is a gap of the KEV marks.
+- **Gaps**: a lookup that failed (NVD down, rate limit, OSV down), a service
+  over the cap, a version not looked up (above) is "not checked" for that
+  service; KEV unavailable is a gap of the KEV marks. "ok" only when every
+  service with an open port was looked up.
 - **Attribution**: "This product uses the NVD API but is not endorsed or
   certified by the NVD."; OSV.dev and Debian Security Tracker; CISA KEV.
