@@ -982,7 +982,8 @@ def test_full_run_with_fake_tools(monkeypatch, tmp_path):
     res = lan_audit.check_lan_audit(client='Example Ltd', authorization=lan_audit.AUTH_CONFIRM)
     assert res['verdict'] == 'danger' and res['client'] == 'Example Ltd'
     assert res['scanned'] == '192.168.88.0/24'
-    assert len(seen) == 3
+    # discovery, broadcast, the probe for other subnets (PR 2), the port scan
+    assert len(seen) == 4 and any('-PS22,53,80,443,8291' in c for c in seen)
     port_scan = next(c for c in seen if '--version-light' in c)
     # every device found is scanned, the neighbour-only one too; this machine is not
     assert '192.168.88.30' in port_scan and '192.168.88.10' not in port_scan

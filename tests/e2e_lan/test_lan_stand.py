@@ -17,6 +17,7 @@ DIR = os.environ.get('NETAUDIT_E2E_LAN_DIR')
 pytestmark = pytest.mark.skipif(not DIR, reason='the network stand runs in CI (job e2e-lan)')
 
 SCANNER, GW, LEGACY, QUIET, CLEAN = '172.30.10.10', '172.30.10.254', '172.30.10.20', '172.30.10.40', '172.30.10.50'
+SEG_A, SEG_B, BUH = '172.30.10.0/24', '172.30.20.0/24', '172.30.20.20'
 
 
 def _load(level: int) -> dict:
@@ -86,3 +87,35 @@ def test_level2_finds_anonymous_access_and_no_false_ms17_010(two):
     assert {f'NET-FTP-002:{LEGACY}', f'NET-DB-002:{LEGACY}:6379'} <= ids(two)
     assert f'NET-SMB-003:{LEGACY}' not in ids(two)          # Samba is not affected by MS17-010
     assert 'level2' not in two['limits']
+
+
+def _q(cidr):
+    from urllib.parse import quote
+    return quote(cidr, safe='')
+
+
+def test_segment_b_is_found_through_the_router(one):
+    """PR 2 (research §13): the probe through the gateway finds segment B, its
+    sweep finds the accounting server, and its SMB answering from segment A
+    is an isolation finding."""
+    segments = {s['cidr']: s for s in one['segments']}
+    assert segments[SEG_A]['own'] is True and SEG_B in segments
+    assert BUH in segments[SEG_B]['devices']
+    assert device(one, BUH)['segment'] == SEG_B and device(one, BUH)['mac'] is None   # behind the router: no MAC
+    assert f'NET-SEG-001:{_q(SEG_A)}:{_q(SEG_B)}:445' in ids(one)
+    assert 'NET-SEG-002' not in ids(one)
+    item = next(c for c in one['checked'] if c['item'] == 'subnets')
+    assert item['status'] == 'ok'
+    assert 'traceroute' in one['limits'] and 'other_subnets' not in one['limits']
+
+
+def test_the_device_rules_apply_in_segment_b_too(one):
+    assert {f'NET-SMB-001:{BUH}', f'NET-DB-001:{BUH}:6379'} <= ids(one)
+
+
+def test_the_gateway_there_is_judged_as_a_device(one):
+    """Review #66 R1: 172.30.20.254 answered the probe - the stand's router,
+    seen from A, but the address alone cannot prove it: its FTP is reported."""
+    gw_b = '172.30.20.254'
+    assert device(one, gw_b)['kind'] != 'router' and device(one, gw_b)['segment'] == SEG_B
+    assert f'NET-FTP-001:{gw_b}' in ids(one)

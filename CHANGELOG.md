@@ -25,6 +25,17 @@
   commands), what was not checked, and next steps. The network report is not
   sent to AI analysis unless the run allows it. Needs `nmap` (`sudo apt
   install nmap`). Ids `NET-*`, `RTR-*` in `docs/checks/finding_ids.md`.
+- Network audit, segments: the audit also finds the other subnets behind
+  the router (`.1`/`.254` of the nearby private ranges and of DNS servers'
+  and domain controllers' ranges, probed without root; at most 8 swept, the
+  rest named), the domain's controllers from its DNS, and scans what it
+  finds there with the same rules. Each subnet is a segment on the map; the
+  auditor names them ("Accounting") and marks sensitive ones in the tab
+  (kept per client). A sensitive service of another segment that answers
+  from the auditor's (SMB, RDP, WinRM, VNC, SSH, databases...) is
+  `NET-SEG-001`, high into a sensitive segment, drawn as a red arrow; one
+  flat network is `NET-SEG-002`. Audits of one client from several places
+  (staff desk, guest Wi-Fi) merge into one map.
 
 ## 1.3.0 — 2026-11-25
 

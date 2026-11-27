@@ -37,9 +37,10 @@ LEVEL2_CONFIRM = 'yes — also try anonymous access and vulnerability probes'
 ROUTEROS_EOL_URL = 'https://endoflife.date/api/routeros.json'
 TOOL_PACKAGES = {'nmap': 'nmap', 'ip': 'iproute2'}
 DISCOVERY_TIMEOUT = 600
+SUBNET_TIMEOUT = 600
 BROADCAST_TIMEOUT = 90
 PORTS_TIMEOUT = 1800
-LIMITS = ('udp', 'os_detection', 'other_subnets', 'known_vulns')
+LIMITS = ('udp', 'os_detection', 'other_subnets', 'known_vulns')   # with a subnet search: traceroute, not other_subnets
 DB_PORTS = {1433: 'SQL Server', 1521: 'Oracle', 3306: 'MySQL', 5432: 'PostgreSQL', 6379: 'Redis',
             9200: 'Elasticsearch', 11211: 'memcached', 27017: 'MongoDB'}
 # port -> (nmap service names, product words) that prove the database answered
@@ -64,6 +65,16 @@ def routeros_support(version: str, today: date | None = None) -> dict:
 _support = routeros_support
 
 
+def _labels(client: str) -> dict:
+    """The auditor's names and sensitive marks for this client's segments
+    (storage.lan_segment_labels); an unreadable database is no labels."""
+    from .. import storage
+    try:
+        return storage.lan_segment_labels(client)
+    except Exception:  # noqa: BLE001 - labels only name segments; the audit goes on without them
+        return {}
+
+
 # ---- devices ----------------------------------------------------------------
 
 def _ip_key(ip: str):
@@ -81,11 +92,16 @@ def _texts(value) -> list[str]:
     return []
 
 
-def _kind(dev: dict, vantage: dict, gateway: str | None) -> str:
+def _kind(dev: dict, vantage: dict, routers: set, controllers: set) -> str:
     if dev['ip'] == vantage['address']:
         return 'this_machine'
-    if dev['ip'] == gateway:
+    if dev['ip'] in routers:
+        # only the vantage gateway: the route table says it routes. The .1/.254
+        # that answered in a found subnet proves only that it answered - it is
+        # judged as any device (review #66 R1)
         return 'router'
+    if dev['ip'] in controllers:
+        return 'domain_controller'
     ports = {p['port'] for p in dev['_ports']}
     words = ' '.join(f"{p['product']} {p['devicetype']} {p['service']}" for p in dev['_ports']).lower()
     announced = dev.get('announced', {})
@@ -119,18 +135,26 @@ def _in(net, ip) -> bool:
         return False
 
 
-def _devices(vantage, net, discovery, neighbours, ports, broadcast, heard, vendors) -> list[dict]:
+def _net_of(nets: list, ip: str):
+    return next((n for n in nets if _in(n, ip)), None)
+
+
+def _devices(vantage, nets, discovery, neighbours, ports, broadcast, heard, vendors, controllers) -> list[dict]:
     answered = {h['ip'] for h in discovery['hosts'] if h.get('state') == 'up'}
     scanned = {h['ip']: h for h in ports['hosts']}
     announced = lan.broadcast_devices(broadcast.get('prescripts', {}))
     mndp = {m['ip']: m for m in heard.get('mndp', []) if m.get('ip')}
-    # a device seen only by its announcement is a device too (review #65 P3)
-    ips = {ip for ip in answered | set(neighbours) | set(scanned) | set(announced) | set(mndp) if _in(net, ip)}
+    # a device seen only by its announcement is a device too (review #65 P3);
+    # a domain controller known from the domain's DNS records too (§13)
+    ips = {ip for ip in answered | set(neighbours) | set(scanned) | set(announced) | set(mndp) | set(controllers)
+           if _net_of(nets, ip) is not None}
     devices = []
     for ip in sorted(ips, key=_ip_key):
         host = scanned.get(ip) or next((h for h in discovery['hosts'] if h['ip'] == ip), None) or {}
         mac = host.get('mac') or neighbours.get(ip, {}).get('mac')
         names = [{'name': n, 'source': 'dns'} for n in host.get('hostnames', [])]
+        if ip in controllers:
+            names.append({'name': controllers[ip], 'source': 'ad dns'})
         info = announced.get(ip, {})
         if info.get('upnp', {}).get('name'):
             names.append({'name': info['upnp']['name'], 'source': 'upnp'})
@@ -143,8 +167,8 @@ def _devices(vantage, net, discovery, neighbours, ports, broadcast, heard, vendo
             # -Pn reports every target as up: only the discovery answer or an
             # open port means the device answered TCP
             'answered': ('tcp' if ip in answered or scanned.get(ip, {}).get('ports')
-                         else 'neighbour' if ip in neighbours else 'announced'),
-            'announced': info,
+                         else 'neighbour' if ip in neighbours else 'dns' if ip in controllers else 'announced'),
+            'announced': info, 'segment': str(_net_of(nets, ip)),
             '_ports': host.get('ports', []), '_hostscripts': host.get('hostscripts', {}),
             '_scanned': ip in scanned, '_timedout': bool(scanned.get(ip, {}).get('timedout')),
         })
@@ -499,6 +523,106 @@ def _listed(entries: list[str], limit: int = 12) -> str:
     return '; '.join(entries[:limit]) + (f' … (+{len(entries) - limit})' if len(entries) > limit else '')
 
 
+# ---- segments and isolation (research §5.4-5.5, §13) ------------------------------
+
+# services that should not answer across segments: port -> (label, service names, product words)
+SENSITIVE_SERVICES = {
+    139: ('SMB', ('netbios-ssn', 'microsoft-ds'), ('samba', 'smb')),
+    445: ('SMB', ('microsoft-ds', 'netbios-ssn'), ('samba', 'smb')),
+    3389: ('RDP', ('ms-wbt-server',), ('terminal services', 'remote desktop', 'xrdp')),
+    5985: ('WinRM', ('wsman',), ('microsoft httpapi',)),
+    5900: ('VNC', ('vnc',), ('vnc',)),
+    22: ('SSH', ('ssh',), ('openssh', 'dropbear')),
+    2049: ('NFS', ('nfs',), ('nfs',)),
+    873: ('rsync', ('rsync',), ('rsync',)),
+    **{n: (DB_PORTS[n], *DB_PROTOCOLS[n]) for n in DB_PORTS},
+}
+_TOKENS = {'accounting': ('buh', 'bux', 'buch', 'acc', 'account', 'fin', 'kassa', 'ledger'),
+           'servers': ('srv', 'server', 'dc', 'sql', 'file', 'nas'),
+           'printers': ('prn', 'print', 'printer', 'mfp')}
+
+
+def _suggest(devs: list[dict]) -> str | None:
+    """A name for a segment from what is inside: device names first, then kinds."""
+    tokens = {tok for d in devs for n in d['names'] for tok in re.split(r'[^a-z]+', n['name'].lower()) if tok}
+    for key, words in _TOKENS.items():
+        if any(tok.startswith(w) for tok in tokens for w in words):
+            return key
+    kinds = [d['kind'] for d in devs if d['kind'] not in ('router', 'this_machine')]
+    if not kinds:
+        return None
+    if all(k == 'phone' for k in kinds):
+        return 'guests'
+    top = max(sorted(set(kinds)), key=kinds.count)
+    if kinds.count(top) * 2 <= len(kinds):
+        return None                     # no kind is the majority: no guess
+    return {'printer': 'printers', 'server': 'servers', 'nas': 'servers', 'domain_controller': 'servers',
+            'windows': 'staff'}.get(top)
+
+
+def _segments(scanned: str, vantage: dict, search: dict | None, devices: list[dict], labels: dict) -> list[dict]:
+    found = (search or {}).get('found', [])
+    cut = set((search or {}).get('cut', []))
+    segs = [{'cidr': scanned, 'own': True, 'gateway': vantage.get('gateway'), 'scanned': True, 'source': 'vantage'}]
+    segs += [{'cidr': f['cidr'], 'own': False, 'gateway': f.get('gateway'), 'scanned': f['cidr'] not in cut,
+              'source': f.get('source', 'probe')} for f in found]
+    for s in segs:
+        members = [d for d in devices if d['segment'] == s['cidr']]
+        label = labels.get(s['cidr']) or {}
+        s.update(devices=[d['ip'] for d in members], name=label.get('name') or None,
+                 labelled=bool(label.get('name')), sensitive=bool(label.get('sensitive')),
+                 # the address that answered the probe says nothing of what the segment is for
+                 suggestion=_suggest([d for d in members if s['own'] or d['ip'] != s['gateway']]))
+    return segs
+
+
+def _isolation(segments: list[dict], devices: list[dict], findings: list):
+    """NET-SEG-001: a sensitive service of another segment answers from the
+    vantage segment - one finding per (segment, port), the devices listed."""
+    own = next(s for s in segments if s['own'])
+    by_ip = {d['ip']: d for d in devices}
+    for s in segments:
+        if s['own'] or not s['scanned']:
+            continue
+        reach: dict = {}
+        for ip in s['devices']:
+            d = by_ip[ip]
+            if d['kind'] in ('router', 'this_machine'):
+                continue                # router management is the router's own finding
+            for p in d['_ports']:
+                if p['port'] in SENSITIVE_SERVICES and _protocol(p, *SENSITIVE_SERVICES[p['port']][1:]) != 'other':
+                    reach.setdefault(p['port'], []).append(ip)
+        where = f"{s['name']} ({s['cidr']})" if s['name'] else s['cidr']
+        for number, ips in sorted(reach.items()):
+            label = SENSITIVE_SERVICES[number][0]
+            detail = (f"from {own['cidr']} (where this machine is) to {where}: {label} port {number} answers on "
+                      f"{', '.join(ips[:10])}{' …' if len(ips) > 10 else ''} - the segments are not separated "
+                      'for this service')
+            fid = subject_id('NET-SEG-001', own['cidr'], s['cidr'], number)
+            if s['sensitive']:
+                findings.append(_finding('high', f'{label} of a sensitive segment answers from another segment',
+                                         detail, id=fid, extra={'segment': s['cidr']}))
+            else:
+                findings.append(_finding('medium', f'{label} of another segment answers from this one', detail,
+                                         id=fid, extra={'segment': s['cidr']}))
+
+
+def _flat_network(search: dict | None, devices: list[dict], scanned: str, findings: list):
+    """NET-SEG-002: no other subnet answered, and workstations or servers
+    share the segment with phones or printers."""
+    if not search or search.get('error') or search.get('found'):
+        return
+    kinds = {d['kind'] for d in devices if d['segment'] == scanned}
+    work = kinds & {'windows', 'server', 'nas', 'domain_controller'}
+    loose = kinds & {'phone', 'printer', 'camera'}
+    if work and loose:
+        findings.append(_finding('medium', 'one flat network: no separate segments',
+                                 f"no other subnet answered through the router; {', '.join(sorted(work))} share "
+                                 f"{scanned} with {', '.join(sorted(loose))} - one infected device reaches all "
+                                 'of them (other subnets may exist but be filtered)',
+                                 'medium', id='NET-SEG-002'))
+
+
 # ---- the result -------------------------------------------------------------------
 
 def _worst(severities) -> str | None:
@@ -507,15 +631,23 @@ def _worst(severities) -> str | None:
 
 def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, discovery: dict,
                  neighbours: dict, ports: dict, broadcast: dict, heard: dict, level2: bool, support,
-                 vendors: dict, neighbour_error: str | None = None) -> dict:
+                 vendors: dict, neighbour_error: str | None = None, subnet_search: dict | None = None,
+                 remote_discovery: dict | None = None, labels: dict | None = None,
+                 dcs: dict | None = None) -> dict:
     net = ipaddress.ip_network(scanned)
+    found = (subnet_search or {}).get('found', [])
+    nets = [net] + [ipaddress.ip_network(f['cidr']) for f in found]
     # only what came from the scanned range is this network's (review #65 P4)
     heard = {**heard, 'mndp': [m for m in heard.get('mndp', []) if _in(net, m.get('ip', ''))],
              'llmnr': [x for x in heard.get('llmnr', []) if _in(net, x.get('ip', ''))]}
-    devices = _devices(vantage, net, discovery, neighbours, ports, broadcast, heard, vendors)
+    remote = remote_discovery or {'hosts': [], 'prescripts': {}, 'error': None}
+    controllers = {c['ip']: c['name'] for c in (dcs or {}).get('found', []) if _net_of(nets, c['ip']) is not None}
+    devices = _devices(vantage, nets, {**discovery, 'hosts': discovery['hosts'] + remote['hosts']}, neighbours,
+                       ports, broadcast, heard, vendors, controllers)
     gateway = vantage.get('gateway')
+    routers = {gateway} if gateway else set()
     for d in devices:
-        d['kind'] = _kind(d, vantage, gateway)
+        d['kind'] = _kind(d, vantage, routers, set(controllers))
     by_ip = {d['ip']: d for d in devices}
     findings: list = []
     checked: list = []
@@ -590,6 +722,30 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
     else:
         checked.append({'item': 'llmnr', 'status': 'ok',
                         'detail': f'none heard in {seconds} s - computers may still use it'})
+
+    # other subnets (§13)
+    if subnet_search is not None:
+        cut = subnet_search.get('cut') or []
+        if subnet_search.get('error'):
+            checked.append({'item': 'subnets', 'status': 'not_checked', 'detail': subnet_search['error']})
+        elif remote.get('error'):
+            checked.append({'item': 'subnets', 'status': 'not_checked',
+                            'detail': f"{len(found)} found, their sweep failed: {remote['error']}"})
+        elif cut:
+            checked.append({'item': 'subnets', 'status': 'not_checked',
+                            'detail': f"{len(found)} other subnets found, {len(found) - len(cut)} checked; "
+                                      f"not checked: {', '.join(cut)}"})
+        else:
+            checked.append({'item': 'subnets', 'status': 'ok',
+                            'detail': f"{subnet_search.get('candidates', 0)} candidate gateways probed, "
+                                      f"{len(found)} other subnets found - a subnet the router filters is "
+                                      'not seen'})
+    if dcs is not None:
+        if dcs.get('error'):
+            checked.append({'item': 'dcs', 'status': 'not_checked', 'detail': dcs['error']})
+        else:
+            checked.append({'item': 'dcs', 'status': 'ok',
+                            'detail': f"{len(controllers)} domain controllers in the domain's DNS records"})
 
     # the router
     gw_dev = by_ip.get(gateway) if gateway else None
@@ -669,6 +825,10 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
                            if level2_gaps else
                            {'item': 'level2', 'status': 'ok', 'detail': ', '.join(lan.LEVEL2_SCRIPTS)})
 
+    segments = _segments(scanned, vantage, subnet_search, devices, labels or {})
+    _isolation(segments, devices, findings)
+    _flat_network(subnet_search, devices, scanned, findings)
+
     for d in devices:
         d['worst'] = _worst({f['severity'] for f in findings if f.get('device') == d['ip']})
         d['ports'] = [{'port': p['port'], 'service': p['service'], 'product': p['product'],
@@ -690,12 +850,13 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
 
     return {
         'client': client, 'level': 2 if level2 else 1, 'vantage': vantage, 'scanned': scanned, 'scan_note': note,
-        'router': router, 'devices': devices,
+        'router': router, 'devices': devices, 'segments': segments,
         'stats': {'addresses': addresses, 'devices': len(devices),
                   'neighbour_only': sum(1 for d in devices if d['answered'] == 'neighbour')},
         'heard': {'llmnr': asked, 'mndp': heard['mndp']},
         'findings': findings, 'checked': checked,
-        'limits': list(LIMITS) + ([] if level2 else ['level2']),
+        'limits': ([x for x in LIMITS if x != 'other_subnets'] + ['traceroute'] if subnet_search is not None
+                   else list(LIMITS)) + ([] if level2 else ['level2']),
         'score': webprobe.score(findings, checked), 'verdict': webprobe.verdict(findings, checked),
         'summary': webprobe.summary(findings), 'next_steps': next_steps,
     }
@@ -761,6 +922,25 @@ def check_lan_audit(client: str = '', authorization: str = 'no', level2: str = '
     announced = lan.broadcast_devices(broadcast.get('prescripts', {}))
     found = {h['ip'] for h in discovery['hosts'] if h.get('state') == 'up'} | set(seen) | set(announced)
     targets = sorted((ip for ip in found if _in(net, ip) and ip != vantage['address']), key=_ip_key)
+
+    # other subnets through the router, and the domain's controllers (§13)
+    dcs = None
+    if vantage.get('search') and _tool('dig'):
+        controllers, dc_error = lan.domain_controllers(vantage['search'][0], run=_run)
+        dcs = {'found': controllers, 'error': dc_error}
+    candidates = lan.candidate_gateways(vantage, extra=[c['ip'] for c in (dcs or {}).get('found', [])])
+    probe = _nmap(lan.subnet_probe_command(candidates, vantage['interface']), SUBNET_TIMEOUT)
+    subnets = [] if probe['error'] else lan.found_subnets(probe, scanned)
+    swept = subnets[:lan.MAX_SUBNETS]
+    subnet_search = {'ran': True, 'candidates': len(candidates), 'error': probe['error'], 'found': subnets,
+                     'cut': [s['cidr'] for s in subnets[lan.MAX_SUBNETS:]]}
+    remote = (_nmap(lan.discovery_command([s['cidr'] for s in swept], vantage['interface']), DISCOVERY_TIMEOUT)
+              if swept else {'hosts': [], 'prescripts': {}, 'error': None})
+    swept_nets = [ipaddress.ip_network(s['cidr']) for s in swept]
+    remote_up = ({h['ip'] for h in remote['hosts'] if h.get('state') == 'up'}
+                 | {s['gateway'] for s in swept if s.get('gateway')}
+                 | {c['ip'] for c in (dcs or {}).get('found', [])})
+    targets += sorted((ip for ip in remote_up if _net_of(swept_nets, ip) is not None), key=_ip_key)
     ports = (_nmap(lan.ports_command(targets, vantage['interface'], level2_on), PORTS_TIMEOUT) if targets
              else {'hosts': [], 'prescripts': {}, 'error': None})
     neighbours, neighbour_error = watch.stop()
@@ -770,4 +950,5 @@ def check_lan_audit(client: str = '', authorization: str = 'no', level2: str = '
                  'gaps': {'mndp': 'the listener did not finish', 'llmnr': 'the listener did not finish'}}
     return build_result(client=client, vantage=vantage, scanned=scanned, note=note, discovery=discovery,
                         neighbours=neighbours, ports=ports, broadcast=broadcast, heard=heard, level2=level2_on,
-                        support=_support, vendors=lan.load_vendors(), neighbour_error=neighbour_error)
+                        support=_support, vendors=lan.load_vendors(), neighbour_error=neighbour_error,
+                        subnet_search=subnet_search, remote_discovery=remote, labels=_labels(client), dcs=dcs)

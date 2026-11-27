@@ -25,6 +25,7 @@ from netaudit_pkg import (
     history_capture,
     host_summary,
     hosts,
+    lan_merge,
     storage,
     streaming,
     timing,
@@ -507,6 +508,39 @@ async def api_add_host(request: Request) -> dict:
 def api_delete_host(host_id: int) -> dict:
     storage.ssh_host_delete(host_id)
     return {'ok': True}
+
+
+# --- Network audit: segment labels and merged audits (docs/research/network_audit.md §13) ---
+@app.get('/api/lan/segments')
+def api_lan_segments(client: str = '') -> dict:
+    return storage.lan_segment_labels(client)
+
+
+@app.put('/api/lan/segments')
+async def api_lan_segment_set(request: Request) -> dict:
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(400, 'the body must be a JSON object') from None
+    if not isinstance(payload, dict):
+        raise HTTPException(400, 'the body must be a JSON object')
+    client, cidr, name = payload.get('client', ''), payload.get('cidr'), payload.get('name', '')
+    sensitive = payload.get('sensitive', False)
+    if not isinstance(client, str) or not isinstance(cidr, str) or not isinstance(name, str) \
+            or not isinstance(sensitive, bool):
+        raise HTTPException(400, 'client, cidr and name are text, sensitive is true or false')
+    try:
+        storage.lan_segment_label_set(client, cidr, name, sensitive)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    return {'ok': True}
+
+
+@app.get('/api/lan/merged')
+def api_lan_merged(client: str = '') -> dict:
+    reports = [r for r in storage.reports_with_check('lan_audit')
+               if (r.get('results', {}).get('lan_audit') or {}).get('client', '') == client]
+    return lan_merge.apply_labels(lan_merge.merge(reports), storage.lan_segment_labels(client))
 
 
 # --- Tools ---

@@ -266,7 +266,7 @@ Contract: `docs/research/laravel_audit.md` §5 (L4).
 
 ## lan_audit
 
-Contract: `docs/research/network_audit.md` §7, §11–12 (N3, N4). Subject: the
+Contract: `docs/research/network_audit.md` §7, §11–13 (N3–N6). Subject: the
 device's IP address (and the port where one device can have several).
 
 | Control id | Severities | Subject | Control |
@@ -289,3 +289,5 @@ device's IP address (and the port where one device can have several).
 | RTR-SVC-001 | high, medium, low | service | a management service of the router is reachable from this segment |
 | RTR-UPNP-001 | medium | — | the router answers UPnP (devices can open ports to the internet) |
 | RTR-VER-001 | high | — | the router's firmware release line no longer gets fixes (endoflife.date) |
+| NET-SEG-001 | high, medium | from subnet, to subnet, port | a sensitive service of another segment answers from the auditor's segment (high: the target segment is marked sensitive) |
+| NET-SEG-002 | medium | — | one flat network: no other subnet answered and workstations or servers share the segment with phones or printers |

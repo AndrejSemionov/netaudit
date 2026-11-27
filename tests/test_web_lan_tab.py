@@ -26,7 +26,7 @@ VERDICTS = ('ok', 'warn', 'danger', 'incomplete', 'not_started')
 
 
 def test_every_catalogued_control_is_read_by_the_tab():
-    assert len(CONTROLS) == 18
+    assert len(CONTROLS) == 20       # PR 1: 18, PR 2: NET-SEG-001, NET-SEG-002
 
 
 def test_tab_button_and_page():
@@ -128,3 +128,32 @@ def test_announced_devices_and_per_device_gaps_are_shown():
     assert 'd.gaps' in svg and 'stroke-dasharray' in svg
     assert 'd.gaps' in card and "t('lan.gaps')" in card
     assert "'announced'" in svg and "t('lan.answered.announced')" in functions['lanHtml']
+
+
+def test_segments_labels_and_merged_audits_in_the_tab():
+    """PR 2 (docs/research/network_audit.md §13): several segments on the map,
+    the auditor's names and sensitive marks, audits of one client merged."""
+    keys = ['lan.segments', 'lan.seg.name', 'lan.seg.sensitive', 'lan.seg.save', 'lan.seg.saved', 'lan.seg.own',
+            'lan.seg.seen_from', 'lan.seg.gateway', 'lan.merge', 'lan.merged', 'lan.item.subnets', 'lan.item.dcs',
+            'lan.limit.traceroute', 'lan.kind.domain_controller']
+    keys += [f'lan.seg.suggest.{k}' for k in ('accounting', 'servers', 'printers', 'staff', 'guests')]
+    for lang in ('ru', 'en'):
+        block = _lang_block(lang)
+        for key in keys:
+            assert f"'{key}':" in block, (lang, key)
+    functions = _functions(_script())
+    assert 'r.segments' in functions['lanMapSvg']
+    assert 'saveLanSegment(${i})' in functions['lanHtml']
+    save = functions['saveLanSegment']
+    assert "fetch('/api/lan/segments'" in save and "method: 'PUT'" in save and 'innerHTML' not in save
+    merged = functions['loadLanMerged']
+    assert "fetch('/api/lan/merged?client=' + encodeURIComponent(" in merged
+    assert 'renderLan(' in merged and HTML_WRITERS.get('loadLanMerged') == 'escapes'
+
+
+def test_isolation_arrows_start_at_the_segment_the_service_answered_from():
+    """Browser check of PR 2: on a merged map "you are here" is the latest
+    audit's place, so an arrow starts at the finding's own "from" subnet."""
+    svg = _functions(_script())['lanMapSvg']
+    assert 'decodeURIComponent(' in svg and "split(':')" in svg
+    assert 'ownKey' not in svg
