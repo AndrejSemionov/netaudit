@@ -96,7 +96,10 @@ def _kind(dev: dict, vantage: dict, routers: set, controllers: set) -> str:
     if dev['ip'] == vantage['address']:
         return 'this_machine'
     if dev['ip'] in routers:
-        return 'router'                 # the vantage gateway, or the gateway of a found subnet
+        # only the vantage gateway: the route table says it routes. The .1/.254
+        # that answered in a found subnet proves only that it answered - it is
+        # judged as any device (review #66 R1)
+        return 'router'
     if dev['ip'] in controllers:
         return 'domain_controller'
     ports = {p['port'] for p in dev['_ports']}
@@ -568,7 +571,8 @@ def _segments(scanned: str, vantage: dict, search: dict | None, devices: list[di
         label = labels.get(s['cidr']) or {}
         s.update(devices=[d['ip'] for d in members], name=label.get('name') or None,
                  labelled=bool(label.get('name')), sensitive=bool(label.get('sensitive')),
-                 suggestion=_suggest(members))
+                 # the address that answered the probe says nothing of what the segment is for
+                 suggestion=_suggest([d for d in members if s['own'] or d['ip'] != s['gateway']]))
     return segs
 
 
@@ -641,7 +645,7 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
     devices = _devices(vantage, nets, {**discovery, 'hosts': discovery['hosts'] + remote['hosts']}, neighbours,
                        ports, broadcast, heard, vendors, controllers)
     gateway = vantage.get('gateway')
-    routers = {gateway} | {f['gateway'] for f in found if f.get('gateway')}
+    routers = {gateway} if gateway else set()
     for d in devices:
         d['kind'] = _kind(d, vantage, routers, set(controllers))
     by_ip = {d['ip']: d for d in devices}

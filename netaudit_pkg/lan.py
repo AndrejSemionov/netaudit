@@ -210,22 +210,37 @@ def domain_controllers(domain: str, *, run=None) -> tuple[list[dict], str | None
     if not isinstance(domain, str) or not _DOMAIN.fullmatch(domain):
         return [], 'the search domain is not a plain domain name: not asked'
     run = run or run_cmd
-    code, out, err = run(['dig', '+short', '+time=2', '+tries=1', 'SRV', f'_ldap._tcp.dc._msdcs.{domain}'],
-                         timeout=15)
-    if code != 0:
-        return [], f'dig failed: {(err or out).strip()[:200] or f"exit code {code}"}'
+    lines, error = _dig(run, 'SRV', f'_ldap._tcp.dc._msdcs.{domain}')
+    if error:
+        return [], f'dig failed: {error}'
     names = []
-    for line in out.splitlines():
+    for line in lines:
         parts = line.split()
         if len(parts) == 4 and _DOMAIN.fullmatch(parts[3].rstrip('.')) and parts[3] not in names:
             names.append(parts[3])
-    found = []
+    found, failed = [], []
     for name in names[:10]:
-        code, out, _err = run(['dig', '+short', '+time=2', '+tries=1', 'A', name], timeout=15)
-        for ip in (out.split() if code == 0 else []):
-            if is_private(ip):
-                found.append({'name': name.rstrip('.'), 'ip': ip})
-    return found, None
+        lines, error = _dig(run, 'A', name)
+        if error:
+            # a failed lookup is never "no private controller" (review #66 R2)
+            failed.append(f"the address of {name.rstrip('.')} could not be looked up: {error}")
+            continue
+        found += [{'name': name.rstrip('.'), 'ip': ip} for ip in lines if is_private(ip)]
+    if len(names) > 10:
+        failed.append(f'{len(names) - 10} more controllers in the SRV records were not looked up')
+    return found, '; '.join(failed) or None
+
+
+def _dig(run, qtype: str, name: str) -> tuple[list[str], str | None]:
+    """dig +short: (answer lines, error). dig prints its errors as ';;'
+    lines, sometimes with exit code 0."""
+    code, out, err = run(['dig', '+short', '+time=2', '+tries=1', qtype, name], timeout=15)
+    lines = [x.strip() for x in out.splitlines() if x.strip()]
+    trouble = [x for x in lines if x.startswith(';')]
+    if code != 0 or trouble:
+        said = '; '.join(trouble) or (err or out).strip()
+        return [], said[:200] or f'exit code {code}'
+    return lines, None
 
 
 def ports_command(hosts: list[str], interface: str, level2: bool) -> list[str]:

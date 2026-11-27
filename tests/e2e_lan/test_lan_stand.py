@@ -112,3 +112,10 @@ def test_segment_b_is_found_through_the_router(one):
 def test_the_device_rules_apply_in_segment_b_too(one):
     assert {f'NET-SMB-001:{BUH}', f'NET-DB-001:{BUH}:6379'} <= ids(one)
 
+
+def test_the_gateway_there_is_judged_as_a_device(one):
+    """Review #66 R1: 172.30.20.254 answered the probe - the stand's router,
+    seen from A, but the address alone cannot prove it: its FTP is reported."""
+    gw_b = '172.30.20.254'
+    assert device(one, gw_b)['kind'] != 'router' and device(one, gw_b)['segment'] == SEG_B
+    assert f'NET-FTP-001:{gw_b}' in ids(one)

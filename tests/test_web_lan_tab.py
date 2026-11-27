@@ -157,4 +157,3 @@ def test_isolation_arrows_start_at_the_segment_the_service_answered_from():
     svg = _functions(_script())['lanMapSvg']
     assert 'decodeURIComponent(' in svg and "split(':')" in svg
     assert 'ownKey' not in svg
-
