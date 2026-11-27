@@ -186,7 +186,7 @@ jobs:
       - name: Stand log
         if: always()
         run: |
-          for c in gw legacy quiet clean; do echo "== $c"; docker logs "$c" 2>&1 | tail -20; done
+          for c in gw legacy quiet clean buh; do echo "== $c"; docker logs "$c" 2>&1 | tail -20; done
           tail -40 "$RUNNER_TEMP/lan-stand/level1.log" || true
           tail -40 "$RUNNER_TEMP/lan-stand/level2.log" || true
           python tests/e2e_lan/summary.py "$RUNNER_TEMP/lan-stand" || true

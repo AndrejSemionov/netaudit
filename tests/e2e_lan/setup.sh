@@ -3,29 +3,40 @@
 # one Docker network = one office segment, 172.30.10.0/24.
 #   .254 gw      fake MikroTik: FTP and SSH banners nmap reads as RouterOS
 #                6.49.7, Telnet, WinBox 8291, bandwidth test 2000 - and the
-#                scanner's default gateway
+#                scanner's default gateway; it forwards to segment B
+#                (172.30.20.254) and has no default route, so nothing the
+#                audit probes leaves the stand
 #   .20  legacy  SMBv1 with optional signing, anonymous FTP, Telnet, Redis
 #                without a password
 #   .40  quiet   drops every TCP and ICMP packet, answers ARP only
 #   .50  clean   OpenSSH with Debian 12 defaults
 #   .10  scanner runs lan_audit as uid 1000 with no capabilities, twice:
 #                level 1 and level 2; results in $RUNNER_TEMP/lan-stand
+# Segment B, 172.30.20.0/24 ("accounting", docs/research/network_audit.md §13):
+#   .20  buh     the old server's services again (SMB, Redis...), its way back
+#                to segment A through the gateway - found through the router
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 OUT="${RUNNER_TEMP:-/tmp}/lan-stand"
 NET=nalan
+NETB=nalanb
 mkdir -p "$OUT"
 chmod 0777 "$OUT"
 
 docker network create --subnet 172.30.10.0/24 "$NET"
+docker network create --subnet 172.30.20.0/24 "$NETB"
 docker build -q -t nalan-scanner -f "$HERE/scanner.Dockerfile" "$ROOT"
 docker build -q -t nalan-legacy -f "$HERE/legacy.Dockerfile" "$HERE"
 docker build -q -t nalan-clean -f "$HERE/clean.Dockerfile" "$HERE"
 
-docker run -d --name gw --network "$NET" --ip 172.30.10.254 -v "$HERE:/stand:ro" python:3.12-slim \
-  python3 /stand/banners.py 21:ftp 22:ssh 23:telnet 8291:silent 2000:silent
+docker run -d --name gw --network "$NET" --ip 172.30.10.254 --cap-add NET_ADMIN \
+  --sysctl net.ipv4.ip_forward=1 -v "$HERE:/stand:ro" --entrypoint sh nalan-legacy -c \
+  'ip route del default; exec python3 /stand/banners.py 21:ftp 22:ssh 23:telnet 8291:silent 2000:silent'
+docker network connect --ip 172.30.20.254 "$NETB" gw
+docker run -d --name buh --network "$NETB" --ip 172.30.20.20 --cap-add NET_ADMIN -e ROUTE_VIA=172.30.20.254 \
+  nalan-legacy
 docker run -d --name legacy --network "$NET" --ip 172.30.10.20 nalan-legacy
 docker run -d --name clean --network "$NET" --ip 172.30.10.50 nalan-clean
 docker run -d --name quiet --network "$NET" --ip 172.30.10.40 --cap-add NET_ADMIN alpine:3.20 \
@@ -36,7 +47,8 @@ docker run -d --name quiet --network "$NET" --ip 172.30.10.40 --cap-add NET_ADMI
 python3 - <<'WAIT'
 import socket, time
 for host, port in [('172.30.10.254', 21), ('172.30.10.254', 8291), ('172.30.10.20', 445),
-                   ('172.30.10.20', 21), ('172.30.10.20', 23), ('172.30.10.20', 6379), ('172.30.10.50', 22)]:
+                   ('172.30.10.20', 21), ('172.30.10.20', 23), ('172.30.10.20', 6379), ('172.30.10.50', 22),
+                   ('172.30.20.20', 445), ('172.30.20.20', 6379)]:
     for _ in range(90):
         try:
             socket.create_connection((host, port), timeout=2).close()
