@@ -509,3 +509,37 @@ approved contract:
 - E2E: a second Docker network (segment B) behind the fake MikroTik
   gateway, which forwards between the two; an SMB host in B must be found
   through the gateway and give `NET-SEG-001`.
+
+## 14. PR 3 — known vulnerabilities by version (N7)
+
+USER 2026-11-27: «давай pr2 и потом 3». Built as §7.2 says:
+
+- **Which versions are looked up**: a service whose nmap answer carries a
+  version (its CPE, e.g. `cpe:/a:apple:cups:2.4`), and the router's RouterOS
+  version (`cpe:2.3:o:mikrotik:routeros:<v>`). A banner with a Debian
+  package revision (`OpenSSH 9.2p1 Debian 2+deb12u3`) is looked up in **OSV
+  for that Debian release** (`Debian:12`, package version
+  `1:9.2p1-2+deb12u3`), never in NVD by the upstream version - Debian
+  backports fixes without changing it. An Ubuntu banner cannot tell its
+  release, so it is named as not checked. A service without a version is
+  not looked up (counted in the report).
+- **NVD** (`virtualMatchString`): "possible" only - `NET-VULN-001:<ip>:<port>:<cve>`,
+  severity from CVSS, confidence low, "to verify"; at most 10 per service,
+  the rest counted. Without an API key NVD allows 5 requests in 30 s: at
+  most 8 versions per run, 6.5 s apart, cached for a day in the existing
+  `cve_cache`; the rest are a gap.
+- **OSV Debian**: the records whose fix is in a newer Debian revision -
+  `NET-VULN-002:<ip>:<port>`, one finding per service listing the CVEs
+  ("update the package"); records with no fix yet are counted.
+- **Router**: RouterOS CVEs from NVD as `RTR-VULN-001:<cve>` (possible).
+- **CISA KEV**: a CVE in the catalog raises the finding to at least high and
+  says "exploited in the wild"; the catalog is downloaded at most once a day
+  next to the database, a failed download keeps the previous copy.
+- **What leaves the network**: product names and versions (CPE strings,
+  Debian package versions) - never an address or a name of the client's
+  devices. A run can turn the lookups off (`vuln_lookup = no`); then
+  "known vulnerabilities" stays a limit.
+- **Gaps**: a lookup that failed (NVD down, rate limit, OSV down) is "not
+  checked" for that service; KEV unavailable is a gap of the KEV marks.
+- **Attribution**: "This product uses the NVD API but is not endorsed or
+  certified by the NVD."; OSV.dev and Debian Security Tracker; CISA KEV.
