@@ -219,3 +219,25 @@ def test_policy_results_origin_and_arrows_in_the_tab():
     svg = functions['lanMapSvg']
     assert "'NET-POL-001'" in svg and 'f.from' in svg and 'f.segment' in svg
     assert 'r.policy' in svg and "'allow'" in svg
+
+
+def test_the_rules_editor_saves_only_what_it_loaded():
+    """Review PR A A1: an editor that never loaded a client's rules cannot
+    save or add over them; a save names the revision it edits."""
+    for lang in ('ru', 'en'):
+        assert "'lan.rules.load_first':" in _lang_block(lang), lang
+    functions = _functions(_script())
+    save, add = functions['saveLanRules'], functions['addLanRule']
+    assert 'base_revision: LAN_RULES_REV' in save
+    assert "if (LAN_RULES_REV === null)" in save and "t('lan.rules.load_first')" in save
+    assert "if (LAN_RULES_REV === null)" in add and "t('lan.rules.load_first')" in add
+    assert 'LAN_RULES_REV = ' in functions['loadLanRules']
+
+
+def test_merged_policy_and_allowed_arrows_from_each_place():
+    """Review PR A A3: the merged view shows each audit's rules revision and
+    draws an allowed path from the segment it was seen from."""
+    functions = _functions(_script())
+    assert 'pol.vantages' in functions['lanHtml']
+    svg = functions['lanMapSvg']
+    assert 'keyOf[x.from]' in svg and 'ownSeg' not in svg

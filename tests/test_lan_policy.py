@@ -490,7 +490,7 @@ def _api():
 def test_policy_api_round_trip(isolated_db):
     api = _api()
     assert api.get('/api/lan/policy', params={'client': 'Example Ltd'}).json()['revision'] == 0
-    r = api.put('/api/lan/policy', json={'client': 'Example Ltd', 'rules': [
+    r = api.put('/api/lan/policy', json={'client': 'Example Ltd', 'base_revision': 0, 'rules': [
         {'source': OWN, 'destination': BUH, 'service': 'any', 'decision': 'forbid'}]})
     assert r.status_code == 200 and r.json()['revision'] == 1
     got = api.get('/api/lan/policy', params={'client': 'Example Ltd'}).json()
@@ -498,10 +498,12 @@ def test_policy_api_round_trip(isolated_db):
 
 
 @pytest.mark.parametrize('body', [
-    {'client': 'Example Ltd', 'rules': [{'source': '8.8.8.8', 'destination': BUH, 'service': 'any',
-                                         'decision': 'forbid'}]},
-    {'client': 'Example Ltd', 'rules': 'r1'},
-    {'client': 5, 'rules': []},
+    {'client': 'Example Ltd', 'base_revision': 0, 'rules': [{'source': '8.8.8.8', 'destination': BUH,
+                                                             'service': 'any', 'decision': 'forbid'}]},
+    {'client': 'Example Ltd', 'base_revision': 0, 'rules': 'r1'},
+    {'client': 5, 'base_revision': 0, 'rules': []},
+    {'client': 'Example Ltd', 'base_revision': '0', 'rules': []},
+    {'client': 'Example Ltd', 'base_revision': True, 'rules': []},
     ['not', 'an', 'object'],
 ])
 def test_policy_api_refuses_bad_input(isolated_db, body):
@@ -550,3 +552,115 @@ def test_cli_parser_knows_lan_policy():
     args = netaudit.build_parser().parse_args(['lan-policy', 'set', '--client', 'Example Ltd', '--file', 'r.json'])
     assert (args.action, args.client, args.file) == ('set', 'Example Ltd', 'r.json')
     assert args.func is netaudit.cmd_lan_policy
+
+
+# ---------------------------------------------------------------------------
+# review PR A, pass 1
+# ---------------------------------------------------------------------------
+
+def test_saving_without_having_loaded_never_replaces_the_rules(isolated_db):
+    """A1: an editor that never loaded the client's rules sends no revision
+    it edits - the server refuses, the rules stay."""
+    api = _api()
+    first = api.put('/api/lan/policy', json={'client': 'Example Ltd', 'base_revision': 0,
+                                             'rules': [FORBID_GUESTS]})
+    assert first.status_code == 200
+    blank = api.put('/api/lan/policy', json={'client': 'Example Ltd', 'rules': []})
+    assert blank.status_code == 400
+    stale = api.put('/api/lan/policy', json={'client': 'Example Ltd', 'base_revision': 0, 'rules': []})
+    assert stale.status_code == 409 and 'revision 1' in stale.json()['detail']
+    assert storage.lan_policy_get('Example Ltd')['revision'] == 1
+    assert len(storage.lan_policy_get('Example Ltd')['rules']) == 1
+
+
+def test_deleting_the_loaded_rules_on_purpose_is_allowed(isolated_db):
+    api = _api()
+    api.put('/api/lan/policy', json={'client': 'Example Ltd', 'base_revision': 0, 'rules': [FORBID_GUESTS]})
+    gone = api.put('/api/lan/policy', json={'client': 'Example Ltd', 'base_revision': 1, 'rules': []})
+    assert gone.status_code == 200 and gone.json()['revision'] == 2 and gone.json()['rules'] == []
+
+
+def test_storage_refuses_a_save_based_on_another_revision(isolated_db):
+    storage.lan_policy_save('Example Ltd', [FORBID_GUESTS], base_revision=0)
+    with pytest.raises(storage.PolicyConflict):
+        storage.lan_policy_save('Example Ltd', [], base_revision=0)
+    assert storage.lan_policy_get('Example Ltd')['revision'] == 1
+
+
+SEARCH_CUT = {'ran': True, 'candidates': 510, 'error': None, 'cut': ['192.168.50.0/24'],
+              'found': [{'cidr': BUH, 'gateway': '192.168.30.1', 'source': 'probe'},
+                        {'cidr': '192.168.40.0/24', 'gateway': '192.168.40.254', 'source': 'probe'},
+                        {'cidr': '192.168.50.0/24', 'gateway': '192.168.50.1', 'source': 'probe'}]}
+
+
+def test_a_skipped_subnet_inside_the_destination_is_a_gap():
+    """A2: a device that answered elsewhere in the destination does not
+    prove the part the audit skipped."""
+    res = build2(subnet_search=SEARCH_CUT, policy=policy(R('r1', OWN, '192.168.32.0/19', 'tcp/9999', 'forbid')),
+                 extra={'ports': [9999], 'cut': [], 'error': None})
+    c = item(res, 'access_policy')
+    assert c['status'] == 'not_checked' and '192.168.50.0/24' in c['detail']
+
+
+def test_a_destination_inside_the_scanned_subnets_is_ok():
+    res = build2(subnet_search=SEARCH_CUT, policy=policy(R('r1', OWN, '192.168.40.0/24', 'tcp/9999', 'forbid')),
+                 extra={'ports': [9999], 'cut': [], 'error': None})
+    assert item(res, 'access_policy')['status'] == 'ok'
+    assert '192.168.40.0/24' in item(res, 'access_policy')['detail']
+
+
+def test_a_failed_subnet_search_is_a_gap_for_rules_beyond_this_segment():
+    failed = {'ran': True, 'candidates': 510, 'error': 'nmap exit code 1: boom', 'cut': [], 'found': []}
+    res = build2(subnet_search=failed, policy=policy(R('r1', OWN, 'any', 'tcp/23', 'forbid')))
+    c = item(res, 'access_policy')
+    assert c['status'] == 'not_checked' and 'boom' in c['detail']
+    inside = build2(subnet_search=failed, policy=policy(R('r1', OWN, '192.168.88.20', 'tcp/9999', 'forbid')),
+                    extra={'ports': [9999], 'cut': [], 'error': None},
+                    ports=lan.parse_nmap_xml(nmap_xml(GATEWAY_XML, host('192.168.88.20', port(22, 'ssh')))))
+    assert item(inside, 'access_policy')['status'] == 'ok'          # this segment was scanned whole
+
+
+def test_the_part_of_this_subnet_left_unscanned_is_a_gap():
+    v = {**VANTAGE, 'subnet': '192.168.88.0/22', 'prefix': 22}
+    res = build2(vantage=v, note='192.168.88.0/22 is bigger than /22: only 192.168.88.0/24 was scanned',
+                 policy=policy(R('r1', OWN, '192.168.88.0/22', 'tcp/9999', 'forbid')),
+                 extra={'ports': [9999], 'cut': [], 'error': None})
+    c = item(res, 'access_policy')
+    assert c['status'] == 'not_checked' and '192.168.88.0/22' in c['detail']
+
+
+def _report(stamp, result):
+    return {'timestamp': stamp, 'results': {'lan_audit': result}}
+
+
+def test_the_merged_view_keeps_each_audits_rules_and_paths():
+    """A3: one audit or several - each path keeps where it was seen from,
+    when, and by which revision of the rules."""
+    from netaudit_pkg import lan_merge
+    one = build2(policy=policy(FORBID_GUESTS, ALLOW_ADMIN, revision=3))
+    merged = lan_merge.merge([_report('2026-11-27 10:00:00', one)])
+    pol = merged['policy']
+    assert [(v['source'], v['revision'], v['timestamp']) for v in pol['vantages']] == \
+        [(ME, 3, '2026-11-27 10:00:00')]
+    smb = next(p for p in pol['paths'] if p['destination'] == '192.168.30.5' and p['port'] == 445)
+    assert smb['decision'] == 'allow' and smb['revision'] == 3 and smb['timestamp'] == '2026-11-27 10:00:00'
+    assert smb['source'] == ME and smb['from'] == OWN
+
+
+def test_two_vantages_keep_their_own_revisions():
+    from netaudit_pkg import lan_merge
+    staff = build2(policy=policy(FORBID_GUESTS, revision=1))
+    v = {**VANTAGE, 'address': '192.168.40.9', 'subnet': '192.168.40.0/24', 'gateway': '192.168.40.254'}
+    other = build2(vantage=v, scanned='192.168.40.0/24', policy=policy(R('r1', 'any', BUH, 'SMB', 'allow'),
+                                                                       revision=2))
+    merged = lan_merge.merge([_report('2026-11-27 10:00:00', staff), _report('2026-11-27 11:00:00', other)])
+    pol = merged['policy']
+    assert [(v['source'], v['revision']) for v in pol['vantages']] == [(ME, 1), ('192.168.40.9', 2)]
+    by_source = {(p['source'], p['port']): p for p in pol['paths'] if p['destination'] == '192.168.30.5'}
+    assert by_source[(ME, 445)]['decision'] == 'forbid' and by_source[(ME, 445)]['revision'] == 1
+    assert by_source[('192.168.40.9', 445)]['decision'] == 'allow' and by_source[('192.168.40.9', 445)]['revision'] == 2
+
+
+def test_a_merge_of_audits_without_rules_has_no_policy():
+    from netaudit_pkg import lan_merge
+    assert lan_merge.merge([_report('2026-11-27 10:00:00', build2())])['policy'] is None
