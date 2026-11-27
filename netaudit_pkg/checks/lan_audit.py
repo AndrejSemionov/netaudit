@@ -26,7 +26,7 @@ import re
 import threading
 from datetime import UTC, date, datetime
 
-from .. import lan, laravel_data, webprobe
+from .. import lan, lan_vulns, laravel_data, webprobe
 from ..findings import finding as _finding
 from ..findings import subject_id
 from ..registry import register
@@ -63,6 +63,7 @@ def routeros_support(version: str, today: date | None = None) -> dict:
 
 
 _support = routeros_support
+_vulns = lan_vulns.lookup
 
 
 def _labels(client: str) -> dict:
@@ -623,6 +624,128 @@ def _flat_network(search: dict | None, devices: list[dict], scanned: str, findin
                                  'medium', id='NET-SEG-002'))
 
 
+# ---- known vulnerabilities by version (research §7.2, §14) ------------------------
+
+MAX_NVD_FINDINGS = 10      # per service; the rest are counted
+
+
+def _vuln_severity(severity: str | None, in_kev: bool) -> str:
+    base = severity if severity in SEVERITY_ORDER else 'medium'
+    if in_kev:
+        return 'critical' if base == 'critical' else 'high'
+    return base
+
+
+def _kev_text(entry: dict | None) -> str:
+    if not entry:
+        return ''
+    text = f" - listed by CISA as exploited in the wild (since {entry.get('added') or '?'})"
+    return text + ('; used in ransomware campaigns' if entry.get('ransomware') else '')
+
+
+def _known_vulns(devices: list[dict], router: dict | None, lookup, findings: list, checked: list):
+    services, versionless = [], []
+    for d in devices:
+        if d['kind'] in ('router', 'this_machine') or not d['_scanned']:
+            continue
+        for p in d['_ports']:
+            src = lan_vulns.version_source(p)
+            if src:
+                services.append({'ip': d['ip'], 'port': p['port'], **src})
+            else:
+                versionless.append(f"{d['ip']}:{p['port']}")
+    router_version = router['version'] if router and router.get('os') == 'RouterOS' else None
+    result = lookup(services, router_version)
+    kev = result.get('kev') or {}
+    problems, more = [], 0
+    nvd_count = osv_count = fixed_count = unfixed_count = 0
+    for s in result.get('services', []):
+        where = f"{s['ip']}:{s['port']}"
+        if s.get('error'):
+            problems.append(f"{where}: {s['error']}")
+            continue
+        if s['kind'] == 'nvd':
+            nvd_count += 1
+            cves = sorted(s.get('cves') or [], key=lambda c: (c.get('score') or 0), reverse=True)
+            more += max(0, len(cves) - MAX_NVD_FINDINGS)
+            for c in cves[:MAX_NVD_FINDINGS]:
+                entry = kev.get(c['id'])
+                severity = _vuln_severity(c.get('severity'), bool(entry))
+                findings.append(_finding(severity, f"possible {c['id']} in the service on port {s['port']}"
+                                         + (' - exploited in the wild' if entry else ''),
+                                         f"{c.get('summary') or ''} (CVSS {c.get('score') or '?'}); matched by the "
+                                         f"version nmap read ({s['cpe']}) - check the device: a vendor may fix "
+                                         f"without a new version{_kev_text(entry)}", 'low',
+                                         id=subject_id('NET-VULN-001', s['ip'], s['port'], c['id']),
+                                         requires_manual_verification=True, extra={'device': s['ip']}))
+        elif s['kind'] == 'osv':
+            osv_count += 1
+            fixed, unfixed = s.get('fixed') or [], s.get('unfixed') or []
+            fixed_count, unfixed_count = fixed_count + len(fixed), unfixed_count + len(unfixed)
+            if fixed:
+                hot = [c for c in fixed if c in kev]
+                detail = (f"{len(fixed)} vulnerabilities of the Debian package {s['package']} {s['version']} "
+                          f"({s['ecosystem']}) are fixed in newer revisions: {', '.join(fixed[:15])}"
+                          f"{' …' if len(fixed) > 15 else ''} - update the package (apt upgrade)"
+                          + (f"; exploited in the wild (CISA KEV): {', '.join(hot)}" if hot else ''))
+                fid = subject_id('NET-VULN-002', s['ip'], s['port'])
+                if hot:
+                    findings.append(_finding('high', f"{s['package']} needs security updates", detail, 'medium',
+                                             id=fid, extra={'device': s['ip']}))
+                else:
+                    findings.append(_finding('medium', f"{s['package']} needs security updates", detail, 'medium',
+                                             id=fid, extra={'device': s['ip']}))
+            if unfixed:
+                # affected, and no Debian revision fixes it yet: never silent, never
+                # gated on a fixable one (review #67 R1)
+                hot = [c for c in unfixed if c in kev]
+                detail = (f"{len(unfixed)} vulnerabilities affect the Debian package {s['package']} {s['version']} "
+                          f"({s['ecosystem']}) and no revision fixes them yet: {', '.join(unfixed[:15])}"
+                          f"{' …' if len(unfixed) > 15 else ''} - an update does not help; check each in Debian's "
+                          "security tracker (many are minor or need a setting) and limit who reaches the service"
+                          + (f"; exploited in the wild (CISA KEV): {', '.join(hot)}" if hot else ''))
+                fid = subject_id('NET-VULN-003', s['ip'], s['port'])
+                if hot:
+                    findings.append(_finding('high', f"{s['package']} has an exploited vulnerability with no fix yet",
+                                             detail, 'medium', id=fid, requires_manual_verification=True,
+                                             extra={'device': s['ip']}))
+                else:
+                    findings.append(_finding('low', f"{s['package']} has vulnerabilities with no fix yet", detail,
+                                             'medium', id=fid, requires_manual_verification=True,
+                                             extra={'device': s['ip']}))
+    r = result.get('router')
+    if r and router:
+        if r.get('error'):
+            problems.append(f"router RouterOS {r['version']}: {r['error']}")
+        else:
+            for c in sorted(r.get('cves') or [], key=lambda c: (c.get('score') or 0),
+                            reverse=True)[:MAX_NVD_FINDINGS]:
+                entry = kev.get(c['id'])
+                findings.append(_finding(_vuln_severity(c.get('severity'), bool(entry)),
+                                         f"possible {c['id']} in RouterOS {r['version']}"
+                                         + (' - exploited in the wild' if entry else ''),
+                                         f"{c.get('summary') or ''} (CVSS {c.get('score') or '?'}); matched by the "
+                                         f"RouterOS version - check MikroTik's changelog{_kev_text(entry)}", 'low',
+                                         id=subject_id('RTR-VULN-001', c['id']), requires_manual_verification=True,
+                                         extra={'device': router['ip']}))
+    problems += [f'{where}: over the lookup limit' for where in result.get('cut', [])]
+    if result.get('kev_error'):
+        problems.append(result['kev_error'])
+    # a service whose version was not looked up is not covered: a gap that
+    # names it, never "ok" (review #67 R2)
+    problems += result.get('skipped', [])
+    if versionless:
+        problems.append(f"no product version to look up: {', '.join(versionless[:12])}"
+                        f"{f' … (+{len(versionless) - 12})' if len(versionless) > 12 else ''}")
+    done = (f"{nvd_count} versions looked up in NVD (possible matches), {osv_count} Debian packages in OSV "
+            f"({fixed_count} vulnerabilities with a fix, {unfixed_count} without a fix), CISA KEV marks"
+            + (f"; {more} more possible matches not listed" if more else ''))
+    if problems:
+        checked.append({'item': 'known_vulns', 'status': 'not_checked', 'detail': f'{_listed(problems)}; {done}'})
+    else:
+        checked.append({'item': 'known_vulns', 'status': 'ok', 'detail': done})
+
+
 # ---- the result -------------------------------------------------------------------
 
 def _worst(severities) -> str | None:
@@ -633,7 +756,7 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
                  neighbours: dict, ports: dict, broadcast: dict, heard: dict, level2: bool, support,
                  vendors: dict, neighbour_error: str | None = None, subnet_search: dict | None = None,
                  remote_discovery: dict | None = None, labels: dict | None = None,
-                 dcs: dict | None = None) -> dict:
+                 dcs: dict | None = None, vulns=None) -> dict:
     net = ipaddress.ip_network(scanned)
     found = (subnet_search or {}).get('found', [])
     nets = [net] + [ipaddress.ip_network(f['cidr']) for f in found]
@@ -825,6 +948,8 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
                            if level2_gaps else
                            {'item': 'level2', 'status': 'ok', 'detail': ', '.join(lan.LEVEL2_SCRIPTS)})
 
+    if vulns is not None:
+        _known_vulns(devices, router, vulns, findings, checked)
     segments = _segments(scanned, vantage, subnet_search, devices, labels or {})
     _isolation(segments, devices, findings)
     _flat_network(subnet_search, devices, scanned, findings)
@@ -855,8 +980,12 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
                   'neighbour_only': sum(1 for d in devices if d['answered'] == 'neighbour')},
         'heard': {'llmnr': asked, 'mndp': heard['mndp']},
         'findings': findings, 'checked': checked,
-        'limits': ([x for x in LIMITS if x != 'other_subnets'] + ['traceroute'] if subnet_search is not None
-                   else list(LIMITS)) + ([] if level2 else ['level2']),
+        'limits': [x for x in (([y for y in LIMITS if y != 'other_subnets'] + ['traceroute'])
+                               if subnet_search is not None else list(LIMITS))
+                   if not (x == 'known_vulns' and vulns is not None)]
+                  # looked up: what matching by version cannot see stays a limit (review #67 R2)
+                  + (['vuln_versions'] if vulns is not None else []) + ([] if level2 else ['level2']),
+        'notices': lan_vulns.NOTICES if vulns is not None else [],
         'score': webprobe.score(findings, checked), 'verdict': webprobe.verdict(findings, checked),
         'summary': webprobe.summary(findings), 'next_steps': next_steps,
     }
@@ -881,6 +1010,9 @@ def _nmap(cmd: list[str], timeout: int) -> dict:
          'format': 'interface'},
         {'name': 'share_with_ai', 'type': 'select', 'label': 'Allow AI analysis of this network',
          'options': ['no', 'yes'], 'default': 'no'},
+        {'name': 'vuln_lookup', 'type': 'select',
+         'label': 'Look up known vulnerabilities (NVD, OSV, CISA KEV: products and versions only)',
+         'options': ['yes', 'no'], 'default': 'yes'},
     ],
     required_tools=['nmap', 'ip'],
     description='Audit of the network segment this machine is plugged into: finds the devices (TCP probes and '
@@ -890,7 +1022,7 @@ def _nmap(cmd: list[str], timeout: int) -> dict:
                 'announcements. Runs only with the owner\'s permission confirmed; no root, no login attempts.',
 )
 def check_lan_audit(client: str = '', authorization: str = 'no', level2: str = 'no', interface: str = '',
-                    share_with_ai: str = 'no') -> dict:
+                    share_with_ai: str = 'no', vuln_lookup: str = 'yes') -> dict:
     client = str(client or '')[:120]   # a label for the report, shown escaped; never an argument
     if authorization != AUTH_CONFIRM:
         return {'client': client, 'verdict': 'not_started',
@@ -951,4 +1083,5 @@ def check_lan_audit(client: str = '', authorization: str = 'no', level2: str = '
     return build_result(client=client, vantage=vantage, scanned=scanned, note=note, discovery=discovery,
                         neighbours=neighbours, ports=ports, broadcast=broadcast, heard=heard, level2=level2_on,
                         support=_support, vendors=lan.load_vendors(), neighbour_error=neighbour_error,
-                        subnet_search=subnet_search, remote_discovery=remote, labels=_labels(client), dcs=dcs)
+                        subnet_search=subnet_search, remote_discovery=remote, labels=_labels(client), dcs=dcs,
+                        vulns=_vulns if vuln_lookup == 'yes' else None)

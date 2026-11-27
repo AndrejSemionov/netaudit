@@ -36,6 +36,17 @@
   `NET-SEG-001`, high into a sensitive segment, drawn as a red arrow; one
   flat network is `NET-SEG-002`. Audits of one client from several places
   (staff desk, guest Wi-Fi) merge into one map.
+- Network audit, known vulnerabilities: the versions the audit reads are
+  looked up - a Debian package revision in a banner (OpenSSH 9.2p1 Debian
+  2+deb12u3) in OSV for that Debian release (`NET-VULN-002`: CVEs fixed in
+  newer revisions, "update the package"; `NET-VULN-003`: CVEs no revision
+  fixes yet, to check and mitigate), any other version by its CPE in
+  NVD (`NET-VULN-001`, possible matches to verify, at most 10 per service),
+  the router's RouterOS version in NVD (`RTR-VULN-001`); a CVE the CISA KEV
+  catalog lists as exploited in the wild is at least high. Ubuntu banners
+  and services without a version are named as not checked, not guessed. Only product names
+  and versions leave the network; a box in the tab turns the lookups off.
+  NVD without a key is paced (5 requests in 30 s) and capped per run.
 
 ## 1.3.0 — 2026-11-25
 

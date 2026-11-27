@@ -19,14 +19,14 @@ CATALOGUE = (Path(__file__).resolve().parents[1] / 'docs' / 'checks' / 'finding_
 CONTROLS = re.findall(r'^\| ((?:NET|RTR)-[A-Z]+-\d{3}) \|', CATALOGUE, re.MULTILINE)
 ITEMS = ('discovery', 'range', 'neighbours', 'services', 'broadcast', 'mndp', 'llmnr', 'router', 'router_support',
          'level2')
-LIMITS = ('udp', 'os_detection', 'other_subnets', 'known_vulns', 'level2')
+LIMITS = ('udp', 'os_detection', 'other_subnets', 'known_vulns', 'vuln_versions', 'level2')
 KINDS = ('router', 'this_machine', 'windows', 'printer', 'camera', 'nas', 'server', 'phone', 'network', 'unknown')
 NEXT = ('router_ssh', 'saved_hosts', 'level2', 'other_vantage')
 VERDICTS = ('ok', 'warn', 'danger', 'incomplete', 'not_started')
 
 
 def test_every_catalogued_control_is_read_by_the_tab():
-    assert len(CONTROLS) == 20       # PR 1: 18, PR 2: NET-SEG-001, NET-SEG-002
+    assert len(CONTROLS) == 24       # PR 1: 18, PR 2: NET-SEG-001/002, PR 3: NET-VULN-001/002/003, RTR-VULN-001
 
 
 def test_tab_button_and_page():
@@ -157,3 +157,14 @@ def test_isolation_arrows_start_at_the_segment_the_service_answered_from():
     svg = _functions(_script())['lanMapSvg']
     assert 'decodeURIComponent(' in svg and "split(':')" in svg
     assert 'ownKey' not in svg
+
+
+def test_known_vulnerabilities_and_data_notices_in_the_tab():
+    """PR 3 (docs/research/network_audit.md §14): the lookups' item, and the
+    data sources' notices (NVD's own wording) under the findings."""
+    for lang in ('ru', 'en'):
+        block = _lang_block(lang)
+        for key in ('lan.item.known_vulns', 'lan.notices'):
+            assert f"'{key}':" in block, (lang, key)
+    view = _functions(_script())['lanHtml']
+    assert 'r.notices' in view and '.notice' in view
