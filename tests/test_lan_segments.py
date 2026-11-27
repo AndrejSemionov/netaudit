@@ -100,6 +100,61 @@ def test_domain_controllers_from_srv_records():
     assert all(c[0] == 'dig' and '+short' in c for c in run.calls)
 
 
+def _dig_failing(answers, failing):
+    """dig that answers `answers` and times out on the names in `failing`."""
+    calls = []
+
+    def run(cmd, timeout=30):
+        calls.append(cmd)
+        if cmd[-1] in failing:
+            return 9, ';; connection timed out; no servers could be reached\n', ''
+        return 0, answers.get(cmd[-1], ''), ''
+    run.calls = calls
+    return run
+
+
+SRV_ONE = {'_ldap._tcp.dc._msdcs.office.example': '0 100 389 dc.office.example.\n'}
+
+
+def test_a_controller_whose_address_lookup_failed_is_a_gap_not_none():
+    """Review #66 R2: the SRV record names dc.office.example and its A
+    lookup times out - not "no private controller": the lookup failed."""
+    found, error = lan.domain_controllers('office.example', run=_dig_failing(SRV_ONE, {'dc.office.example.'}))
+    assert found == []
+    assert error and 'dc.office.example' in error and 'timed out' in error
+
+
+def test_found_controllers_are_kept_beside_a_failed_one():
+    answers = {'_ldap._tcp.dc._msdcs.office.example': '0 100 389 dc1.office.example.\n0 100 389 dc2.office.example.\n',
+               'dc1.office.example.': '192.168.40.5\n'}
+    found, error = lan.domain_controllers('office.example', run=_dig_failing(answers, {'dc2.office.example.'}))
+    assert found == [{'name': 'dc1.office.example', 'ip': '192.168.40.5'}]
+    assert error and 'dc2.office.example' in error and 'dc1' not in error
+
+
+def test_a_dig_error_printed_with_exit_code_0_is_a_gap():
+    """dig +short can print ';; communications error ...' and still exit 0."""
+    answers = {**SRV_ONE, 'dc.office.example.': ';; communications error to 192.168.88.1#53: timed out\n'}
+    found, error = lan.domain_controllers('office.example', run=_dig(answers))
+    assert found == [] and error and 'communications error' in error
+    srv_error = {'_ldap._tcp.dc._msdcs.office.example': ';; communications error to 192.168.88.1#53: timed out\n'}
+    found, error = lan.domain_controllers('office.example', run=_dig(srv_error))
+    assert found == [] and error and 'communications error' in error
+
+
+def test_a_successful_lookup_of_a_private_controller_has_no_error():
+    """The control of the review: the same SRV, a private A record."""
+    found, error = lan.domain_controllers('office.example',
+                                          run=_dig({**SRV_ONE, 'dc.office.example.': '192.168.40.5\n'}))
+    assert (found, error) == ([{'name': 'dc.office.example', 'ip': '192.168.40.5'}], None)
+
+
+def test_a_failed_controller_lookup_is_never_ok_in_the_report():
+    found, error = lan.domain_controllers('office.example', run=_dig_failing(SRV_ONE, {'dc.office.example.'}))
+    res = build2(dcs={'found': found, 'error': error})
+    assert 'dc.office.example' in _gap_items(res)['dcs']
+
+
 @pytest.mark.parametrize('domain', ['-f/etc/passwd', 'a b', 'x' * 300, ''])
 def test_a_strange_domain_is_never_asked(domain):
     run = _dig({})
@@ -155,11 +210,50 @@ def test_the_auditor_label_wins_and_marks_sensitive():
     assert (buh['name'], buh['sensitive'], buh['labelled']) == ('Бухгалтерия', True, True)
 
 
-def test_a_found_subnet_gateway_is_a_router_interface():
-    res = build2()
-    gw = device(res, '192.168.30.1')
-    assert gw['kind'] == 'router'
-    assert not [f for f in res['findings'] if f.get('device') == '192.168.30.1']
+def _with_gateway_ports(ports_xml):
+    """build2 with the found subnet's .1 answering on these ports."""
+    gw = host('192.168.30.1', ports_xml)
+    return build2(ports=lan.parse_nmap_xml(nmap_xml(GATEWAY, BUH_PC, gw, host('192.168.40.254'))))
+
+
+def test_a_found_subnet_gateway_address_is_no_proof_of_a_router():
+    """Review #66 R1: .1 of a found subnet answered the probe - that is all
+    it proves. The same Telnet is the same finding on .1 as on .5, and the
+    device stays a device of its segment (on the map, in its checks)."""
+    on_1 = _with_gateway_ports(port(23, 'telnet', product='Linux telnetd'))
+    assert device(on_1, '192.168.30.1')['kind'] != 'router'
+    assert 'NET-TEL-001:192.168.30.1' in ids(on_1)
+    assert segment(on_1, BUH)['gateway'] == '192.168.30.1'          # still named as the gateway there
+    assert device(on_1, VANTAGE['gateway'])['kind'] == 'router'     # the vantage gateway: the route table says so
+
+
+def test_a_router_looking_gateway_of_a_found_subnet_is_still_judged():
+    """Even a real router there - a distinct one, or the same router's other
+    interface: the address cannot tell - has its unsafe services reported."""
+    res = _with_gateway_ports(port(22, 'ssh', product='MikroTik RouterOS sshd', devicetype='router')
+                              + port(23, 'telnet', product='MikroTik router telnetd', devicetype='router'))
+    assert device(res, '192.168.30.1')['kind'] == 'network'
+    assert 'NET-TEL-001:192.168.30.1' in ids(res)
+
+
+def test_a_found_subnet_gateway_takes_part_in_isolation():
+    res = _with_gateway_ports(port(445, 'microsoft-ds', product='Samba smbd'))
+    f = next(f for f in res['findings'] if f.get('id') == f'NET-SEG-001:{_q(OWN)}:{_q(BUH)}:445')
+    assert '192.168.30.1' in f['detail'] and '192.168.30.5' in f['detail']
+
+
+def test_the_gateway_there_does_not_name_the_segment():
+    """The address that answered the probe says nothing of what the segment
+    is for: printers behind a router-looking .254 are a segment of printers."""
+    printer = host('192.168.40.20', port(9100, 'jetdirect', product='HP JetDirect'))
+    res = build2(remote_discovery=lan.parse_nmap_xml(nmap_xml(host('192.168.30.1'), host('192.168.30.5'),
+                                                              host('192.168.40.254'), host('192.168.40.20'))),
+                 ports=lan.parse_nmap_xml(nmap_xml(
+                     GATEWAY, BUH_PC, BUH_GW, printer,
+                     host('192.168.40.254', port(22, 'ssh', product='MikroTik RouterOS sshd', devicetype='router')))))
+    assert device(res, '192.168.40.254')['kind'] == 'network'
+    assert segment(res, SRV)['suggestion'] == 'printers'
+    assert segment(res, BUH)['suggestion'] == 'accounting'
 
 
 def test_isolation_findings_from_the_vantage_segment():
