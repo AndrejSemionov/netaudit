@@ -142,6 +142,7 @@
   .wp-facts div span { display: block; color: var(--muted); font-size: 12px; }
   .lan-check { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 2px; cursor: pointer; }
   .lan-check input { margin-top: 4px; }
+  .lan-rules-set { border: 0; padding: 0; margin: 0; min-width: 0; }
   .lan-map { width: 100%; height: auto; display: block; }
   .lan-box { fill: var(--panel-2); stroke: var(--border); stroke-width: 2; }
   .lan-segment { fill: none; stroke: var(--accent-dim); stroke-width: 2; stroke-dasharray: 6 4; }
@@ -2470,8 +2471,18 @@ let LAN_RULES = [];
 let LAN_RULES_CLIENT = null;
 // the revision the editor loaded: null until a load - nothing is added or saved before (review PR A, A1)
 let LAN_RULES_REV = null;
+// one load or save at a time, and an answer only counts while its ticket is the latest:
+// a late answer can never land in another client's editor (review PR A pass 2, A1)
+let LAN_RULES_BUSY = false;
+let LAN_RULES_TICKET = 0;
 const LAN_SERVICES = ['any', 'SMB', 'RDP', 'WinRM', 'VNC', 'SSH', 'NFS', 'rsync', 'SQL Server', 'Oracle', 'MySQL',
   'PostgreSQL', 'Redis', 'Elasticsearch', 'memcached', 'MongoDB', 'tcp/'];
+
+function lanRulesLock(on) {
+  LAN_RULES_BUSY = on;
+  const set = document.getElementById('lanRulesSet');
+  if (set) set.disabled = on;
+}
 
 function renderLanRules(rules) {
   rules = escDeep(rules);
@@ -2489,11 +2500,12 @@ function renderLanRules(rules) {
       <td><button onclick="removeLanRule(${i})">${t('lan.rules.remove')}</button></td></tr>`;
   }).join('');
   const services = LAN_SERVICES.map(s => `<option value="${s}"></option>`).join('');
-  box.innerHTML = `<datalist id="lanServices">${services}</datalist>`
+  // one fieldset around the editor: locked while a load or a save is in flight
+  box.innerHTML = `<fieldset id="lanRulesSet" class="lan-rules-set"${LAN_RULES_BUSY ? ' disabled' : ''}><datalist id="lanServices">${services}</datalist>`
     + (rows ? `<table><tr><th>id</th><th>${t('lan.rules.col.source')}</th><th>${t('lan.rules.col.destination')}</th>
       <th>${t('lan.rules.col.service')}</th><th>${t('lan.rules.col.decision')}</th><th>${t('lan.rules.col.note')}</th><th></th></tr>${rows}</table>`
       : `<p class="timing">${t('lan.rules.empty')}</p>`)
-    + `<p class="hint">${t('lan.rules.no_secrets')}</p>`;
+    + `<p class="hint">${t('lan.rules.no_secrets')}</p></fieldset>`;
 }
 
 // what is in the inputs now, as text for the server; a rule keeps its id
@@ -2513,24 +2525,42 @@ function readLanRules() {
 
 async function loadLanRules() {
   const status = document.getElementById('lanRulesStatus');
-  const client = document.getElementById('lanClient').value.trim();
-  const res = await fetch('/api/lan/policy?client=' + encodeURIComponent(client));
-  const data = await res.json().catch(() => null);
-  if (!res.ok || !data) {
-    status.textContent = t('run.error') + ': ' + t('run.unknown');
+  if (LAN_RULES_BUSY) {
+    status.textContent = t('lan.rules.busy');
     return;
   }
-  LAN_RULES = Array.isArray(data.rules) ? data.rules : [];
-  LAN_RULES_CLIENT = client;
-  LAN_RULES_REV = Number.isInteger(data.revision) ? data.revision : 0;
-  status.textContent = (data.revision ? t('lan.rules.revision') + ' ' + data.revision : t('lan.rules.empty'))
-    + ' · ' + (client || '—');
-  renderLanRules(LAN_RULES);
+  const client = document.getElementById('lanClient').value.trim();
+  const ticket = ++LAN_RULES_TICKET;
+  lanRulesLock(true);
+  try {
+    const res = await fetch('/api/lan/policy?client=' + encodeURIComponent(client));
+    const data = await res.json().catch(() => null);
+    if (ticket !== LAN_RULES_TICKET) return;
+    if (!res.ok || !data) {
+      status.textContent = t('run.error') + ': ' + t('run.unknown');
+      return;
+    }
+    LAN_RULES = Array.isArray(data.rules) ? data.rules : [];
+    LAN_RULES_CLIENT = client;
+    LAN_RULES_REV = Number.isInteger(data.revision) ? data.revision : 0;
+    status.textContent = (data.revision ? t('lan.rules.revision') + ' ' + data.revision : t('lan.rules.empty'))
+      + ' · ' + (client || '—');
+    renderLanRules(LAN_RULES);
+  } catch (e) {
+    if (ticket === LAN_RULES_TICKET) status.textContent = t('run.error') + ': ' + t('run.unknown');
+  } finally {
+    if (ticket === LAN_RULES_TICKET) lanRulesLock(false);
+  }
 }
 
 function addLanRule() {
+  const status = document.getElementById('lanRulesStatus');
+  if (LAN_RULES_BUSY) {
+    status.textContent = t('lan.rules.busy');
+    return;
+  }
   if (LAN_RULES_REV === null) {
-    document.getElementById('lanRulesStatus').textContent = t('lan.rules.load_first');
+    status.textContent = t('lan.rules.load_first');
     return;
   }
   LAN_RULES = readLanRules();
@@ -2539,6 +2569,10 @@ function addLanRule() {
 }
 
 function removeLanRule(i) {
+  if (LAN_RULES_BUSY) {
+    document.getElementById('lanRulesStatus').textContent = t('lan.rules.busy');
+    return;
+  }
   LAN_RULES = readLanRules();
   LAN_RULES.splice(i, 1);
   renderLanRules(LAN_RULES);
@@ -2546,25 +2580,39 @@ function removeLanRule(i) {
 
 async function saveLanRules() {
   const status = document.getElementById('lanRulesStatus');
+  if (LAN_RULES_BUSY) {
+    status.textContent = t('lan.rules.busy');
+    return;
+  }
   if (LAN_RULES_REV === null) {
     status.textContent = t('lan.rules.load_first');
     return;
   }
   // the client whose rules were loaded, whatever the client field says now
   const client = LAN_RULES_CLIENT;
-  const res = await fetch('/api/lan/policy', {
-    method: 'PUT', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ client, base_revision: LAN_RULES_REV, rules: readLanRules() })
-  });
-  const answer = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    status.textContent = t('run.error') + ': ' + (answer.detail || t('run.unknown'));
-    return;
+  const rules = readLanRules();
+  const ticket = ++LAN_RULES_TICKET;
+  lanRulesLock(true);
+  try {
+    const res = await fetch('/api/lan/policy', {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ client, base_revision: LAN_RULES_REV, rules })
+    });
+    const answer = await res.json().catch(() => ({}));
+    if (ticket !== LAN_RULES_TICKET) return;
+    if (!res.ok) {
+      status.textContent = t('run.error') + ': ' + (answer.detail || t('run.unknown'));
+      return;
+    }
+    LAN_RULES = Array.isArray(answer.rules) ? answer.rules : [];
+    LAN_RULES_REV = Number.isInteger(answer.revision) ? answer.revision : LAN_RULES_REV;
+    status.textContent = t('lan.rules.saved') + ' ' + answer.revision + ' · ' + (client || '—');
+    renderLanRules(LAN_RULES);
+  } catch (e) {
+    if (ticket === LAN_RULES_TICKET) status.textContent = t('run.error') + ': ' + t('run.unknown');
+  } finally {
+    if (ticket === LAN_RULES_TICKET) lanRulesLock(false);
   }
-  LAN_RULES = Array.isArray(answer.rules) ? answer.rules : [];
-  LAN_RULES_REV = Number.isInteger(answer.revision) ? answer.revision : LAN_RULES_REV;
-  status.textContent = t('lan.rules.saved') + ' ' + answer.revision + ' · ' + (client || '—');
-  renderLanRules(LAN_RULES);
 }
 
 function lanDeviceCard(d, all) {

@@ -284,6 +284,12 @@ well treat the two addresses differently.
   subnet answered the search stays the `subnets` item's stated limit.
 - The merged view keeps each audit's rules context: place, time and
   revision per audit and per path (review PR A, A3).
+- The tab's rules editor does one load or save at a time. While one is in
+  flight, the table is locked, and load, add, remove and save only say
+  "wait". An answer counts only while its request is the latest (review
+  PR A pass 2). So a late answer for one client never lands in another
+  client's editor. `tests/test_web_lan_rules_runtime.py` runs the editor's
+  own code on a fake page with deferred answers (node, on CI).
 
 ### 3.5 What the policy cannot see
 
