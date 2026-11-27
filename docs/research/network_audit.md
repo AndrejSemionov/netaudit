@@ -461,3 +461,51 @@ N8 (basic) + N9.
   checked" too, not only its services.
 - **Not in PR 1**: other subnets, segments and isolation (PR 2), known
   vulnerabilities by version (PR 3), trends for this check (no identity yet).
+
+## 13. PR 2 — other subnets, segments, isolation (N5 + N6)
+
+USER 2026-11-27: «давай pr2 и потом 3». Built as §5 says, within the
+approved contract:
+
+- **Other subnets (N5)**: after the own segment, one unprivileged probe
+  (`nmap -sn -n -PS22,53,80,443,8291`, targets on stdin) to `.1` and `.254`
+  of each candidate /24 - every /24 of the auditor's /16 and, when the
+  auditor is outside `192.168/16`, every /24 of `192.168/16` - plus the /24
+  of each DNS server in another private range. A /24 with an answer is a
+  found subnet; the answering address is "the gateway there". At most
+  `MAX_SUBNETS` (8) are swept, the rest are named as not checked. "Not
+  found" is never "does not exist": a subnet the router filters stays
+  invisible, and the report says so.
+- Found subnets are swept with the same discovery probes (no ARP and no MAC:
+  they are behind the router) and the same port scan, scripts and level 2;
+  every rule of PR 1 applies (gaps, proven protocols, TLS).
+- **Domain controllers (§5.2)**: with `dig` and a search domain from DHCP,
+  `_ldap._tcp.dc._msdcs.<domain>` SRV records give the domain controllers;
+  a controller in a private range is a device (`domain_controller`) and its
+  /24 a candidate. Only the client's DNS server is asked. No `dig` or no
+  domain: a limit, not a gap.
+- **Traceroute (§5.3)** is not done: an unprivileged TCP traceroute is not
+  possible (TTL-exceeded replies need raw sockets); listed as a limit.
+- **Segments (N6)**: one per subnet - the auditor's own (marked as the
+  vantage) and each found one - with its gateway, devices, and a name: the
+  auditor's label for this client, else a suggestion from what is inside
+  (DNS names such as `BUH-*`/`ACC-*`, mostly printers, mostly servers,
+  phones only). The auditor renames segments and marks sensitive ones in the
+  tab; labels are stored per client and subnet (table `lan_segments`, no
+  secrets) and the next audit reads them.
+- **Isolation (§5.5)**: for every other segment, the sensitive services
+  that answer from the vantage segment - SMB 139/445, RDP 3389, WinRM 5985,
+  VNC 5900, SSH 22, NFS 2049, rsync 873, the databases - are
+  `NET-SEG-001:<from>:<to>:<port>` (medium; high when the target segment is
+  marked sensitive). One flat network - no other subnet answered and the
+  own segment mixes workstations or servers with phones or printers - is
+  `NET-SEG-002` (medium, confidence medium: other subnets may be filtered).
+- **Second vantage point**: the tab merges this client's audits from
+  different places (the latest per vantage subnet): segments by subnet,
+  "seen from" for each, findings together.
+- **Router interfaces**: the gateway address of a found subnet is taken as
+  an interface of a router (kind `router`); it gets no device findings of
+  its own, the router's are judged on the vantage gateway.
+- E2E: a second Docker network (segment B) behind the fake MikroTik
+  gateway, which forwards between the two; an SMB host in B must be found
+  through the gateway and give `NET-SEG-001`.

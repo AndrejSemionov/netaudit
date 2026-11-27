@@ -51,6 +51,7 @@ HTML_WRITERS = {
     'runLaravelCheck': 'escapes',  # renderLaravel(): escDeep() + laravelHtml() (docs/research/laravel_audit.md)
     'runLanAudit': 'escapes',  # renderLan(): escDeep() + lanHtml() (docs/research/network_audit.md)
     'showLanDevice': 'escapes',  # LAN_VIEW: the copy renderLan()/renderResult() escaped once
+    'loadLanMerged': 'escapes',  # renderLan(): escDeep() + lanHtml() of the merged view (network_audit.md §13)
 }
 
 # Interpolations allowed inside inline on*="..." handlers: check/tool ids from
