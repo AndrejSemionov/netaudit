@@ -336,3 +336,30 @@ def test_merged_api_reads_the_client_audits(isolated_db):
     body = client.get('/api/lan/merged', params={'client': 'Example Ltd'}).json()
     assert [v['address'] for v in body['vantages']] == ['192.168.88.10', '192.168.30.9']
     assert json.dumps(body).count('192.168.88.99') == 0
+
+
+def test_merged_view_shows_the_current_labels(isolated_db):
+    """Browser check of PR 2: a later audit made before the segment was named
+    must not hide the name - the merged view shows the client's labels now."""
+    first = _result_from(OWN, '192.168.88.10')
+    second = _result_from(BUH, '192.168.30.9')
+    for stamp, r in (('2026-11-27 10:00:00', first), ('2026-11-27 11:00:00', second)):
+        storage.save_report({'timestamp': stamp, 'checks': ['lan_audit'], 'results': {'lan_audit': r}})
+    storage.lan_segment_label_set('Example Ltd', BUH, 'Бухгалтерия', True)
+    client = TestClient(__import__('web.app', fromlist=['app']).app)
+    body = client.get('/api/lan/merged', params={'client': 'Example Ltd'}).json()
+    buh = next(s for s in body['segments'] if s['cidr'] == BUH)
+    assert (buh['name'], buh['sensitive'], buh['labelled']) == ('Бухгалтерия', True, True)
+
+
+def test_merge_keeps_a_label_over_an_unlabelled_later_view():
+    labelled = _result_from(OWN, '192.168.88.10')
+    for s in labelled['segments']:
+        if s['cidr'] == BUH:
+            s.update(name='Бухгалтерия', labelled=True, sensitive=True)
+    merged = lan_merge.merge([{'timestamp': '2026-11-27 10:00:00', 'results': {'lan_audit': labelled}},
+                              {'timestamp': '2026-11-27 11:00:00',
+                               'results': {'lan_audit': _result_from(BUH, '192.168.30.9')}}])
+    buh = next(s for s in merged['segments'] if s['cidr'] == BUH)
+    assert (buh['name'], buh['sensitive']) == ('Бухгалтерия', True)
+

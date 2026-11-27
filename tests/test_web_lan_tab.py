@@ -150,3 +150,11 @@ def test_segments_labels_and_merged_audits_in_the_tab():
     assert "fetch('/api/lan/merged?client=' + encodeURIComponent(" in merged
     assert 'renderLan(' in merged and HTML_WRITERS.get('loadLanMerged') == 'escapes'
 
+
+def test_isolation_arrows_start_at_the_segment_the_service_answered_from():
+    """Browser check of PR 2: on a merged map "you are here" is the latest
+    audit's place, so an arrow starts at the finding's own "from" subnet."""
+    svg = _functions(_script())['lanMapSvg']
+    assert 'decodeURIComponent(' in svg and "split(':')" in svg
+    assert 'ownKey' not in svg
+
