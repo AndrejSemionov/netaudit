@@ -2215,15 +2215,18 @@ function lanMapSvg(r) {
   order.forEach(k => {
     const s = segments[k];
     const box = boxes[k];
-    const where = s.own && v.interface ? ` · ★ ${t('lan.you')} · ${v.interface} (${v.wireless ? t('lan.wifi') : t('lan.cable')})` : '';
-    const mark = s.sensitive ? ` · ${t('lan.seg.sensitive')}` : '';
-    const gw = s.gateway ? ` · ${t('lan.seg.gateway')} ${s.gateway}` : '';
+    // two lines: the name and the subnet; then the gateway, "you are here" and the sensitive mark
+    const title = lanSegName(s) === s.cidr ? s.cidr : `${lanSegName(s)} · ${s.cidr}`;
+    const facts = [s.gateway ? `${t('lan.seg.gateway')} ${s.gateway}` : '',
+      s.own ? `★ ${t('lan.you')}${v.interface ? ` · ${v.interface} (${v.wireless ? t('lan.wifi') : t('lan.cable')})` : ''}` : '',
+      s.sensitive ? t('lan.seg.sensitive') : ''].filter(Boolean).join(' · ');
     svg += `<line x1="24" y1="${box.top + 20}" x2="44" y2="${box.top + 20}" class="lan-link"/>`
       + `<rect x="44" y="${box.top}" width="${W - 60}" height="${box.height}" rx="12" class="lan-segment"`
       + `${s.sensitive ? ' style="stroke:var(--bad)"' : ''}/>`
-      + `<text x="58" y="${box.top + 24}" class="lan-label">${lanSegName(s)} · ${s.cidr}${gw}${where}${mark}</text>`;
+      + `<text x="58" y="${box.top + 22}" class="lan-label">${title}</text>`
+      + `<text x="58" y="${box.top + 40}" class="lan-sub">${facts}</text>`;
     if (s.scanned === false) {
-      svg += `<text x="58" y="${box.top + 50}" class="lan-sub">${t('lan.seg.not_scanned')}</text>`;
+      svg += `<text x="58" y="${box.top + 58}" class="lan-sub">${t('lan.seg.not_scanned')}</text>`;
     }
     box.shown.forEach((i, n) => {
       const d = devices[i];
@@ -2240,20 +2243,24 @@ function lanMapSvg(r) {
         + `<text x="${x}" y="${yy + 47}" text-anchor="middle" class="lan-sub">${you ? t('lan.you') : lanDeviceName(d).slice(0, 20)}</text></g>`;
     });
   });
-  // isolation broken: a red dashed arrow from the vantage segment to the segment whose service answers
-  const ownKey = order.find(k => segments[k].own);
+  // isolation broken: a red dashed arrow from the segment the service answered from (the
+  // finding's own "from" - on a merged map that is not always "you are here") to the target
+  const keyOf = {};
+  segments.forEach((s, k) => { keyOf[s.cidr] = k; });
   const reach = {};
   (r.findings || []).forEach(f => {
-    if (lanControl(f.id) !== 'NET-SEG-001' || !f.segment) return;
-    (reach[f.segment] ||= []).push(String(f.id).split(':').pop());
+    if (lanControl(f.id) !== 'NET-SEG-001') return;
+    const parts = String(f.id).split(':');
+    if (parts.length < 4) return;
+    const from = decodeURIComponent(parts[1]), to = decodeURIComponent(parts[2]);
+    if (keyOf[from] === undefined || keyOf[to] === undefined) return;
+    ((reach[from + ' ' + to] ||= { from: keyOf[from], to: keyOf[to], ports: [] }).ports).push(parts[3]);
   });
-  order.forEach((k, lane) => {
-    const s = segments[k];
-    if (ownKey === undefined || k === ownKey || !reach[s.cidr]) return;
+  Object.values(reach).forEach((a, lane) => {
     const x = W - 30 - lane * 6;
-    const y1 = boxes[ownKey].top + 30, y2 = boxes[k].top + 30;
+    const y1 = boxes[a.from].top + 50, y2 = boxes[a.to].top + 50;
     svg += `<path d="M ${W - 16} ${y1} H ${x} V ${y2} H ${W - 16}" fill="none" style="stroke:var(--bad)" stroke-width="2" stroke-dasharray="6 4"/>`
-      + `<text x="${W - 22}" y="${y2 - 6}" text-anchor="end" class="lan-sub" style="fill:var(--bad)">${t('lan.isolation')}: ${reach[s.cidr].join(', ')}</text>`;
+      + `<text x="${W - 22}" y="${y2 + 16}" text-anchor="end" class="lan-sub" style="fill:var(--bad)">${t('lan.isolation')} ${segments[a.from].cidr}: ${a.ports.join(', ')}</text>`;
   });
   svg += '</svg>';
   const legend = [['var(--bad)', 'lan.legend.bad'], ['var(--warn)', 'lan.legend.warn'], ['var(--ok)', 'lan.legend.ok'],

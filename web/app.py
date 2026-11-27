@@ -540,7 +540,7 @@ async def api_lan_segment_set(request: Request) -> dict:
 def api_lan_merged(client: str = '') -> dict:
     reports = [r for r in storage.reports_with_check('lan_audit')
                if (r.get('results', {}).get('lan_audit') or {}).get('client', '') == client]
-    return lan_merge.merge(reports)
+    return lan_merge.apply_labels(lan_merge.merge(reports), storage.lan_segment_labels(client))
 
 
 # --- Tools ---

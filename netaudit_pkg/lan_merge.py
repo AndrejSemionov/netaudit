@@ -44,8 +44,10 @@ def merge(reports: list[dict]) -> dict:
                                                     'devices': [d['ip'] for d in result['devices']]}]
         for s in own_segments:
             merged = segments.setdefault(s['cidr'], {**s, 'own': False, 'seen_from': [], 'devices': []})
-            merged.update({k: s[k] for k in ('name', 'labelled', 'sensitive', 'suggestion', 'gateway', 'scanned')
-                           if k in s})
+            merged.update({k: s[k] for k in ('suggestion', 'gateway', 'scanned') if s.get(k) is not None})
+            # a label from an earlier audit is not hidden by a later, unlabelled view
+            if s.get('labelled') or not merged.get('labelled'):
+                merged.update({k: s.get(k) for k in ('name', 'labelled', 'sensitive')})
             if subnet not in merged['seen_from']:
                 merged['seen_from'].append(subnet)
             merged['devices'] = sorted(set(merged['devices']) | set(s.get('devices', [])))
@@ -72,3 +74,14 @@ def merge(reports: list[dict]) -> dict:
         'score': webprobe.score(all_findings, checked), 'verdict': webprobe.verdict(all_findings, checked),
         'summary': webprobe.summary(all_findings),
     }
+
+
+def apply_labels(view: dict, labels: dict) -> dict:
+    """The client's current names and sensitive marks on a merged view: a
+    segment named after the audits ran shows its name now."""
+    for s in view.get('segments', []):
+        label = labels.get(s.get('cidr'))
+        if label:
+            s.update(name=label.get('name') or None, labelled=bool(label.get('name')),
+                     sensitive=bool(label.get('sensitive')))
+    return view
