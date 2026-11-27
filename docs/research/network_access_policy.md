@@ -273,6 +273,17 @@ well treat the two addresses differently.
   other rules are listed as "for other places".
 - Each host gets only the extra ports of the forbid rules whose destination
   holds it: one extra `nmap -sT` run per set of ports, no scripts.
+- A forbid rule is "ok" only on what this run covered (review PR A, A2).
+  Each of these is a gap naming it:
+  - a subnet found but over the sweep cap;
+  - a failed or missing subnet search, for a destination beyond this
+    segment;
+  - the part of this subnet cut from the scan.
+
+  The networks a rule was judged on are listed. Address space where no
+  subnet answered the search stays the `subnets` item's stated limit.
+- The merged view keeps each audit's rules context: place, time and
+  revision per audit and per path (review PR A, A3).
 
 ### 3.5 What the policy cannot see
 
@@ -571,9 +582,12 @@ findings (`NET-SMB-001`, `NET-VULN-*`…) do not depend on the policy.
     with its previous comparable audit, plus the other-place audits used
     as context.
 - **API**: `GET /api/lan/policy?client=` returns the current revision.
-  `PUT /api/lan/policy` takes `{client, rules}`, validates them, saves a new
-  revision and returns it. Both have the same JSON checks as
-  `/api/lan/segments`.
+  `PUT /api/lan/policy` takes `{client, base_revision, rules}`, validates
+  them, saves a new revision and returns it. `base_revision` is the
+  revision the editor loaded (0 when there were none). Without it the save
+  is refused (400); from another revision it is refused (409). An editor
+  that never loaded the rules therefore cannot replace them (review PR A,
+  A1). Both have the same JSON checks as `/api/lan/segments`.
 - **CLI**:
   - `netaudit lan-policy show --client X`;
   - `netaudit lan-policy set --client X --file rules.json`, which validates,

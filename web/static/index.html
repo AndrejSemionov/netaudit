@@ -2282,11 +2282,11 @@ function lanMapSvg(r) {
     ((policyArrows['forbid ' + f.from + ' ' + f.segment] ||= { kind: 'forbid', from: keyOf[f.from], to: keyOf[f.segment], ports: [] })
       .ports).push(String(f.id).split(':').pop());
   });
-  const ownSeg = segments.find(s => s.own);
+  // an allowed path starts at the segment it was seen from: on a merged map not always "you are here"
   const paths = r.policy && Array.isArray(r.policy.paths) ? r.policy.paths : [];
   paths.forEach(x => {
-    if (x.decision !== 'allow' || !ownSeg || keyOf[x.segment] === undefined || x.segment === ownSeg.cidr) return;
-    ((policyArrows['allow ' + x.segment] ||= { kind: 'allow', from: keyOf[ownSeg.cidr], to: keyOf[x.segment], ports: [] })
+    if (x.decision !== 'allow' || keyOf[x.from] === undefined || keyOf[x.segment] === undefined || x.segment === x.from) return;
+    ((policyArrows['allow ' + x.from + ' ' + x.segment] ||= { kind: 'allow', from: keyOf[x.from], to: keyOf[x.segment], ports: [] })
       .ports).push(x.port);
   });
   Object.values(policyArrows).forEach((a, n) => {
@@ -2364,11 +2364,16 @@ function lanHtml(r) {
   if (pol && Array.isArray(pol.paths)) {
     const counts = { forbid: 0, conflict: 0, allow: 0, unknown: 0 };
     pol.paths.forEach(x => { if (Object.hasOwn(counts, x.decision)) counts[x.decision] += 1; });
-    const others = (Array.isArray(pol.rules) ? pol.rules.length : 0) - (Array.isArray(pol.applicable) ? pol.applicable.length : 0);
+    const others = Array.isArray(pol.vantages) ? 0
+      : (Array.isArray(pol.rules) ? pol.rules.length : 0) - (Array.isArray(pol.applicable) ? pol.applicable.length : 0);
+    // a merged view: each audit with its own place, time and rules revision (review PR A, A3)
+    const places = Array.isArray(pol.vantages)
+      ? pol.vantages.map(x => `${t('lan.policy.revision')} ${x.revision ?? '—'} · ${t('lan.policy.from')} ${x.source || ''} (${x.timestamp || ''})`)
+      : [`${t('lan.policy.revision')} ${pol.revision ?? '—'} · ${t('lan.policy.from')} ${pol.source || ''}`];
     const allowedRows = pol.paths.filter(x => x.decision === 'allow').map(x => `<tr><td>${x.destination}</td>
-      <td>${x.service} · ${x.port}</td><td>${(x.rules || []).join(', ')}</td></tr>`).join('');
+      <td>${x.service} · ${x.port}</td><td>${(x.rules || []).join(', ')}${x.source ? ` <span class="timing">${t('lan.policy.from')} ${x.source}</span>` : ''}</td></tr>`).join('');
     html += `<div class="card"><h2>${t('lan.policy.title')}</h2>
-      <p class="timing">${t('lan.policy.revision')} ${pol.revision ?? '—'} · ${t('lan.policy.from')} ${pol.source || ''}${others > 0 ? ` · ${t('lan.policy.other_places')}: ${others}` : ''}</p>
+      <p class="timing">${places.join('<br>')}${others > 0 ? ` · ${t('lan.policy.other_places')}: ${others}` : ''}</p>
       <div class="wp-facts">${['forbid', 'conflict', 'allow', 'unknown'].map(k => `<div><span>${t('lan.policy.decision.' + k)}</span>${counts[k]}</div>`).join('')}</div>
       ${allowedRows ? `<table><tr><th>${t('lan.col.ip')}</th><th>${t('lan.rules.col.service')}</th><th>${t('lan.rules.title')}</th></tr>${allowedRows}</table>` : ''}</div>`;
   }
@@ -2463,6 +2468,8 @@ async function loadLanMerged() {
 // the server sent them, written into the page only by renderLanRules()
 let LAN_RULES = [];
 let LAN_RULES_CLIENT = null;
+// the revision the editor loaded: null until a load - nothing is added or saved before (review PR A, A1)
+let LAN_RULES_REV = null;
 const LAN_SERVICES = ['any', 'SMB', 'RDP', 'WinRM', 'VNC', 'SSH', 'NFS', 'rsync', 'SQL Server', 'Oracle', 'MySQL',
   'PostgreSQL', 'Redis', 'Elasticsearch', 'memcached', 'MongoDB', 'tcp/'];
 
@@ -2515,12 +2522,17 @@ async function loadLanRules() {
   }
   LAN_RULES = Array.isArray(data.rules) ? data.rules : [];
   LAN_RULES_CLIENT = client;
-  status.textContent = data.revision ? t('lan.rules.revision') + ' ' + data.revision : t('lan.rules.empty');
+  LAN_RULES_REV = Number.isInteger(data.revision) ? data.revision : 0;
+  status.textContent = (data.revision ? t('lan.rules.revision') + ' ' + data.revision : t('lan.rules.empty'))
+    + ' · ' + (client || '—');
   renderLanRules(LAN_RULES);
 }
 
 function addLanRule() {
-  if (LAN_RULES_CLIENT === null) LAN_RULES_CLIENT = document.getElementById('lanClient').value.trim();
+  if (LAN_RULES_REV === null) {
+    document.getElementById('lanRulesStatus').textContent = t('lan.rules.load_first');
+    return;
+  }
   LAN_RULES = readLanRules();
   LAN_RULES.push({ source: '', destination: '', service: 'any', decision: 'forbid', note: '' });
   renderLanRules(LAN_RULES);
@@ -2534,10 +2546,15 @@ function removeLanRule(i) {
 
 async function saveLanRules() {
   const status = document.getElementById('lanRulesStatus');
-  const client = LAN_RULES_CLIENT === null ? document.getElementById('lanClient').value.trim() : LAN_RULES_CLIENT;
+  if (LAN_RULES_REV === null) {
+    status.textContent = t('lan.rules.load_first');
+    return;
+  }
+  // the client whose rules were loaded, whatever the client field says now
+  const client = LAN_RULES_CLIENT;
   const res = await fetch('/api/lan/policy', {
     method: 'PUT', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ client, rules: readLanRules() })
+    body: JSON.stringify({ client, base_revision: LAN_RULES_REV, rules: readLanRules() })
   });
   const answer = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -2545,8 +2562,8 @@ async function saveLanRules() {
     return;
   }
   LAN_RULES = Array.isArray(answer.rules) ? answer.rules : [];
-  LAN_RULES_CLIENT = client;
-  status.textContent = t('lan.rules.saved') + ' ' + answer.revision;
+  LAN_RULES_REV = Number.isInteger(answer.revision) ? answer.revision : LAN_RULES_REV;
+  status.textContent = t('lan.rules.saved') + ' ' + answer.revision + ' · ' + (client || '—');
   renderLanRules(LAN_RULES);
 }
 

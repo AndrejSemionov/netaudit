@@ -849,17 +849,27 @@ def lan_policy_get(client: str) -> dict:
             'saved_at': row['saved_at']}
 
 
-def lan_policy_save(client: str, rules) -> dict:
+class PolicyConflict(ValueError):
+    """The rules were edited from another revision than the current one."""
+
+
+def lan_policy_save(client: str, rules, base_revision: int | None = None) -> dict:
     """Validate `rules` (lan_policy.validate) and save them as the client's
     next revision. A rule keeps its id when the current revision has it;
     any other gets the next free one - an id is never reused. The same
-    rules again make no new revision. Raises ValueError."""
+    rules again make no new revision. With `base_revision` (the revision
+    the editor loaded), a save from any other revision raises
+    PolicyConflict: an editor that never loaded the rules cannot replace
+    them (review PR A, A1). Raises ValueError."""
     from . import lan_policy
     if not isinstance(client, str) or len(client) > LAN_CLIENT_MAX:
         raise ValueError(f'client: at most {LAN_CLIENT_MAX} characters')
     clean = lan_policy.validate(rules)
     conn = _conn()
     current = lan_policy_get(client)
+    if base_revision is not None and base_revision != current['revision']:
+        raise PolicyConflict(f"the rules are at revision {current['revision']}, the edit started from revision "
+                             f'{base_revision}: load them again before saving')
     current_ids = {r['id'] for r in current['rules']}
     used = [int(r['id'][1:]) for row in conn.execute('SELECT rules FROM lan_policy WHERE client=?', (client,))
             for r in json.loads(row['rules'])]

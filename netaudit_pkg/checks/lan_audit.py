@@ -671,7 +671,7 @@ def _why_incomplete(d: dict, ports_error: str | None, extra: dict) -> str:
 
 def _policy_check(policy: dict | None, vantage: dict, devices: list[dict], segments: list[dict],
                   ports_error: str | None, extra: dict, findings: list, checked: list,
-                  limits: list) -> tuple[dict | None, frozenset]:
+                  limits: list, scope: dict) -> tuple[dict | None, frozenset]:
     """Judge every open port of every device by the rules that apply from
     this machine's address: NET-POL-001 (forbidden, it answers), NET-POL-002
     (equal rules disagree). Returns the result's 'policy' block and the
@@ -707,8 +707,8 @@ def _policy_check(policy: dict | None, vantage: dict, devices: list[dict], segme
             verdict = lan_policy.evaluate(applicable, source, d['ip'], number)
             label = SENSITIVE_SERVICES[number][0] if number in SENSITIVE_SERVICES else f'TCP {number}'
             evidence = (_protocol(p, *SENSITIVE_SERVICES[number][1:]) if number in SENSITIVE_SERVICES else 'open')
-            block['paths'].append({'source': source, 'destination': d['ip'], 'port': number, 'service': label,
-                                   'decision': verdict['decision'], 'rules': verdict['rules'],
+            block['paths'].append({'source': source, 'from': own['cidr'], 'destination': d['ip'], 'port': number,
+                                   'service': label, 'decision': verdict['decision'], 'rules': verdict['rules'],
                                    'evidence': evidence, 'segment': d['segment']})
             if verdict['decision'] == 'unknown':
                 continue
@@ -752,10 +752,15 @@ def _policy_check(policy: dict | None, vantage: dict, devices: list[dict], segme
 
     # what the forbid rules could not see (§4.2): a gap names it
     gaps: list[str] = []
+    judged_on: list[str] = []
     cut = set(extra.get('cut', ()))
     for rule in applicable:
         if rule['decision'] != 'forbid':
             continue
+        # the destination's parts this run skipped or could not search (review PR A, A2): a device
+        # answering elsewhere in it proves nothing about them
+        gaps += [f"rule {rule['id']}: {why}" for why in _scope_gaps(rule, scope)]
+        judged_on += [n for n in scope['scanned'] if lan_policy.destination_overlaps(rule, n) and n not in judged_on]
         inside = [d for d in devices if d['kind'] != 'this_machine' and lan_policy.destination_contains(rule, d['ip'])]
         if not inside:
             gaps.append(f"rule {rule['id']}: no device of {rule['destination']} answered - nothing there was probed")
@@ -785,9 +790,30 @@ def _policy_check(policy: dict | None, vantage: dict, devices: list[dict], segme
                                   f'from {source}'})
     else:
         checked.append({'item': 'access_policy', 'status': 'ok',
-                        'detail': f'{len(applicable)} rules judged from {source}: no forbidden service answered '
+                        'detail': f"{len(applicable)} rules judged from {source} on {', '.join(judged_on) or '-'}: "
+                                  'no forbidden service answered '
                                   f"({sum(block['not_observed'].values())} forbidden ports probed, no answer)"})
     return block, frozenset(judged)
+
+
+def _scope_gaps(rule: dict, scope: dict) -> list[str]:
+    """Why part of a forbid rule's destination was not covered by this
+    run: a found subnet over the sweep cap, a failed or missing subnet
+    search, the part of this subnet cut from the scan. A destination
+    nothing answered in stays its own gap (no device there)."""
+    whys = []
+    over = [c for c in scope['cut'] if lan_policy.destination_overlaps(rule, c)]
+    if over:
+        whys.append(f"{', '.join(over)} in {rule['destination']} was found but not scanned "
+                    f'(at most {lan.MAX_SUBNETS} subnets a run)')
+    if not lan_policy.destination_within(rule, scope['own_scanned']):
+        if not scope['searched']:
+            whys.append(f"{rule['destination']}: other subnets were not searched in this run")
+        elif scope['search_error']:
+            whys.append(f"{rule['destination']}: the search for other subnets failed: {scope['search_error']}")
+        if scope['own_subnet'] != scope['own_scanned'] and lan_policy.destination_overlaps(rule, scope['own_subnet']):
+            whys.append(f"{rule['destination']}: only {scope['own_scanned']} of {scope['own_subnet']} was scanned")
+    return whys
 
 
 # ---- known vulnerabilities by version (research §7.2, §14) ------------------------
@@ -1125,8 +1151,13 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
     for d in devices:
         d['probe'] = _probe(d, ports.get('error'), extra)
     policy_limits: list = []
+    cut_subnets = list((subnet_search or {}).get('cut') or [])
+    scope = {'own_subnet': str(ipaddress.ip_network(vantage.get('subnet') or scanned, strict=False)),
+             'own_scanned': scanned, 'cut': cut_subnets, 'searched': subnet_search is not None,
+             'search_error': (subnet_search or {}).get('error') or remote.get('error'),
+             'scanned': [scanned] + [f['cidr'] for f in found if f['cidr'] not in cut_subnets]}
     policy_block, judged = _policy_check(policy, vantage, devices, segments, ports.get('error'), extra, findings,
-                                         checked, policy_limits)
+                                         checked, policy_limits, scope)
     _isolation(segments, devices, findings, judged)
     _flat_network(subnet_search, devices, scanned, findings)
 

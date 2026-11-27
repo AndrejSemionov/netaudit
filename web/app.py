@@ -550,11 +550,16 @@ async def api_lan_policy_set(request: Request) -> dict:
         raise HTTPException(400, 'the body must be a JSON object') from None
     if not isinstance(payload, dict):
         raise HTTPException(400, 'the body must be a JSON object')
-    client, rules = payload.get('client', ''), payload.get('rules')
+    client, rules, base = payload.get('client', ''), payload.get('rules'), payload.get('base_revision')
     if not isinstance(client, str) or not isinstance(rules, list):
         raise HTTPException(400, 'client is text, rules is a list')
+    # the revision the editor loaded: without it a blank editor would replace the rules (review PR A, A1)
+    if not isinstance(base, int) or isinstance(base, bool) or base < 0:
+        raise HTTPException(400, 'base_revision: the revision of the rules you loaded (0 when there were none)')
     try:
-        return storage.lan_policy_save(client, rules)
+        return storage.lan_policy_save(client, rules, base_revision=base)
+    except storage.PolicyConflict as e:
+        raise HTTPException(409, str(e)) from None
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
 

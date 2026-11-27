@@ -604,7 +604,7 @@ def cmd_lan_policy(args):
             with open(args.file, encoding='utf-8') as f:
                 rules = json.load(f)
             before = storage.lan_policy_get(args.client)
-            saved = storage.lan_policy_save(args.client, rules)
+            saved = storage.lan_policy_save(args.client, rules, base_revision=before['revision'])
         except (OSError, ValueError) as e:      # json.JSONDecodeError is a ValueError
             print(f'Rules not saved: {e}', file=sys.stderr)
             sys.exit(2)

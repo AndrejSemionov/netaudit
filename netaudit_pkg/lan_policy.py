@@ -185,6 +185,14 @@ def destination_contains(rule: dict, ip: str) -> bool:
     return rule['destination'] == 'any' or ipaddress.ip_address(ip) in _net(rule['destination'])
 
 
+def destination_overlaps(rule: dict, cidr: str) -> bool:
+    return rule['destination'] == 'any' or _net(rule['destination']).overlaps(ipaddress.ip_network(cidr))
+
+
+def destination_within(rule: dict, cidr: str) -> bool:
+    return rule['destination'] != 'any' and _net(rule['destination']).subnet_of(ipaddress.ip_network(cidr))
+
+
 def rule_ports(rule: dict) -> tuple | None:
     return _ports(rule['service'])
 
