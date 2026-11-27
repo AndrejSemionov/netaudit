@@ -173,7 +173,7 @@ LOOKED_UP = {
                                               'summary': 'admin to super-admin'}], 'error': None},
     'kev': {'CVE-2024-47176': {'added': '2024-10-01', 'ransomware': False},
             'CVE-2023-30799': {'added': '2023-07-01', 'ransomware': True}},
-    'kev_error': None, 'cut': [], 'skipped': [], 'versionless': 3,
+    'kev_error': None, 'cut': [], 'skipped': [],
 }
 
 
@@ -200,7 +200,8 @@ def test_findings_from_the_lookups():
     assert rtr['severity'] == 'critical' and 'ransomware' in rtr['detail']
     assert 'known_vulns' not in res['limits']
     item = next(c for c in res['checked'] if c['item'] == 'known_vulns')
-    assert item['status'] == 'ok' and '3' in item['detail']          # services without a version, counted
+    # the audit counts the services nmap read no version of (here 9100 on the printer)
+    assert item['status'] == 'ok' and '1 services without a version' in item['detail']
     assert any('NVD' in n['notice'] for n in res['notices'])
 
 

@@ -85,6 +85,23 @@ def _settle_threads(before: set) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_vulnerability_lookups(monkeypatch):
+    """The network audit's vulnerability lookups (netaudit_pkg/lan_vulns.py)
+    never leave a test: a full lan_audit run in a test gets connection errors
+    (gaps) instead of asking NVD, OSV or CISA, and no NVD pause. Tests of the
+    lookups set their own fakes over these."""
+    import httpx
+
+    from netaudit_pkg import lan_vulns
+
+    def offline(*args, **kwargs):
+        raise httpx.ConnectError('network lookups are off in tests')
+    monkeypatch.setattr(lan_vulns, '_get', offline)
+    monkeypatch.setattr(lan_vulns, '_post', offline)
+    monkeypatch.setattr(lan_vulns, '_sleep', lambda seconds: None)
+
+
+@pytest.fixture(autouse=True)
 def _wait_for_test_threads():
     """A test without isolated_db gets the same wait, so its threads cannot
     write into the next test's database either."""

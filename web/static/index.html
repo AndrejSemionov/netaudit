@@ -291,7 +291,7 @@
   <div class="settings-wrap" style="max-width:1000px">
     <div class="settings-group">
       <h2 data-i18n="lan.title">Аудит сети</h2>
-      <p class="hint" data-i18n="lan.hint">Подключите этот компьютер к сети клиента (кабелем или по Wi-Fi) и запустите аудит. NetAudit сам найдёт устройства этого сегмента и других подсетей за роутером, роутер и его прошивку, открытые службы, ошибки настройки и нарушенную изоляцию сегментов — без паролей и без root. Уязвимости по версиям появятся в следующей версии.</p>
+      <p class="hint" data-i18n="lan.hint">Подключите этот компьютер к сети клиента (кабелем или по Wi-Fi) и запустите аудит. NetAudit сам найдёт устройства этого сегмента и других подсетей за роутером, роутер и его прошивку, открытые службы, ошибки настройки, нарушенную изоляцию сегментов и известные уязвимости по версиям — без паролей и без root.</p>
       <label for="lanClient" class="hint" data-i18n="lan.client">Клиент / название сети</label>
       <div class="wp-form"><input id="lanClient" type="text" maxlength="120"></div>
       <label for="lanIface" class="hint" data-i18n="lan.iface">Интерфейс (пусто — тот, через который идёт интернет)</label>
@@ -301,6 +301,7 @@
       <label class="lan-check"><input id="lanLevel2" type="checkbox"> <span data-i18n="lan.level2">Уровень 2: проверить анонимный доступ и уязвимости (MS17-010, анонимный FTP, Redis без пароля)</span></label>
       <p class="hint" data-i18n="lan.level2_hint">Отдельное подтверждение. Без подбора паролей и без атак — только проверки, которые nmap считает безопасными.</p>
       <label class="lan-check"><input id="lanAi" type="checkbox"> <span data-i18n="lan.ai">Разрешить ИИ-анализ этого отчёта (уйдут адреса и имена устройств клиента)</span></label>
+      <label class="lan-check"><input id="lanNoVulns" type="checkbox"> <span data-i18n="lan.novulns">Не искать известные уязвимости (названия продуктов и версии не уходят в NVD и OSV)</span></label>
       <div class="wp-form" style="margin-top:12px"><button id="lanBtn" onclick="runLanAudit()" data-i18n="lan.start">Начать аудит</button></div>
       <div class="status" id="lanStatus"></div>
     </div>
@@ -2353,6 +2354,11 @@ function lanHtml(r) {
     html += `<div class="card"><h2>${t('lan.limits')}</h2><ul>`
       + limits.map(x => `<li>${t('lan.limit.' + x)}</li>`).join('') + '</ul></div>';
   }
+  const notices = Array.isArray(r.notices) ? r.notices : [];
+  if (notices.length) {
+    html += `<div class="card"><h2>${t('lan.notices')}</h2>`
+      + notices.map(n => `<p class="timing">${n.notice}</p>`).join('') + '</div>';
+  }
   const steps = Array.isArray(r.next_steps) ? r.next_steps : [];
   if (steps.length) {
     html += `<div class="card"><h2>${t('lan.next')}</h2><ul>` + steps.map(s =>
@@ -2442,6 +2448,7 @@ async function runLanAudit() {
     level2: document.getElementById('lanLevel2').checked ? LAN_LEVEL2 : 'no',
     interface: document.getElementById('lanIface').value.trim(),
     share_with_ai: document.getElementById('lanAi').checked ? 'yes' : 'no',
+    vuln_lookup: document.getElementById('lanNoVulns').checked ? 'no' : 'yes',
   };
   btn.disabled = true;
   out.textContent = '';
