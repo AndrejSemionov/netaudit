@@ -34,6 +34,13 @@ def two():
     return _load(2)
 
 
+@pytest.fixture(scope='module')
+def ruled():
+    """Level 1 again, with the access rules run_scan.py saves first
+    (docs/research/network_access_policy.md §11)."""
+    return _load('policy')
+
+
 def ids(result) -> set[str]:
     return {f['id'] for f in result['findings'] if 'id' in f}
 
@@ -119,3 +126,26 @@ def test_the_gateway_there_is_judged_as_a_device(one):
     gw_b = '172.30.20.254'
     assert device(one, gw_b)['kind'] != 'router' and device(one, gw_b)['segment'] == SEG_B
     assert f'NET-FTP-001:{gw_b}' in ids(one)
+
+
+# ---------------------------------------------------------------------------
+# access policy PR A (docs/research/network_access_policy.md §11)
+# ---------------------------------------------------------------------------
+
+def test_a_forbidden_path_is_a_violation_on_the_stand(ruled):
+    assert f'NET-POL-001:{SCANNER}:{BUH}:445' in ids(ruled)
+    assert f'NET-SEG-001:{_q(SEG_A)}:{_q(SEG_B)}:445' not in ids(ruled)       # judged by the rule instead
+    assert next(c for c in ruled['checked'] if c['item'] == 'access_policy')['status'] == 'problem'
+
+
+def test_an_allowed_path_is_not_reported_on_the_stand(ruled):
+    path = next(p for p in ruled['policy']['paths'] if p['destination'] == BUH and p['port'] == 6379)
+    assert path['decision'] == 'allow' and path['rules'] == ['r2']
+    assert f'NET-SEG-001:{_q(SEG_A)}:{_q(SEG_B)}:6379' not in ids(ruled)
+    assert f'NET-DB-001:{BUH}:6379' in ids(ruled)                            # the device finding stays
+
+
+def test_a_rule_port_outside_the_list_is_probed_on_the_stand(ruled):
+    probe = device(ruled, BUH)['probe']
+    assert probe['complete'] is True and 9999 in probe['ports'] and 9999 in probe['closed']
+    assert f'NET-POL-001:{SCANNER}:{BUH}:9999' not in ids(ruled)

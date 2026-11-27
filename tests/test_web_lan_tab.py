@@ -18,15 +18,19 @@ from tests.test_web_wordpress_tab import INDEX, _lang_block
 CATALOGUE = (Path(__file__).resolve().parents[1] / 'docs' / 'checks' / 'finding_ids.md').read_text()
 CONTROLS = re.findall(r'^\| ((?:NET|RTR)-[A-Z]+-\d{3}) \|', CATALOGUE, re.MULTILINE)
 ITEMS = ('discovery', 'range', 'neighbours', 'services', 'broadcast', 'mndp', 'llmnr', 'router', 'router_support',
-         'level2')
-LIMITS = ('udp', 'os_detection', 'other_subnets', 'known_vulns', 'vuln_versions', 'level2')
+         'level2', 'access_policy')
+LIMITS = ('udp', 'os_detection', 'other_subnets', 'known_vulns', 'vuln_versions', 'level2', 'access_policy',
+          'access_policy_here')
 KINDS = ('router', 'this_machine', 'windows', 'printer', 'camera', 'nas', 'server', 'phone', 'network', 'unknown')
 NEXT = ('router_ssh', 'saved_hosts', 'level2', 'other_vantage')
 VERDICTS = ('ok', 'warn', 'danger', 'incomplete', 'not_started')
 
 
 def test_every_catalogued_control_is_read_by_the_tab():
-    assert len(CONTROLS) == 24       # PR 1: 18, PR 2: NET-SEG-001/002, PR 3: NET-VULN-001/002/003, RTR-VULN-001
+    # PR 1: 18, PR 2: NET-SEG-001/002, PR 3: NET-VULN-001/002/003, RTR-VULN-001,
+    # access policy PR A: NET-POL-001/002
+    assert len(CONTROLS) == 26
+    assert {'NET-POL-001', 'NET-POL-002'} <= set(CONTROLS)
 
 
 def test_tab_button_and_page():
@@ -168,3 +172,50 @@ def test_known_vulnerabilities_and_data_notices_in_the_tab():
             assert f"'{key}':" in block, (lang, key)
     view = _functions(_script())['lanHtml']
     assert 'r.notices' in view and '.notice' in view
+
+
+def test_access_rules_panel_in_the_tab():
+    """Access policy PR A (docs/research/network_access_policy.md §8): the
+    owner's rules per client, edited in the tab and saved as a revision."""
+    page = INDEX[INDEX.index('id="tab-lan"'):INDEX.index('id="tab-trends"')]
+    for part in ('id="lanRules"', 'onclick="loadLanRules()"', 'onclick="addLanRule()"', 'onclick="saveLanRules()"',
+                 'id="lanRulesStatus"', 'data-i18n="lan.rules.title"', 'data-i18n="lan.rules.hint"'):
+        assert part in page, part
+    keys = ['lan.rules.title', 'lan.rules.hint', 'lan.rules.load', 'lan.rules.add', 'lan.rules.save',
+            'lan.rules.saved', 'lan.rules.remove', 'lan.rules.empty', 'lan.rules.revision', 'lan.rules.no_secrets',
+            'lan.rules.col.source', 'lan.rules.col.destination', 'lan.rules.col.service', 'lan.rules.col.decision',
+            'lan.rules.col.note', 'lan.rules.decision.allow', 'lan.rules.decision.forbid', 'lan.rules.any']
+    for lang in ('ru', 'en'):
+        block = _lang_block(lang)
+        for key in keys:
+            assert f"'{key}':" in block, (lang, key)
+    functions = _functions(_script())
+    load = functions['loadLanRules']
+    assert "fetch('/api/lan/policy?client=' + encodeURIComponent(" in load and 'renderLanRules(' in load
+    save = functions['saveLanRules']
+    assert "fetch('/api/lan/policy'" in save and "method: 'PUT'" in save and 'innerHTML' not in save
+    assert 'readLanRules(' in save
+    render = functions['renderLanRules']
+    assert 'esc(' in render and 'removeLanRule(${i})' in render
+    assert HTML_WRITERS.get('renderLanRules') == 'escapes'
+    read = functions['readLanRules']
+    assert '.value' in read and 'innerHTML' not in read
+
+
+def test_policy_results_origin_and_arrows_in_the_tab():
+    """§8: the Policy section, where the scan starts from, what "another
+    segment" means, and violations / allowed paths on the map."""
+    keys = ['lan.policy.title', 'lan.policy.revision', 'lan.policy.from', 'lan.policy.other_places',
+            'lan.policy.decision.allow', 'lan.policy.decision.forbid', 'lan.policy.decision.conflict',
+            'lan.policy.decision.unknown', 'lan.origin', 'lan.external', 'lan.legend.violation',
+            'lan.legend.allowed']
+    for lang in ('ru', 'en'):
+        block = _lang_block(lang)
+        for key in keys:
+            assert f"'{key}':" in block, (lang, key)
+    functions = _functions(_script())
+    view = functions['lanHtml']
+    assert 'r.policy' in view and "t('lan.origin')" in view and "t('lan.external')" in view
+    svg = functions['lanMapSvg']
+    assert "'NET-POL-001'" in svg and 'f.from' in svg and 'f.segment' in svg
+    assert 'r.policy' in svg and "'allow'" in svg

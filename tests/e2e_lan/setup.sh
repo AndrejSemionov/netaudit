@@ -10,8 +10,10 @@
 #                without a password
 #   .40  quiet   drops every TCP and ICMP packet, answers ARP only
 #   .50  clean   OpenSSH with Debian 12 defaults
-#   .10  scanner runs lan_audit as uid 1000 with no capabilities, twice:
-#                level 1 and level 2; results in $RUNNER_TEMP/lan-stand
+#   .10  scanner runs lan_audit as uid 1000 with no capabilities, three times:
+#                level 1, level 2, and level 1 with access rules
+#                (docs/research/network_access_policy.md §11); results in
+#                $RUNNER_TEMP/lan-stand
 # Segment B, 172.30.20.0/24 ("accounting", docs/research/network_audit.md §13):
 #   .20  buh     the old server's services again (SMB, Redis...), its way back
 #                to segment A through the gateway - found through the router
@@ -61,7 +63,7 @@ WAIT
 for _ in $(seq 60); do docker exec quiet test -f /ready && break; sleep 1; done
 docker exec quiet test -f /ready
 
-for level in 1 2; do
+for level in 1 2 policy; do
   docker run --rm --name scanner --network "$NET" --ip 172.30.10.10 --cap-add NET_ADMIN \
     -v "$ROOT:/src:ro" -v "$OUT:/out" nalan-scanner sh -c \
     "ip route replace default via 172.30.10.254 \
