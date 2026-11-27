@@ -4,6 +4,16 @@ Status: **research and draft contract for USER approval** (2026-11-27). No
 production code until USER approves the contract in §12. Implementer: Claude;
 reviewer: GPT/Codex. Mode: MANUAL.
 
+Review pass 1 (GPT/Codex) returned three points, all taken in:
+
+- **R1**: an audit from another place never proves closure; it is context
+  (§2, §6.3).
+- **R2**: undo by a unique instance tag with an exact match (§5).
+- **R3**: `policy_changed` is decided from the effective decision under both
+  revisions (§6.6).
+
+The test matrix (§11) has cases for each.
+
 Source of the task: `.ai/TASK.md` "NEW USER TASK — access policy, manual
 remediation, verification" and `.ai/DECISIONS.md` 2026-11-27. USER, about
 protecting accounting:
@@ -150,18 +160,24 @@ Both are **configuration observations**. Neither can tell an allowed path
    - Before the drop rule it puts allow lines that keep the paths the
      policy allows.
    - It tells the operator to use Safe Mode and how to undo the change.
-   - It ends with: re-run the audit from the guest Wi-Fi, then once from
-     the admin PC.
-5. The operator changes the router by hand and re-runs the audit from the
-   guest Wi-Fi. 192.168.30.20 answers nothing at all.
-   - The retest view says **"not verified"**: "the device did not answer at
-     all — off, or blocked entirely".
-   - It says *not* "resolved".
-6. The auditor runs the audit from the admin PC `192.168.10.5`. 192.168.30.20
-   answers RDP there, and that path is **allowed**, so it is not a problem.
-   - The device is now proven up within the control window.
-   - The guest-side silence is filtering, so the guest→accounting items
-     become **closed**.
+   - It ends with: re-run the audit from the guest Wi-Fi, with an audit from
+     the admin PC just before and just after it.
+5. The operator changes the router by hand. The auditor runs the audit from
+   the admin PC, then from the guest Wi-Fi, then from the admin PC again.
+   - From the guest Wi-Fi, 192.168.30.20 answers nothing at all.
+   - From the admin PC it answers RDP both times, and that path is
+     **allowed**, so it is not a problem.
+6. The retest view says **"not verified — probably blocked"** for the
+   guest→accounting items. It shows both admin-side answers and their times.
+   - It does *not* say "closed". Nothing seen from the guest Wi-Fi during
+     that probe proves the server was up at that moment. It might have been
+     switched off and back on in between (review R1, §6.3).
+   - A block of the whole host can only be proven from inside the path:
+     the router's own counters or ARP table at that moment. That is phase B
+     (`network_audit.md` §9), not this contract.
+   - Had the fix blocked only SMB and RDP while the server still answered
+     another port to guests, the same guest-side probe would prove it up,
+     and the two items would be **closed**.
    - SMBv1 on that server (`NET-SMB-001`) is **not** "fixed": it is
      "not reachable from Guests". The software is unchanged until a scan
      shows otherwise.
@@ -339,10 +355,19 @@ from the observation itself, not from a static string. It has nine parts:
 5. **Steps tailored to the platform**, in two cases:
    - The router is **positively identified** as MikroTik (vendor from MNDP,
      banner or MAC, `router.version_source`). Then exact RouterOS lines with
-     the real subnets, addresses and ports, each tagged
-     `comment="netaudit:<finding-id>"`. The `allow` lines from the policy
-     come **before** the `drop` line. Text only: there is a copy button and
-     nothing ever runs.
+     the real subnets, addresses and ports. Every line of one guidance
+     carries the same **instance tag** as its whole comment:
+     `comment="netaudit-fix-<10 hex>"`.
+     - The tag is the first 10 hex characters of SHA-256 over (client,
+       finding id, vantage address, run time). It is unique per finding and
+       per run, so two devices or two runs never share one.
+     - A catalog id alone (`NET-POL-001`) or a finding id alone would be
+       shared by several fixes (review R2). The tag contains only
+       `[a-z0-9-]`, so it needs no quoting.
+
+     The `allow` lines from the policy come **before** the `drop` line, and
+     they are tagged with the same instance tag. Text only: there is a copy
+     button and nothing ever runs.
    - **Anything else**: no device-specific command. A checklist instead:
      - which subnets or addresses and which port to block;
      - which allowed paths to keep;
@@ -364,10 +389,18 @@ from the observation itself, not from a static string. It has nine parts:
      the change.
 7. **Verify**:
    - re-run the audit from the same place;
-   - then once from an allowed place, to prove the device is up (§6.3).
-8. **Undo**: remove the lines tagged `netaudit:<finding-id>`
-   (`/ip firewall filter remove [find comment~"netaudit:"]` on MikroTik);
-   generic text otherwise.
+   - for a block of the whole host, run an audit from an allowed place
+     right before and right after it. That shows "probably blocked" with its
+     limits; it is not proof (§6.3).
+8. **Undo** exactly this fix and nothing else, by its own tag, with an
+   exact match and never a pattern (review R2):
+   - first `/ip firewall filter print where comment="netaudit-fix-3f9a2c41d0"`,
+     to see the lines;
+   - then `/ip firewall filter remove [find where comment="netaudit-fix-3f9a2c41d0"]`.
+
+   Lines of other NetAudit fixes and the operator's own rules are untouched.
+   Platforms other than MikroTik get generic text: remove the rules you added
+   for this finding.
 9. **What it does not fix**: a vulnerable service stays vulnerable. A block
    reduces who can reach it; updating it is a separate finding.
 
@@ -409,7 +442,7 @@ Anything else gives `not_comparable`, with the reason:
 | `closed` | it is gone **and** the closure is proven (§6.3) |
 | `new` | present now, absent before |
 | `not_verified` | gone, but not proven. Reasons: no answer at all, timeout, nmap error, port not probed, segment cut, older report without probe detail |
-| `policy_changed` | the rule that made the item changed between the two revisions: different decision, source, destination or service. Rules compare by `id` and content. The item is judged anew, never "closed" |
+| `policy_changed` | the **effective decision** for the item changed between the two revisions (§6.6). The item is judged anew in the new audit, never "closed" |
 | `not_comparable` | §6.1 |
 
 A failed scan, a timeout, a device that vanished, lost credentials, a missing
@@ -417,21 +450,42 @@ version or incomplete collection **never** becomes `closed`.
 
 ### 6.3 What proves that an exposure is closed
 
-A previously answering path (device D, port P, seen from vantage V) is
-`closed` when the new audit from V made a **complete probe of P on D** (§4.3)
-and P did not answer. On top of that, one of these must be true:
+A previously answering path is `closed` only on evidence from **the same new
+probe from V**. The path is device D, port P, seen from vantage V. The new
+audit from V must have made a **complete probe of P on D** (§4.3), and one of
+these must be true:
 
-- **(a)** D answered on another port from V in the new audit. D is up and
-  reachable from here, so this port is blocked or stopped.
-- **(b)** P, or another port of D, answered with a reset (`conn-refused`) in
-  the new audit. D is up.
-- **(c)** A **control observation**: an audit of the same client from
-  another vantage, within the **control window** of the new audit (default
-  24 hours, either side), saw D answer.
+- **(a)** P did not answer, and a TCP connection to another port of D
+  completed from V in the same run. D was up and reachable from here during
+  this probe, so P is blocked or stopped.
+- **(b)** P itself answered with a reset (`conn-refused`). The path is
+  refused, either because the service stopped or because a router rejects
+  it with a reset. The exposure is closed either way.
+  - A reset on *another* port does not prove that D is up, because a router
+    may send resets on D's behalf. It does not count.
 
-Otherwise the item is `not_verified`, with the text: "the device did not
-answer at all — it may be switched off, or blocked entirely; run the audit
-from a place that is allowed to reach it".
+Otherwise the item is `not_verified`.
+
+**Audits from other places are context, never proof** (review R1). A device
+seen answering from an admin vantage earlier or later can have been off
+during the probe from V. The same is true if it was switched on after that
+probe while no firewall changed. Reducing a time window does not remove
+this.
+
+**Coordinated verification** gives context only. Audits of the same client
+from places allowed to reach D may have seen D answer **both before and
+after** the probe from V, each within **30 minutes** of it. Then:
+
+- the item stays `not_verified`, with the context "probably blocked —
+  answered from <vantage> at <t1> and <t2>";
+- its limit is stated: "the device could have been off during this probe;
+  only evidence from the path itself (the router's counters or ARP table,
+  phase B) would prove it";
+- it never counts as `closed` or "resolved", and never changes the verdict
+  or the score.
+
+Without such a bracket, the text is: "the device did not answer at all — it
+may be switched off, or blocked entirely".
 
 ### 6.4 Exposure versus the software itself
 
@@ -450,6 +504,35 @@ from a place that is allowed to reach it".
 - A device is identified by IP in other segments. In the own segment it is
   also identified by MAC; if the MAC differs, the state is `not_comparable`
   with the reason "another device has this address now".
+
+### 6.6 Effective decision under both revisions (review R3)
+
+Comparing only the rule that decided the old item misses changes made by
+other rules:
+
+- a more specific `allow` added under an unchanged broad `forbid`;
+- an override removed;
+- a new rule of equal specificity that makes a conflict.
+
+So every compared item is judged under **both** saved rule sets:
+
+- the old report's copy of the rules, and the new report's copy (§4.4);
+- the item is the tuple *(vantage address, device, port)*;
+- precedence is applied in full (§3.3) under each set.
+
+Each side gives an effective decision (`allow`, `forbid`, `unknown` or
+`conflict`) and the rule or rules that decided it.
+
+| Old → new decision | Comparison |
+|---|---|
+| the same, and not `conflict` | compared as usual (§6.2–6.3); if a different rule now decides it, the row says so ("now decided by r5 instead of r1") |
+| different (e.g. `forbid` → `allow`, `allow` → `forbid`, `unknown` → `forbid`) | `policy_changed` |
+| either side `conflict` | `policy_changed` |
+
+Edits to rules that do not match the tuple change nothing for it, so an
+unrelated edit does not invalidate the whole comparison. `NET-SEG-001` rows
+depend on the policy too (§3.4), so they are judged the same way. Device
+findings (`NET-SMB-001`, `NET-VULN-*`…) do not depend on the policy.
 
 ---
 
@@ -472,7 +555,8 @@ from a place that is allowed to reach it".
 - **Retest**:
   - computed from saved reports on demand, with no new table;
   - `GET /api/lan/retest?client=` returns the comparison of the newest audit
-    with its previous comparable audit, plus the control observations used.
+    with its previous comparable audit, plus the other-place audits used
+    as context.
 - **API**: `GET /api/lan/policy?client=` returns the current revision.
   `PUT /api/lan/policy` takes `{client, rules}`, validates them, saves a new
   revision and returns it. Both have the same JSON checks as
@@ -504,8 +588,8 @@ from a place that is allowed to reach it".
   - an allowed path is a grey dashed arrow;
   - unknown paths keep the current `NET-SEG-001` look.
 - **A "Retest" section**:
-  - the §6.2 table, with both timestamps and vantages, and the control
-    observation used;
+  - the §6.2 table, with both timestamps and vantages, and the
+    other-place audits shown as context ("probably blocked", never proof);
   - a short legend: "closed means proven, not verified means we could not
     see".
 - **Fixed texts**, shown once on the tab and the report:
@@ -550,7 +634,8 @@ from a place that is allowed to reach it".
   - allow-before-drop from the policy, backup, Safe Mode, verify and undo;
   - the Web copy button; CLI text; RU/EN.
 - **PR C — retest**:
-  - comparable audits, the §6.2 states and control observations;
+  - comparable audits, the §6.2 states, the effective decision under both
+    revisions (§6.6) and the "probably blocked" context;
   - exposure versus software (§6.4);
   - `/api/lan/retest`, `lan-retest`, and the Web Retest section;
   - E2E fix and retest on the stand.
@@ -577,21 +662,32 @@ Unit tests use synthetic nmap XML and reports, with a temporary database
 | 11 | forbid rule port outside `SCAN_PORTS` | probed; over the cap → `not_checked` naming it |
 | 12 | destination timed out / segment cut | `not_checked`, coverage `not_checked` |
 | 13 | port only "possible" protocol | `NET-POL-001` with `requires_manual_verification` |
-| 14 | guidance, router identified MikroTik | RouterOS lines with real subnets, allow lines first, comment tag |
+| 14 | guidance, router identified MikroTik | RouterOS lines with real subnets, allow lines first, every line with the one instance tag |
 | 15 | guidance, router unknown | no device command; checklist |
 | 16 | guidance, no allow rule for the destination | the "who still needs it" prerequisite |
-| 17 | retest: port gone, other port open | `closed` |
+| 17 | retest: port gone, other port of D open in the same run from V | `closed` |
 | 18 | retest: port now `conn-refused` | `closed` |
-| 19 | retest: device silent, no control | `not_verified` |
-| 20 | retest: device silent, control audit from another vantage within 24 h sees it | `closed` |
-| 21 | retest: control older than the window | `not_verified` |
+| 18a | retest: port silent, only *another* port `conn-refused` | `not_verified` (a router may reset on D's behalf) |
+| 19 | retest: device silent, no other audit | `not_verified` |
+| 20 | retest: device silent; an admin audit yesterday saw it; today it is switched off (R1) | `not_verified`, never `closed` |
+| 20a | retest: device off during the probe from V, switched on later; an admin audit after the probe sees it; no firewall change (R1) | `not_verified`, never `closed` |
+| 20b | retest: admin audits within 30 min before **and** after the silent probe from V both see D | `not_verified` with "probably blocked" context and its limit; verdict and score unchanged |
+| 21 | retest: an admin audit only before, or only after, or outside 30 min | `not_verified`, no "probably blocked" context |
 | 22 | retest: nmap error / timeout / port not probed | `not_verified` with the reason |
 | 23 | retest: other vantage address, same subnet | `not_comparable` |
-| 24 | retest: rule changed between revisions | `policy_changed` |
+| 24 | retest: the deciding rule changed (forbid → allow) | `policy_changed` |
+| 24a | retest: R1 (broad forbid) unchanged, a more specific allow R2 added for the path; P silent, another port open (R3) | `policy_changed`, not `closed` |
+| 24b | retest: an override allow removed, the broad forbid now decides (R3) | `policy_changed` |
+| 24c | retest: R1 unchanged, a new equal-specificity allow makes a conflict (R3) | `policy_changed` |
+| 24d | retest: an unrelated rule for another destination added | compared as usual; `closed` still possible |
+| 24e | retest: same decision, another rule now decides (a narrower forbid added) | compared as usual; the row names both rules |
 | 25 | retest: SMBv1 gone because 445 blocked | `not_reachable_from_here`, not fixed |
 | 26 | retest: an older report without `probe` | `not_verified` (older report) |
 | 27 | retest: own-segment MAC changed | `not_comparable` |
 | 28 | Web: rule text, note and guidance with `<script>` | escaped everywhere |
+| 29 | guidance for fix A and fix B (two devices, same catalog id) | different instance tags; A's undo line matches A's tag exactly and nothing of B or the operator's own rules (R2) |
+| 30 | the same finding in two runs | two different tags; each undo matches only its own run's lines |
+| 31 | undo text | exact `comment="…"` match; never `~` or a prefix pattern |
 
 **E2E on the CI stand (PR A, PR C):**
 
@@ -601,9 +697,13 @@ Unit tests use synthetic nmap XML and reports, with a temporary database
 - The test applies an `iptables -I FORWARD` drop or reject on `gw`. This
   changes the stand, never the system under test. Then it runs the audit
   again:
-  - with DROP alone, the result is `not_verified`;
-  - with a second scanner run from segment B as the control vantage, the
-    result is `closed`.
+  - Drop SMB only (`-p tcp --dport 445`): the server still answers Redis
+    6379 to segment A in the same run, so the SMB item is `closed` (§6.3 a).
+  - Drop all of 172.30.20.20: the result is `not_verified`. With scanner
+    runs from segment B right before and after, it is `not_verified` with
+    the "probably blocked" context, never `closed`.
+  - Remove the drop again with no other change, and stop the server during
+    the segment A run: the result is `not_verified` (R1).
 - The `quiet` device (drops everything) stays `not_verified`.
 
 ---
@@ -628,12 +728,16 @@ Unit tests use synthetic nmap XML and reports, with a temporary database
   - where the change belongs, the steps, which access to keep, backup and
     Safe Mode, how to verify, how to undo, what it does not fix;
   - device commands only for a positively identified platform;
+  - every line of one fix carries a unique instance tag, and undo matches
+    exactly that tag;
   - text only, nothing applied.
 - **P5. Retest** (§6):
   - comparable audits only;
   - the states `still_present`, `closed`, `new`, `not_verified`,
     `policy_changed` and `not_comparable`;
-  - `closed` only with proof (§6.3);
+  - `closed` only with proof from the same probe (§6.3); audits from other
+    places are context;
+  - `policy_changed` from the effective decision under both revisions (§6.6);
   - exposure kept apart from the software being fixed.
 - **P6. Web and CLI, RU/EN** (§7–8):
   - the rules panel, Policy and Retest sections, and map arrows;
@@ -655,7 +759,9 @@ Unit tests use synthetic nmap XML and reports, with a temporary database
 **Defaults chosen by Claude (USER may change any):**
 
 1. Order: PR A → PR B → PR C (§10).
-2. Control window for §6.3 (c): **24 hours** either side.
+2. Audits from other places are **context only** (§6.3). The "probably
+   blocked" bracket needs allowed-place audits **both before and after** the
+   probe, each within **30 minutes** of it.
 3. A tie between allow and forbid is a **conflict** (alternative: forbid
    wins).
 4. `NET-POL-001` severity is **high** for a service from
@@ -696,6 +802,6 @@ Unit tests use synthetic nmap XML and reports, with a temporary database
   segment rules. The UI starts with both.
 - Which router platforms beyond MikroTik matter most for guidance; phase B
   research would answer that.
-- Real-network behaviour of the control-vantage proof with DHCP address
-  changes. §6.1 refuses to compare across a changed address; how often that
-  blocks a retest is to be seen in the first live audit.
+- How often DHCP address changes block a retest on a real network. §6.1
+  refuses to compare across a changed address; the first live audit will
+  show it.
