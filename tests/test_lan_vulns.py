@@ -120,13 +120,25 @@ OSV_ANSWER = {'vulns': [
          'ranges': [{'type': 'ECOSYSTEM', 'events': [{'introduced': '0'}]}]}]}]}
 
 
-def test_osv_debian_counts_what_a_newer_revision_fixes(isolated_db, monkeypatch):
+def test_osv_debian_splits_fixed_and_unfixed_and_keeps_both_ids(isolated_db, monkeypatch):
+    """Review #67 R1: the records with no fixed revision keep their ids -
+    they are reported and matched against KEV like the fixed ones."""
     sent = []
     monkeypatch.setattr(lan_vulns, '_post', lambda url, body: sent.append(body) or (200, OSV_ANSWER))
     out, error = lan_vulns.osv_debian('Debian:12', 'openssh', '1:9.2p1-2+deb12u3')
     assert error is None
-    assert out == {'fixed': ['CVE-2023-51385'], 'open': 1}
+    assert out == {'fixed': ['CVE-2023-51385'], 'unfixed': ['CVE-2007-2243']}
     assert sent[0] == {'package': {'ecosystem': 'Debian:12', 'name': 'openssh'}, 'version': '1:9.2p1-2+deb12u3'}
+
+
+def test_an_unfixed_record_without_a_cve_is_kept_by_its_own_id(isolated_db, monkeypatch):
+    answer = {'vulns': [{'id': 'DLA-3694-1', 'affected': [
+        {'package': {'ecosystem': 'Debian:12', 'name': 'openssh'},
+         'ranges': [{'type': 'ECOSYSTEM', 'events': [{'introduced': '0'}]}]}]},
+        {'id': '<b>odd</b>', 'affected': []}]}
+    monkeypatch.setattr(lan_vulns, '_post', lambda url, body: (200, answer))
+    out, _error = lan_vulns.osv_debian('Debian:12', 'openssh', '1:9.2p1-2+deb12u3')
+    assert out['unfixed'] == ['DLA-3694-1', 'OSV record']        # never a raw odd id
 
 
 def test_lookup_paces_nvd_and_caps_it(isolated_db, monkeypatch):
@@ -168,7 +180,8 @@ LOOKED_UP = {
                   {'id': 'CVE-2023-4504', 'score': 7.8, 'severity': 'high', 'summary': 's'},
                   {'id': 'CVE-2022-0001', 'score': 4.0, 'severity': 'medium', 'summary': 's'}], 'error': None},
         {'ip': '192.168.88.40', 'port': 22, 'kind': 'osv', 'ecosystem': 'Debian:12', 'package': 'openssh',
-         'version': '1:9.2p1-2+deb12u3', 'fixed': ['CVE-2023-51385'], 'open': 1, 'error': None}],
+         'version': '1:9.2p1-2+deb12u3', 'fixed': ['CVE-2023-51385'], 'unfixed': ['CVE-2007-2243'],
+         'error': None}],
     'router': {'version': '6.49.7', 'cves': [{'id': 'CVE-2023-30799', 'score': 9.1, 'severity': 'critical',
                                               'summary': 'admin to super-admin'}], 'error': None},
     'kev': {'CVE-2024-47176': {'added': '2024-10-01', 'ransomware': False},
@@ -198,10 +211,10 @@ def test_findings_from_the_lookups():
     assert deb['severity'] == 'medium' and 'CVE-2023-51385' in deb['detail'] and 'Debian:12' in deb['detail']
     rtr = by_id['RTR-VULN-001:CVE-2023-30799']
     assert rtr['severity'] == 'critical' and 'ransomware' in rtr['detail']
-    assert 'known_vulns' not in res['limits']
+    assert 'known_vulns' not in res['limits'] and 'vuln_versions' in res['limits']
     item = next(c for c in res['checked'] if c['item'] == 'known_vulns')
-    # the audit counts the services nmap read no version of (here 9100 on the printer)
-    assert item['status'] == 'ok' and '1 services without a version' in item['detail']
+    # 9100 on the printer has no version nmap read: not looked up - a gap that names it (review #67 R2)
+    assert item['status'] == 'not_checked' and '192.168.88.31:9100' in item['detail']
     assert any('NVD' in n['notice'] for n in res['notices'])
 
 
@@ -251,7 +264,8 @@ def test_the_check_can_turn_the_lookups_off(monkeypatch, tmp_path):
     off = lan_audit.check_lan_audit(authorization=lan_audit.AUTH_CONFIRM, vuln_lookup='no')
     assert asked == [] and 'known_vulns' in off['limits']
     on = lan_audit.check_lan_audit(authorization=lan_audit.AUTH_CONFIRM)
-    assert asked == [1] and 'known_vulns' not in on['limits']
+    assert asked == [1] and 'known_vulns' not in on['limits'] and 'vuln_versions' in on['limits']
+    assert 'vuln_versions' not in off['limits']
 
 
 def test_the_param_is_registered_with_lookups_on_by_default():
@@ -270,3 +284,67 @@ def test_what_leaves_the_network_is_products_and_versions_only(isolated_db, monk
                       {'ip': '192.168.88.40', 'port': 22, 'kind': 'osv', 'ecosystem': 'Debian:12',
                        'package': 'openssh', 'version': '1:9.2p1-2+deb12u3'}], router_version='6.49.7')
     assert sent and '192.168.88' not in json.dumps(sent)
+
+
+# ---------------------------------------------------------------------------
+# review #67 pass 1
+# ---------------------------------------------------------------------------
+
+def _osv(fixed, unfixed, kev=None):
+    return {**LOOKED_UP, 'services': [{**LOOKED_UP['services'][1], 'fixed': fixed, 'unfixed': unfixed}],
+            'router': None, 'kev': kev or {}}
+
+
+def _item(res):
+    return next(c for c in res['checked'] if c['item'] == 'known_vulns')
+
+
+def test_unfixed_debian_vulnerabilities_are_reported_on_their_own():
+    """R1: OSV says openssh 1:9.2p1-2+deb12u3 is affected and Debian has no
+    fixed revision yet: never a silent "1 package checked"."""
+    res = build(ports=_ports_with(SSH_HOST), vulns=_vulns_fake(_osv([], ['CVE-2023-48795'])))
+    by_id = {f['id']: f for f in res['findings'] if 'id' in f}
+    assert 'NET-VULN-002:192.168.88.40:22' not in by_id                # nothing apt upgrade fixes
+    f = by_id['NET-VULN-003:192.168.88.40:22']
+    assert f['severity'] == 'low' and f['requires_manual_verification'] and f['confidence'] == 'medium'
+    assert 'CVE-2023-48795' in f['detail'] and 'openssh' in f['detail']
+
+
+def test_an_unfixed_vulnerability_in_kev_is_high():
+    kev = {'CVE-2023-48795': {'added': '2025-01-01', 'ransomware': False}}
+    res = build(ports=_ports_with(SSH_HOST), vulns=_vulns_fake(_osv([], ['CVE-2023-48795'], kev)))
+    f = next(f for f in res['findings'] if f.get('id') == 'NET-VULN-003:192.168.88.40:22')
+    assert f['severity'] == 'high' and 'CISA' in f['detail']
+
+
+def test_fixed_and_unfixed_are_two_findings():
+    res = build(ports=_ports_with(SSH_HOST),
+                vulns=_vulns_fake(_osv(['CVE-2023-51385'], ['CVE-2007-2243'])))
+    found = {f['id'] for f in res['findings'] if 'id' in f}
+    assert {'NET-VULN-002:192.168.88.40:22', 'NET-VULN-003:192.168.88.40:22'} <= found
+    item = _item(res)
+    assert item['status'] == 'ok' and '1 without a fix' in item['detail']
+
+
+def test_a_skipped_version_is_a_gap_not_ok():
+    """R2: an Ubuntu banner is named and not looked up - the lookups did not
+    cover it, so the item is not "ok"."""
+    ubuntu = host('192.168.88.41', port(22, 'ssh', product='OpenSSH', version='8.9p1 Ubuntu 3ubuntu0.6',
+                                        cpe='cpe:/a:openbsd:openssh:8.9p1'))
+    skipped = {**LOOKED_UP, 'services': [], 'router': None,
+               'skipped': ['192.168.88.41:22: Ubuntu backports fixes: not looked up']}
+    item = _item(build(ports=_ports_with(ubuntu), vulns=_vulns_fake(skipped)))
+    assert item['status'] == 'not_checked' and '192.168.88.41:22' in item['detail']
+
+
+def test_only_versionless_services_are_a_gap_not_ok():
+    nover = host('192.168.88.42', port(80, 'http', product='nginx'))
+    empty = {**LOOKED_UP, 'services': [], 'router': None}
+    item = _item(build(ports=_ports_with(nover), vulns=_vulns_fake(empty)))
+    assert item['status'] == 'not_checked' and '192.168.88.42:80' in item['detail']
+
+
+def test_a_genuinely_checked_empty_lookup_is_ok():
+    """The control of the review: every service looked up, nothing found."""
+    item = _item(build(ports=_ports_with(SSH_HOST), vulns=_vulns_fake(_osv([], []))))
+    assert item['status'] == 'ok'

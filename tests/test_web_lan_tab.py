@@ -19,14 +19,14 @@ CATALOGUE = (Path(__file__).resolve().parents[1] / 'docs' / 'checks' / 'finding_
 CONTROLS = re.findall(r'^\| ((?:NET|RTR)-[A-Z]+-\d{3}) \|', CATALOGUE, re.MULTILINE)
 ITEMS = ('discovery', 'range', 'neighbours', 'services', 'broadcast', 'mndp', 'llmnr', 'router', 'router_support',
          'level2')
-LIMITS = ('udp', 'os_detection', 'other_subnets', 'known_vulns', 'level2')
+LIMITS = ('udp', 'os_detection', 'other_subnets', 'known_vulns', 'vuln_versions', 'level2')
 KINDS = ('router', 'this_machine', 'windows', 'printer', 'camera', 'nas', 'server', 'phone', 'network', 'unknown')
 NEXT = ('router_ssh', 'saved_hosts', 'level2', 'other_vantage')
 VERDICTS = ('ok', 'warn', 'danger', 'incomplete', 'not_started')
 
 
 def test_every_catalogued_control_is_read_by_the_tab():
-    assert len(CONTROLS) == 23       # PR 1: 18, PR 2: NET-SEG-001/002, PR 3: NET-VULN-001/002, RTR-VULN-001
+    assert len(CONTROLS) == 24       # PR 1: 18, PR 2: NET-SEG-001/002, PR 3: NET-VULN-001/002/003, RTR-VULN-001
 
 
 def test_tab_button_and_page():
