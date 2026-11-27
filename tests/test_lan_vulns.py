@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from netaudit_pkg import lan, lan_vulns
+from netaudit_pkg import lan, lan_vulns, storage
 from netaudit_pkg.checks import lan_audit
 from tests.test_lan_audit import (
     GATEWAY,
@@ -139,6 +139,44 @@ def test_an_unfixed_record_without_a_cve_is_kept_by_its_own_id(isolated_db, monk
     monkeypatch.setattr(lan_vulns, '_post', lambda url, body: (200, answer))
     out, _error = lan_vulns.osv_debian('Debian:12', 'openssh', '1:9.2p1-2+deb12u3')
     assert out['unfixed'] == ['DLA-3694-1', 'OSV record']        # never a raw odd id
+
+
+def _release_record(rid, fixed_in):
+    """One OSV record for openssh in Debian 11, 12 and 13; fixed_in maps a
+    release to the revision that fixes it there (none: not fixed yet)."""
+    return {'id': rid, 'aliases': [rid.removeprefix('DEBIAN-')], 'affected': [
+        {'package': {'ecosystem': eco, 'name': 'openssh'},
+         'ranges': [{'type': 'ECOSYSTEM', 'events': [{'introduced': '0'}]
+                     + ([{'fixed': fixed_in[eco]}] if eco in fixed_in else [])}]}
+        for eco in ('Debian:11', 'Debian:12', 'Debian:13')]}
+
+
+def test_a_fix_in_another_debian_release_does_not_make_it_fixed(isolated_db, monkeypatch):
+    """Review #67 R3: OSV answers with whole records, one affected entry per
+    release - a revision that fixes it in Debian 13 does not fix Debian 12."""
+    answer = {'vulns': [_release_record('DEBIAN-CVE-2099-12345', {'Debian:13': '1:10.0p1-1'})]}
+    monkeypatch.setattr(lan_vulns, '_post', lambda url, body: (200, answer))
+    out, error = lan_vulns.osv_debian('Debian:12', 'openssh', '1:9.2p1-2+deb12u3')
+    assert error is None
+    assert out == {'fixed': [], 'unfixed': ['CVE-2099-12345']}
+
+
+def test_a_fix_in_the_queried_release_is_fixed_whatever_the_others_say(isolated_db, monkeypatch):
+    answer = {'vulns': [_release_record('DEBIAN-CVE-2099-12346', {'Debian:12': '1:9.2p1-2+deb12u4'}),
+                        _release_record('DEBIAN-CVE-2099-12347', {'Debian:11': '1:8.4p1-5+deb11u4',
+                                                                  'Debian:12': '1:9.2p1-2+deb12u5'})]}
+    monkeypatch.setattr(lan_vulns, '_post', lambda url, body: (200, answer))
+    out, _error = lan_vulns.osv_debian('Debian:12', 'openssh', '1:9.2p1-2+deb12u3')
+    assert out == {'fixed': ['CVE-2099-12346', 'CVE-2099-12347'], 'unfixed': []}
+
+
+def test_an_answer_cached_before_the_release_check_is_not_reused(isolated_db, monkeypatch):
+    """The osvdeb2 entries were split without looking at the release."""
+    storage.cve_set('osvdeb2::Debian:12::openssh::1:9.2p1-2+deb12u3', {'fixed': ['CVE-2099-12345'], 'unfixed': []})
+    answer = {'vulns': [_release_record('DEBIAN-CVE-2099-12345', {'Debian:13': '1:10.0p1-1'})]}
+    monkeypatch.setattr(lan_vulns, '_post', lambda url, body: (200, answer))
+    out, _error = lan_vulns.osv_debian('Debian:12', 'openssh', '1:9.2p1-2+deb12u3')
+    assert out == {'fixed': [], 'unfixed': ['CVE-2099-12345']}
 
 
 def test_lookup_paces_nvd_and_caps_it(isolated_db, monkeypatch):
