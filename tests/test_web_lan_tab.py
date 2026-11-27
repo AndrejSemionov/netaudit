@@ -168,4 +168,3 @@ def test_known_vulnerabilities_and_data_notices_in_the_tab():
             assert f"'{key}':" in block, (lang, key)
     view = _functions(_script())['lanHtml']
     assert 'r.notices' in view and '.notice' in view
-

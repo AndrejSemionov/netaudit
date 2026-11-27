@@ -483,7 +483,10 @@ approved contract:
   `_ldap._tcp.dc._msdcs.<domain>` SRV records give the domain controllers;
   a controller in a private range is a device (`domain_controller`) and its
   /24 a candidate. Only the client's DNS server is asked. No `dig` or no
-  domain: a limit, not a gap.
+  domain: a limit, not a gap. A failed lookup - `dig` exits non-zero or
+  prints `;;` errors, for the SRV record or for a controller's address - is
+  a gap naming the controller, never "no private controller"; the
+  controllers that were found are kept beside it (review #66 R2).
 - **Traceroute (§5.3)** is not done: an unprivileged TCP traceroute is not
   possible (TTL-exceeded replies need raw sockets); listed as a limit.
 - **Segments (N6)**: one per subnet - the auditor's own (marked as the
@@ -503,9 +506,16 @@ approved contract:
 - **Second vantage point**: the tab merges this client's audits from
   different places (the latest per vantage subnet): segments by subnet,
   "seen from" for each, findings together.
-- **Router interfaces**: the gateway address of a found subnet is taken as
-  an interface of a router (kind `router`); it gets no device findings of
-  its own, the router's are judged on the vantage gateway.
+- **The gateway there is a device** (review #66 R1): the `.1`/`.254` that
+  answered the probe proves only that it answered - an ordinary server may
+  hold `.1` while the router is `.254`, and from another subnet there is no
+  MAC to tell the same router's other interface from a distinct one. So it
+  is shown as the segment's gateway but judged as any device: its kind from
+  its own answers (a router-looking one is `network`), the device rules,
+  the isolation check, a place on the map. Only the vantage gateway (the
+  route table) is the router with the `RTR-*` checks; router-only services
+  (WinBox, the API, btest) of another segment's gateway are not judged - a
+  limit. The segment's name is not suggested from its gateway.
 - E2E: a second Docker network (segment B) behind the fake MikroTik
   gateway, which forwards between the two; an SMB host in B must be found
   through the gateway and give `NET-SEG-001`.
