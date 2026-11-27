@@ -196,7 +196,7 @@ def test_access_rules_panel_in_the_tab():
     assert "fetch('/api/lan/policy'" in save and "method: 'PUT'" in save and 'innerHTML' not in save
     assert 'readLanRules(' in save
     render = functions['renderLanRules']
-    assert 'esc(' in render and 'removeLanRule(${i})' in render
+    assert 'rules = escDeep(rules);' in render and 'removeLanRule(${i})' in render
     assert HTML_WRITERS.get('renderLanRules') == 'escapes'
     read = functions['readLanRules']
     assert '.value' in read and 'innerHTML' not in read

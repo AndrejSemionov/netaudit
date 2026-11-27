@@ -255,6 +255,14 @@ def ports_command(hosts: list[str], interface: str, level2: bool) -> list[str]:
             '--script', ','.join(scripts), *args, '-oX', '-', *hosts]
 
 
+def extra_ports_command(hosts: list[str], ports: list[int], interface: str) -> list[str]:
+    """The same gentle TCP connect scan on the ports a forbid rule names
+    that SCAN_PORTS lacks - no scripts (docs/research/network_access_policy.md §3.5)."""
+    return ['nmap', '-sT', '-Pn', '-sV', '--version-light', '-T3', '--max-rate', MAX_RATE,
+            '--host-timeout', HOST_TIMEOUT, '-e', interface, '-p', ','.join(map(str, sorted(ports))),
+            '-oX', '-', *hosts]
+
+
 def broadcast_command(interface: str) -> list[str]:
     return ['nmap', '-sn', '-n', '-e', interface, '--script', ','.join(BROADCAST_SCRIPTS), '-oX', '-']
 
@@ -289,6 +297,21 @@ def _scripts(parent) -> dict:
 _NMAP_DOCTYPE = '<!DOCTYPE nmaprun>'
 
 
+_NOT_OPEN = {'closed': 'closed', 'filtered': 'filtered', 'open|filtered': 'filtered', 'closed|filtered': 'filtered'}
+
+
+def _port_list(text: str) -> list[int]:
+    """'1-21,23-32' -> the numbers; anything odd is skipped."""
+    out = []
+    for part in text.split(','):
+        lo, _, hi = part.strip().partition('-')
+        if lo.isdigit() and (not hi or hi.isdigit()):
+            first, last = int(lo), int(hi or lo)
+            if 0 < first <= last <= 65535 and last - first < 65536:
+                out += range(first, last + 1)
+    return out
+
+
 def parse_nmap_xml(text: str) -> dict:
     """{'hosts': [...], 'prescripts': {id: {'output', 'data'}}, 'error': str|None}.
     Broken or cut output is an error, never an empty network."""
@@ -308,7 +331,7 @@ def parse_nmap_xml(text: str) -> dict:
         rec = {'ip': None, 'mac': None, 'mac_vendor': None, 'timedout': h.get('timedout') == 'true',
                'state': status.get('state') if status is not None else None,
                'reason': status.get('reason') if status is not None else None, 'hostnames': [], 'ports': [],
-               'hostscripts': _scripts(h.find('hostscript'))}
+               'closed': [], 'filtered': [], 'hostscripts': _scripts(h.find('hostscript'))}
         for a in h.findall('address'):
             if a.get('addrtype') == 'ipv4':
                 rec['ip'] = a.get('addr')
@@ -316,8 +339,18 @@ def parse_nmap_xml(text: str) -> dict:
                 rec['mac'] = (a.get('addr') or '').lower() or None
                 rec['mac_vendor'] = a.get('vendor')
         rec['hostnames'] = [n.get('name') for n in h.findall('hostnames/hostname') if n.get('name')]
+        # ports that did not answer open: a reset (closed) or no answer
+        # (filtered), listed or folded into <extraports> with their numbers
+        # (docs/research/network_access_policy.md §4.3)
+        for extra in h.findall('ports/extraports'):
+            kind = _NOT_OPEN.get(extra.get('state', ''))
+            for reasons in extra.findall('extrareasons'):
+                if kind:
+                    rec[kind] += _port_list(reasons.get('ports', ''))
         for p in h.findall('ports/port'):
             state = p.find('state')
+            if state is not None and _NOT_OPEN.get(state.get('state', '')):
+                rec[_NOT_OPEN[state.get('state')]].append(int(p.get('portid', '0')))
             if state is None or state.get('state') != 'open':
                 continue
             svc = p.find('service')
@@ -333,6 +366,7 @@ def parse_nmap_xml(text: str) -> dict:
                 'tunnel': s.get('tunnel', ''), 'method': s.get('method', ''), 'conf': conf,
                 'cpe': [c.text for c in (svc.findall('cpe') if svc is not None else []) if c.text],
                 'scripts': _scripts(p)})
+        rec['closed'], rec['filtered'] = sorted(set(rec['closed'])), sorted(set(rec['filtered']))
         if rec['ip']:
             hosts.append(rec)
     finished = root.find('runstats/finished')

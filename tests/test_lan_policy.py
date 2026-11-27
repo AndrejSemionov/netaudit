@@ -155,7 +155,7 @@ def test_the_destination_counts_first():
 
 
 def test_a_longer_prefix_is_more_specific():
-    rules = [R('r1', OWN, '192.168.0.0/16', 'any', 'forbid'), R('r2', OWN, BUH, 'any', 'allow')]
+    rules = [R('r1', OWN, '192.168.0.0/16', 'any', 'forbid'), R('r2', OWN, BUH, 'any', 'allow', 'staff work')]
     assert judge(rules, ME, '192.168.30.5', 445)['decision'] == 'allow'
 
 

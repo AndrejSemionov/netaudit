@@ -26,7 +26,7 @@ import re
 import threading
 from datetime import UTC, date, datetime
 
-from .. import lan, lan_vulns, laravel_data, webprobe
+from .. import lan, lan_policy, lan_vulns, laravel_data, webprobe
 from ..findings import finding as _finding
 from ..findings import subject_id
 from ..registry import register
@@ -74,6 +74,19 @@ def _labels(client: str) -> dict:
         return storage.lan_segment_labels(client)
     except Exception:  # noqa: BLE001 - labels only name segments; the audit goes on without them
         return {}
+
+
+def _policy(client: str) -> dict:
+    """The client's current access rules (storage.lan_policy_get). Unlike
+    labels, unreadable rules are a gap, never "no rules": a forbidden path
+    would go unjudged (docs/research/network_access_policy.md §4.2)."""
+    from .. import storage
+    try:
+        current = storage.lan_policy_get(client)
+        rules = lan_policy.validate(current['rules'])
+    except Exception as e:  # noqa: BLE001 - any failure to read the rules is reported as a gap
+        return {'revision': None, 'rules': [], 'error': f'the access rules could not be read ({type(e).__name__})'}
+    return {'revision': current['revision'], 'rules': rules, 'error': None}
 
 
 # ---- devices ----------------------------------------------------------------
@@ -171,6 +184,7 @@ def _devices(vantage, nets, discovery, neighbours, ports, broadcast, heard, vend
                          else 'neighbour' if ip in neighbours else 'dns' if ip in controllers else 'announced'),
             'announced': info, 'segment': str(_net_of(nets, ip)),
             '_ports': host.get('ports', []), '_hostscripts': host.get('hostscripts', {}),
+            '_closed': scanned.get(ip, {}).get('closed', []), '_filtered': scanned.get(ip, {}).get('filtered', []),
             '_scanned': ip in scanned, '_timedout': bool(scanned.get(ip, {}).get('timedout')),
         })
     return devices
@@ -577,9 +591,11 @@ def _segments(scanned: str, vantage: dict, search: dict | None, devices: list[di
     return segs
 
 
-def _isolation(segments: list[dict], devices: list[dict], findings: list):
+def _isolation(segments: list[dict], devices: list[dict], findings: list, judged: frozenset = frozenset()):
     """NET-SEG-001: a sensitive service of another segment answers from the
-    vantage segment - one finding per (segment, port), the devices listed."""
+    vantage segment - one finding per (segment, port), the devices listed.
+    A (device, port) an access rule decides is judged by the rule instead
+    (`judged`, docs/research/network_access_policy.md §3.4)."""
     own = next(s for s in segments if s['own'])
     by_ip = {d['ip']: d for d in devices}
     for s in segments:
@@ -591,6 +607,8 @@ def _isolation(segments: list[dict], devices: list[dict], findings: list):
             if d['kind'] in ('router', 'this_machine'):
                 continue                # router management is the router's own finding
             for p in d['_ports']:
+                if (ip, p['port']) in judged:
+                    continue
                 if p['port'] in SENSITIVE_SERVICES and _protocol(p, *SENSITIVE_SERVICES[p['port']][1:]) != 'other':
                     reach.setdefault(p['port'], []).append(ip)
         where = f"{s['name']} ({s['cidr']})" if s['name'] else s['cidr']
@@ -622,6 +640,154 @@ def _flat_network(search: dict | None, devices: list[dict], scanned: str, findin
                                  f"{scanned} with {', '.join(sorted(loose))} - one infected device reaches all "
                                  'of them (other subnets may exist but be filtered)',
                                  'medium', id='NET-SEG-002'))
+
+
+# ---- the owner's access rules (docs/research/network_access_policy.md §3-4) ----
+
+_EMPTY_PROBE = {'ports': [], 'open': [], 'closed': [], 'filtered': [], 'complete': False}
+
+
+def _probe(d: dict, ports_error: str | None, extra: dict) -> dict:
+    """What the port scan covered on one device (§4.3): the ports probed, how
+    each answered, and whether the probe of this device is complete."""
+    if d['kind'] == 'this_machine' or not d['_scanned']:
+        return dict(_EMPTY_PROBE)
+    failed = d['ip'] in extra.get('failed', ())
+    probed = set(lan.SCAN_PORTS) | (set() if failed else set(extra.get('hosts', {}).get(d['ip'], ())))
+    return {'ports': sorted(probed), 'open': sorted({p['port'] for p in d['_ports']} & probed),
+            'closed': sorted(set(d['_closed']) & probed), 'filtered': sorted(set(d['_filtered']) & probed),
+            'complete': not ports_error and not d['_timedout'] and not failed}
+
+
+def _why_incomplete(d: dict, ports_error: str | None, extra: dict) -> str:
+    if not d['_scanned']:
+        return 'not port-scanned (it answered only by ARP, DNS or its announcement)'
+    if ports_error:
+        return f'the port scan failed: {ports_error}'
+    if d['_timedout']:
+        return 'the port scan timed out on it'
+    return f"the probe of the rules' extra ports failed: {extra.get('error') or 'no answer'}"
+
+
+def _policy_check(policy: dict | None, vantage: dict, devices: list[dict], segments: list[dict],
+                  ports_error: str | None, extra: dict, findings: list, checked: list,
+                  limits: list) -> tuple[dict | None, frozenset]:
+    """Judge every open port of every device by the rules that apply from
+    this machine's address: NET-POL-001 (forbidden, it answers), NET-POL-002
+    (equal rules disagree). Returns the result's 'policy' block and the
+    (device, port) pairs a rule decided."""
+    if policy is None:
+        limits.append('access_policy')
+        return None, frozenset()
+    source = vantage['address']
+    block = {'revision': policy.get('revision'), 'source': source, 'rules': list(policy.get('rules') or []),
+             'applicable': [], 'paths': [], 'gaps': [], 'not_observed': {}}
+    if policy.get('error'):
+        block['gaps'] = [policy['error']]
+        checked.append({'item': 'access_policy', 'status': 'not_checked', 'detail': policy['error']})
+        return block, frozenset()
+    if not block['rules']:
+        limits.append('access_policy')
+        return block, frozenset()
+    applicable = [r for r in block['rules'] if lan_policy.applies_from(r, source)]
+    block['applicable'] = [r['id'] for r in applicable]
+    if not applicable:
+        limits.append('access_policy_here')
+        return block, frozenset()
+
+    by_id = {r['id']: r for r in applicable}
+    sensitive_segments = {s['cidr'] for s in segments if s.get('sensitive')}
+    own = next(s for s in segments if s['own'])
+    judged, problems = set(), 0
+    for d in devices:
+        if d['kind'] == 'this_machine':
+            continue
+        for p in sorted(d['_ports'], key=lambda x: x['port']):
+            number = p['port']
+            verdict = lan_policy.evaluate(applicable, source, d['ip'], number)
+            label = SENSITIVE_SERVICES[number][0] if number in SENSITIVE_SERVICES else f'TCP {number}'
+            evidence = (_protocol(p, *SENSITIVE_SERVICES[number][1:]) if number in SENSITIVE_SERVICES else 'open')
+            block['paths'].append({'source': source, 'destination': d['ip'], 'port': number, 'service': label,
+                                   'decision': verdict['decision'], 'rules': verdict['rules'],
+                                   'evidence': evidence, 'segment': d['segment']})
+            if verdict['decision'] == 'unknown':
+                continue
+            judged.add((d['ip'], number))
+            where = f"{d['ip']} ({d['segment']})"
+            if verdict['decision'] == 'conflict':
+                problems += 1
+                said = ', '.join(f"{rid} ({by_id[rid]['decision']})" for rid in verdict['rules'])
+                findings.append(_finding(
+                    'medium', 'two access rules disagree about a service that answers',
+                    f'from {source} to {where}: {label} port {number} answers, and rules {said} are equally '
+                    'specific and disagree - make one of them more specific or remove one',
+                    id=subject_id('NET-POL-002', source, d['ip'], number),
+                    extra={'device': d['ip'], 'segment': d['segment'], 'from': own['cidr'],
+                           'rules': verdict['rules'], 'policy_revision': block['revision']}))
+                continue
+            if verdict['decision'] != 'forbid':
+                continue
+            problems += 1
+            rule = by_id[verdict['rules'][0]]
+            note = ''
+            if evidence == 'possible':
+                note = f' nmap did not identify the service on port {number} from its answer - to verify.'
+            elif evidence == 'other':
+                note = f' The port answers, but not as {label} - check what listens there.'
+            detail = (f"from {source} ({own['cidr']}, where this machine is) to {where}: {label} port {number} "
+                      f"answers; rule {rule['id']} forbids {rule['source']} -> {rule['destination']} "
+                      f"{rule['service']}. This shows access to the service, not a login.{note}")
+            fid = subject_id('NET-POL-001', source, d['ip'], number)
+            fields = {'device': d['ip'], 'segment': d['segment'], 'from': own['cidr'], 'rule': rule['id'],
+                      'policy_revision': block['revision']}
+            manual = evidence in ('possible', 'other')
+            confidence = 'medium' if manual else 'high'
+            title = f'{label} answers from here although the access rules forbid it'
+            if number in SENSITIVE_SERVICES or d['segment'] in sensitive_segments:
+                findings.append(_finding('high', title, detail, confidence, id=fid, extra=fields,
+                                         requires_manual_verification=manual))
+            else:
+                findings.append(_finding('medium', title, detail, confidence, id=fid, extra=fields,
+                                         requires_manual_verification=manual))
+
+    # what the forbid rules could not see (§4.2): a gap names it
+    gaps: list[str] = []
+    cut = set(extra.get('cut', ()))
+    for rule in applicable:
+        if rule['decision'] != 'forbid':
+            continue
+        inside = [d for d in devices if d['kind'] != 'this_machine' and lan_policy.destination_contains(rule, d['ip'])]
+        if not inside:
+            gaps.append(f"rule {rule['id']}: no device of {rule['destination']} answered - nothing there was probed")
+            continue
+        wanted = lan_policy.rule_ports(rule)
+        over = sorted(set(wanted or ()) & cut)
+        if over:
+            gaps.append(f"rule {rule['id']}: port {', '.join(map(str, over))} not probed "
+                        f'(at most {lan_policy.MAX_EXTRA_PORTS} extra ports a run)')
+        silent = 0
+        for d in inside:
+            probe = d['probe']
+            if not probe['complete']:
+                gaps.append(f"rule {rule['id']}: {d['ip']}: {_why_incomplete(d, ports_error, extra)}")
+                continue
+            missing = [n for n in (wanted or ()) if n not in probe['ports'] and n not in cut]
+            if missing:
+                gaps.append(f"rule {rule['id']}: {d['ip']}: port {', '.join(map(str, missing))} not probed")
+            silent += len([n for n in (wanted or probe['ports']) if n in probe['ports'] and n not in probe['open']])
+        block['not_observed'][rule['id']] = silent
+    block['gaps'] = gaps
+    if gaps:
+        checked.append({'item': 'access_policy', 'status': 'not_checked', 'detail': _listed(gaps)})
+    elif problems:
+        checked.append({'item': 'access_policy', 'status': 'problem',
+                        'detail': f'{problems} answering services break the {len(applicable)} rules that apply '
+                                  f'from {source}'})
+    else:
+        checked.append({'item': 'access_policy', 'status': 'ok',
+                        'detail': f'{len(applicable)} rules judged from {source}: no forbidden service answered '
+                                  f"({sum(block['not_observed'].values())} forbidden ports probed, no answer)"})
+    return block, frozenset(judged)
 
 
 # ---- known vulnerabilities by version (research §7.2, §14) ------------------------
@@ -756,7 +922,8 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
                  neighbours: dict, ports: dict, broadcast: dict, heard: dict, level2: bool, support,
                  vendors: dict, neighbour_error: str | None = None, subnet_search: dict | None = None,
                  remote_discovery: dict | None = None, labels: dict | None = None,
-                 dcs: dict | None = None, vulns=None) -> dict:
+                 dcs: dict | None = None, vulns=None, policy: dict | None = None,
+                 extra: dict | None = None) -> dict:
     net = ipaddress.ip_network(scanned)
     found = (subnet_search or {}).get('found', [])
     nets = [net] + [ipaddress.ip_network(f['cidr']) for f in found]
@@ -951,7 +1118,16 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
     if vulns is not None:
         _known_vulns(devices, router, vulns, findings, checked)
     segments = _segments(scanned, vantage, subnet_search, devices, labels or {})
-    _isolation(segments, devices, findings)
+    extra = dict(extra or {'ports': [], 'cut': [], 'error': None})
+    if 'hosts' not in extra:
+        extra['hosts'] = lan_policy.extra_targets((policy or {}).get('rules') or [], vantage['address'],
+                                                  [d['ip'] for d in devices], extra.get('ports', ()))
+    for d in devices:
+        d['probe'] = _probe(d, ports.get('error'), extra)
+    policy_limits: list = []
+    policy_block, judged = _policy_check(policy, vantage, devices, segments, ports.get('error'), extra, findings,
+                                         checked, policy_limits)
+    _isolation(segments, devices, findings, judged)
     _flat_network(subnet_search, devices, scanned, findings)
 
     for d in devices:
@@ -959,7 +1135,7 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
         d['ports'] = [{'port': p['port'], 'service': p['service'], 'product': p['product'],
                        'version': p['version'], 'tunnel': p['tunnel'], 'guessed': p['method'] == 'table'}
                       for p in sorted(d.pop('_ports'), key=lambda p: p['port'])]
-        for key in ('_hostscripts', '_scanned', '_timedout'):
+        for key in ('_hostscripts', '_scanned', '_timedout', '_closed', '_filtered'):
             d.pop(key)
 
     next_steps = []
@@ -984,11 +1160,41 @@ def build_result(*, client: str, vantage: dict, scanned: str, note: str | None, 
                                if subnet_search is not None else list(LIMITS))
                    if not (x == 'known_vulns' and vulns is not None)]
                   # looked up: what matching by version cannot see stays a limit (review #67 R2)
-                  + (['vuln_versions'] if vulns is not None else []) + ([] if level2 else ['level2']),
+                  + (['vuln_versions'] if vulns is not None else []) + ([] if level2 else ['level2'])
+                  + policy_limits,
+        'policy': policy_block,
         'notices': lan_vulns.NOTICES if vulns is not None else [],
         'score': webprobe.score(findings, checked), 'verdict': webprobe.verdict(findings, checked),
         'summary': webprobe.summary(findings), 'next_steps': next_steps,
     }
+
+
+def _probe_extra(ports: dict, extra: dict, interface: str) -> None:
+    """Probe each host on its rules' extra ports, one nmap run per set of
+    ports, and fold the answers into the main port scan's hosts."""
+    groups: dict[tuple, list[str]] = {}
+    for ip, numbers in extra['hosts'].items():
+        groups.setdefault(tuple(numbers), []).append(ip)
+    main = {h['ip']: h for h in ports['hosts']}
+    for numbers, hosts in groups.items():
+        got = _nmap(lan.extra_ports_command(hosts, list(numbers), interface), PORTS_TIMEOUT)
+        if got.get('error'):
+            extra['error'] = got['error']
+            extra['failed'] += hosts
+            continue
+        for rec in got['hosts']:
+            if rec['ip'] not in hosts:
+                continue
+            into = main.get(rec['ip'])
+            if into is None:
+                ports['hosts'].append(rec)
+                continue
+            into['ports'] += rec['ports']
+            into['closed'] = sorted(set(into.get('closed', [])) | set(rec['closed']))
+            into['filtered'] = sorted(set(into.get('filtered', [])) | set(rec['filtered']))
+            into['timedout'] = into.get('timedout') or rec.get('timedout')
+        answered = {rec['ip'] for rec in got['hosts']}
+        extra['failed'] += [ip for ip in hosts if ip not in answered]
 
 
 def _nmap(cmd: list[str], timeout: int) -> dict:
@@ -1075,6 +1281,14 @@ def check_lan_audit(client: str = '', authorization: str = 'no', level2: str = '
     targets += sorted((ip for ip in remote_up if _net_of(swept_nets, ip) is not None), key=_ip_key)
     ports = (_nmap(lan.ports_command(targets, vantage['interface'], level2_on), PORTS_TIMEOUT) if targets
              else {'hosts': [], 'prescripts': {}, 'error': None})
+    # the ports a forbid rule names that SCAN_PORTS lacks, on that rule's
+    # destinations only (docs/research/network_access_policy.md §3.5)
+    policy = _policy(client)
+    extra_list, extra_cut = lan_policy.extra_ports(policy['rules'], vantage['address'], lan.SCAN_PORTS)
+    extra = {'ports': extra_list, 'cut': extra_cut, 'error': None, 'failed': [],
+             'hosts': lan_policy.extra_targets(policy['rules'], vantage['address'], targets, extra_list)}
+    if not ports.get('error'):
+        _probe_extra(ports, extra, vantage['interface'])
     neighbours, neighbour_error = watch.stop()
     listener.join(timeout=lan.LISTEN_SECONDS + 10)
     if not heard:
@@ -1084,4 +1298,4 @@ def check_lan_audit(client: str = '', authorization: str = 'no', level2: str = '
                         neighbours=neighbours, ports=ports, broadcast=broadcast, heard=heard, level2=level2_on,
                         support=_support, vendors=lan.load_vendors(), neighbour_error=neighbour_error,
                         subnet_search=subnet_search, remote_discovery=remote, labels=_labels(client), dcs=dcs,
-                        vulns=_vulns if vuln_lookup == 'yes' else None)
+                        vulns=_vulns if vuln_lookup == 'yes' else None, policy=policy, extra=extra)

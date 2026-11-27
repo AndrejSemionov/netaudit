@@ -12,6 +12,8 @@ Tables:
   ssh_hosts      - saved SSH hosts for multi-host runs, never secrets (B2.3)
   lan_segments   - the auditor's names and sensitive marks for a client's
                    network segments (docs/research/network_audit.md §13)
+  lan_policy     - the owner's access rules per client, one immutable row
+                   per revision (docs/research/network_access_policy.md §7)
 
 Schema is versioned (PRAGMA user_version) - migrations are added to MIGRATIONS.
 DB: ~/.netaudit/netaudit.db
@@ -215,7 +217,21 @@ def _m6(conn: sqlite3.Connection) -> None:
     """)
 
 
-MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6]
+def _m7(conn: sqlite3.Connection) -> None:
+    # access rules per client (docs/research/network_access_policy.md §7):
+    # every save is a new revision; the current policy is the highest one
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS lan_policy (
+        client TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        rules TEXT NOT NULL,
+        saved_at TEXT NOT NULL,
+        PRIMARY KEY (client, revision)
+    );
+    """)
+
+
+MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7]
 
 
 def _seed_presets(conn: sqlite3.Connection) -> None:
@@ -820,6 +836,52 @@ def lan_segment_labels(client: str) -> dict:
     rows = _conn().execute('SELECT cidr, name, sensitive FROM lan_segments WHERE client=? ORDER BY cidr',
                            (client,)).fetchall()
     return {r['cidr']: {'name': r['name'], 'sensitive': bool(r['sensitive'])} for r in rows}
+
+
+def lan_policy_get(client: str) -> dict:
+    """{'client', 'revision', 'rules', 'saved_at'} of the current policy;
+    revision 0 and no rules before the first save."""
+    row = _conn().execute('SELECT revision, rules, saved_at FROM lan_policy WHERE client=? '
+                          'ORDER BY revision DESC LIMIT 1', (client,)).fetchone()
+    if not row:
+        return {'client': client, 'revision': 0, 'rules': [], 'saved_at': None}
+    return {'client': client, 'revision': row['revision'], 'rules': json.loads(row['rules']),
+            'saved_at': row['saved_at']}
+
+
+def lan_policy_save(client: str, rules) -> dict:
+    """Validate `rules` (lan_policy.validate) and save them as the client's
+    next revision. A rule keeps its id when the current revision has it;
+    any other gets the next free one - an id is never reused. The same
+    rules again make no new revision. Raises ValueError."""
+    from . import lan_policy
+    if not isinstance(client, str) or len(client) > LAN_CLIENT_MAX:
+        raise ValueError(f'client: at most {LAN_CLIENT_MAX} characters')
+    clean = lan_policy.validate(rules)
+    conn = _conn()
+    current = lan_policy_get(client)
+    current_ids = {r['id'] for r in current['rules']}
+    used = [int(r['id'][1:]) for row in conn.execute('SELECT rules FROM lan_policy WHERE client=?', (client,))
+            for r in json.loads(row['rules'])]
+    taken = {r['id'] for r in clean if r.get('id') in current_ids}
+    next_id = max(used, default=0) + 1
+    out = []
+    for rule in clean:
+        rid = rule.get('id')
+        if rid not in current_ids or rid not in taken:
+            rid = f'r{next_id}'
+            next_id += 1
+        else:
+            taken.discard(rid)              # a duplicated id: the second copy is a new rule
+        out.append({'id': rid, **{k: v for k, v in rule.items() if k != 'id'}})
+    if current['revision'] and out == current['rules']:
+        return current
+    revision = current['revision'] + 1
+    saved_at = datetime.now().isoformat(timespec='seconds')  # noqa: DTZ005 - existing SQLite rows use local naive timestamps
+    conn.execute('INSERT INTO lan_policy (client, revision, rules, saved_at) VALUES (?,?,?,?)',
+                 (client, revision, json.dumps(out, ensure_ascii=False), saved_at))
+    conn.commit()
+    return {'client': client, 'revision': revision, 'rules': out, 'saved_at': saved_at}
 
 
 def reports_with_check(check_id: str, limit: int = 200) -> list[dict]:

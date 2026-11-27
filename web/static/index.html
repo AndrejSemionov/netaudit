@@ -305,6 +305,15 @@
       <div class="wp-form" style="margin-top:12px"><button id="lanBtn" onclick="runLanAudit()" data-i18n="lan.start">Начать аудит</button></div>
       <div class="status" id="lanStatus"></div>
     </div>
+    <div class="settings-group">
+      <h2 data-i18n="lan.rules.title">Правила доступа</h2>
+      <p class="hint" data-i18n="lan.rules.hint">Что владелец сети разрешает и запрещает: откуда (подсеть или адрес) → куда и какая служба. Аудит сверит с правилами то, что ответит. Где правила нет, путь считается «неизвестно», а не «запрещено». Правила только сверяются — NetAudit ничего не меняет на устройствах.</p>
+      <div class="wp-form"><button onclick="loadLanRules()" data-i18n="lan.rules.load">Показать правила клиента</button>
+        <button onclick="addLanRule()" data-i18n="lan.rules.add">Добавить правило</button>
+        <button onclick="saveLanRules()" data-i18n="lan.rules.save">Сохранить правила</button></div>
+      <div id="lanRules"></div>
+      <div class="status" id="lanRulesStatus"></div>
+    </div>
     <div id="lanResult"></div>
   </div>
 </div>
@@ -2263,11 +2272,37 @@ function lanMapSvg(r) {
     svg += `<path d="M ${W - 16} ${y1} H ${x} V ${y2} H ${W - 16}" fill="none" style="stroke:var(--bad)" stroke-width="2" stroke-dasharray="6 4"/>`
       + `<text x="${W - 22}" y="${y2 + 16}" text-anchor="end" class="lan-sub" style="fill:var(--bad)">${t('lan.isolation')} ${segments[a.from].cidr}: ${a.ports.join(', ')}</text>`;
   });
+  // the owner's rules (docs/research/network_access_policy.md §8): a solid red arrow to where a
+  // forbidden service answers, a grey dashed one to where an allowed one does
+  const lanes = Object.keys(reach).length;
+  const policyArrows = {};
+  (r.findings || []).forEach(f => {
+    if (lanControl(f.id) !== 'NET-POL-001') return;
+    if (keyOf[f.from] === undefined || keyOf[f.segment] === undefined || f.from === f.segment) return;
+    ((policyArrows['forbid ' + f.from + ' ' + f.segment] ||= { kind: 'forbid', from: keyOf[f.from], to: keyOf[f.segment], ports: [] })
+      .ports).push(String(f.id).split(':').pop());
+  });
+  const ownSeg = segments.find(s => s.own);
+  const paths = r.policy && Array.isArray(r.policy.paths) ? r.policy.paths : [];
+  paths.forEach(x => {
+    if (x.decision !== 'allow' || !ownSeg || keyOf[x.segment] === undefined || x.segment === ownSeg.cidr) return;
+    ((policyArrows['allow ' + x.segment] ||= { kind: 'allow', from: keyOf[ownSeg.cidr], to: keyOf[x.segment], ports: [] })
+      .ports).push(x.port);
+  });
+  Object.values(policyArrows).forEach((a, n) => {
+    const x = W - 30 - (lanes + n) * 6;
+    const y1 = boxes[a.from].top + 34, y2 = boxes[a.to].top + 34;
+    const look = a.kind === 'forbid' ? 'stroke:var(--bad)" stroke-width="3' : 'stroke:var(--muted)" stroke-width="2" stroke-dasharray="3 4';
+    svg += `<path d="M ${W - 16} ${y1} H ${x} V ${y2} H ${W - 16}" fill="none" style="${look}"/>`
+      + `<text x="${W - 22}" y="${y2 - 6 - n * 13}" text-anchor="end" class="lan-sub" style="fill:${a.kind === 'forbid' ? 'var(--bad)' : 'var(--muted)'}">${t(a.kind === 'forbid' ? 'lan.legend.violation' : 'lan.legend.allowed')}: ${a.ports.join(', ')}</text>`;
+  });
   svg += '</svg>';
   const legend = [['var(--bad)', 'lan.legend.bad'], ['var(--warn)', 'lan.legend.warn'], ['var(--ok)', 'lan.legend.ok'],
     ['var(--muted)', 'lan.legend.quiet']].map(([c, k]) => `<span><span class="lan-dot" style="background:${c}"></span>${t(k)}</span>`).join('')
     + `<span><span class="lan-dot" style="border:2px dashed var(--warn)"></span>${t('lan.legend.gaps')}</span>`
-    + `<span><span class="lan-dot" style="border:2px dashed var(--bad);border-radius:2px"></span>${t('lan.legend.isolation')}</span>`;
+    + `<span><span class="lan-dot" style="border:2px dashed var(--bad);border-radius:2px"></span>${t('lan.legend.isolation')}</span>`
+    + `<span><span class="lan-dot" style="border:3px solid var(--bad);border-radius:2px"></span>${t('lan.legend.violation')}</span>`
+    + `<span><span class="lan-dot" style="border:2px dotted var(--muted);border-radius:2px"></span>${t('lan.legend.allowed')}</span>`;
   return svg + `<div class="lan-legend">${legend}</div>`;
 }
 
@@ -2307,6 +2342,7 @@ function lanHtml(r) {
         <div><span>${t('lan.router')}</span>${routerText}</div>
         <div><span>${t('lan.devices')}</span>${stats.devices ?? 0}</div>
       </div>
+      <div class="timing">${t('lan.origin')} ${v.address || ''} (${v.interface || ''}). ${t('lan.external')} ${v.subnet || r.scanned || ''}.</div>
       ${r.scan_note ? `<div class="timing">${r.scan_note}</div>` : ''}
       ${Array.isArray(r.vantages) ? `<div class="timing">${t('lan.merged')}: ${r.vantages.map(x => `${x.subnet} (${x.timestamp})`).join('; ')}</div>` : ''}
     </div></div></div>`;
@@ -2323,6 +2359,18 @@ function lanHtml(r) {
       <th>${t('lan.seg.name')}</th><th></th><th>${t('lan.devices')}</th><th></th><th></th></tr>${segRows}</table>
       <div class="status" id="lanSegStatus"></div>
       <div class="wp-form" style="margin-top:10px"><button onclick="loadLanMerged()">${t('lan.merge')}</button></div></div>`;
+  }
+  const pol = r.policy;
+  if (pol && Array.isArray(pol.paths)) {
+    const counts = { forbid: 0, conflict: 0, allow: 0, unknown: 0 };
+    pol.paths.forEach(x => { if (Object.hasOwn(counts, x.decision)) counts[x.decision] += 1; });
+    const others = (Array.isArray(pol.rules) ? pol.rules.length : 0) - (Array.isArray(pol.applicable) ? pol.applicable.length : 0);
+    const allowedRows = pol.paths.filter(x => x.decision === 'allow').map(x => `<tr><td>${x.destination}</td>
+      <td>${x.service} · ${x.port}</td><td>${(x.rules || []).join(', ')}</td></tr>`).join('');
+    html += `<div class="card"><h2>${t('lan.policy.title')}</h2>
+      <p class="timing">${t('lan.policy.revision')} ${pol.revision ?? '—'} · ${t('lan.policy.from')} ${pol.source || ''}${others > 0 ? ` · ${t('lan.policy.other_places')}: ${others}` : ''}</p>
+      <div class="wp-facts">${['forbid', 'conflict', 'allow', 'unknown'].map(k => `<div><span>${t('lan.policy.decision.' + k)}</span>${counts[k]}</div>`).join('')}</div>
+      ${allowedRows ? `<table><tr><th>${t('lan.col.ip')}</th><th>${t('lan.rules.col.service')}</th><th>${t('lan.rules.title')}</th></tr>${allowedRows}</table>` : ''}</div>`;
   }
   const findings = (r.findings || []).filter(f => f.severity !== 'ok');
   if (findings.length) {
@@ -2409,6 +2457,97 @@ async function loadLanMerged() {
   switchTab('lan');
   status.textContent = '';
   out.innerHTML = renderLan(data);
+}
+
+// the owner's access rules (docs/research/network_access_policy.md §8): kept as
+// the server sent them, written into the page only by renderLanRules()
+let LAN_RULES = [];
+let LAN_RULES_CLIENT = null;
+const LAN_SERVICES = ['any', 'SMB', 'RDP', 'WinRM', 'VNC', 'SSH', 'NFS', 'rsync', 'SQL Server', 'Oracle', 'MySQL',
+  'PostgreSQL', 'Redis', 'Elasticsearch', 'memcached', 'MongoDB', 'tcp/'];
+
+function renderLanRules(rules) {
+  rules = escDeep(rules);
+  const box = document.getElementById('lanRules');
+  if (!box) return;
+  const rows = rules.map((r, i) => {
+    const allow = r.decision === 'allow';
+    return `<tr><td class="timing">${r.id || ''}</td>
+      <td><input id="lanRuleSrc${i}" type="text" maxlength="43" value="${r.source || ''}" placeholder="${t('lan.rules.any')}"></td>
+      <td><input id="lanRuleDst${i}" type="text" maxlength="43" value="${r.destination || ''}" placeholder="${t('lan.rules.any')}"></td>
+      <td><input id="lanRuleSvc${i}" type="text" maxlength="20" list="lanServices" value="${r.service || 'any'}"></td>
+      <td><select id="lanRuleDec${i}"><option value="forbid"${allow ? '' : ' selected'}>${t('lan.rules.decision.forbid')}</option>
+        <option value="allow"${allow ? ' selected' : ''}>${t('lan.rules.decision.allow')}</option></select></td>
+      <td><input id="lanRuleNote${i}" type="text" maxlength="200" value="${r.note || ''}"></td>
+      <td><button onclick="removeLanRule(${i})">${t('lan.rules.remove')}</button></td></tr>`;
+  }).join('');
+  const services = LAN_SERVICES.map(s => `<option value="${s}"></option>`).join('');
+  box.innerHTML = `<datalist id="lanServices">${services}</datalist>`
+    + (rows ? `<table><tr><th>id</th><th>${t('lan.rules.col.source')}</th><th>${t('lan.rules.col.destination')}</th>
+      <th>${t('lan.rules.col.service')}</th><th>${t('lan.rules.col.decision')}</th><th>${t('lan.rules.col.note')}</th><th></th></tr>${rows}</table>`
+      : `<p class="timing">${t('lan.rules.empty')}</p>`)
+    + `<p class="hint">${t('lan.rules.no_secrets')}</p>`;
+}
+
+// what is in the inputs now, as text for the server; a rule keeps its id
+function readLanRules() {
+  return LAN_RULES.map((r, i) => {
+    const out = {
+      source: document.getElementById('lanRuleSrc' + i).value.trim(),
+      destination: document.getElementById('lanRuleDst' + i).value.trim(),
+      service: document.getElementById('lanRuleSvc' + i).value.trim(),
+      decision: document.getElementById('lanRuleDec' + i).value,
+      note: document.getElementById('lanRuleNote' + i).value.trim(),
+    };
+    if (r.id) out.id = r.id;
+    return out;
+  });
+}
+
+async function loadLanRules() {
+  const status = document.getElementById('lanRulesStatus');
+  const client = document.getElementById('lanClient').value.trim();
+  const res = await fetch('/api/lan/policy?client=' + encodeURIComponent(client));
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data) {
+    status.textContent = t('run.error') + ': ' + t('run.unknown');
+    return;
+  }
+  LAN_RULES = Array.isArray(data.rules) ? data.rules : [];
+  LAN_RULES_CLIENT = client;
+  status.textContent = data.revision ? t('lan.rules.revision') + ' ' + data.revision : t('lan.rules.empty');
+  renderLanRules(LAN_RULES);
+}
+
+function addLanRule() {
+  if (LAN_RULES_CLIENT === null) LAN_RULES_CLIENT = document.getElementById('lanClient').value.trim();
+  LAN_RULES = readLanRules();
+  LAN_RULES.push({ source: '', destination: '', service: 'any', decision: 'forbid', note: '' });
+  renderLanRules(LAN_RULES);
+}
+
+function removeLanRule(i) {
+  LAN_RULES = readLanRules();
+  LAN_RULES.splice(i, 1);
+  renderLanRules(LAN_RULES);
+}
+
+async function saveLanRules() {
+  const status = document.getElementById('lanRulesStatus');
+  const client = LAN_RULES_CLIENT === null ? document.getElementById('lanClient').value.trim() : LAN_RULES_CLIENT;
+  const res = await fetch('/api/lan/policy', {
+    method: 'PUT', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ client, rules: readLanRules() })
+  });
+  const answer = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    status.textContent = t('run.error') + ': ' + (answer.detail || t('run.unknown'));
+    return;
+  }
+  LAN_RULES = Array.isArray(answer.rules) ? answer.rules : [];
+  LAN_RULES_CLIENT = client;
+  status.textContent = t('lan.rules.saved') + ' ' + answer.revision;
+  renderLanRules(LAN_RULES);
 }
 
 function lanDeviceCard(d, all) {

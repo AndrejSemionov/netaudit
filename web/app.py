@@ -536,6 +536,29 @@ async def api_lan_segment_set(request: Request) -> dict:
     return {'ok': True}
 
 
+# --- Network audit: the owner's access rules (docs/research/network_access_policy.md §7) ---
+@app.get('/api/lan/policy')
+def api_lan_policy(client: str = '') -> dict:
+    return storage.lan_policy_get(client)
+
+
+@app.put('/api/lan/policy')
+async def api_lan_policy_set(request: Request) -> dict:
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(400, 'the body must be a JSON object') from None
+    if not isinstance(payload, dict):
+        raise HTTPException(400, 'the body must be a JSON object')
+    client, rules = payload.get('client', ''), payload.get('rules')
+    if not isinstance(client, str) or not isinstance(rules, list):
+        raise HTTPException(400, 'client is text, rules is a list')
+    try:
+        return storage.lan_policy_save(client, rules)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
 @app.get('/api/lan/merged')
 def api_lan_merged(client: str = '') -> dict:
     reports = [r for r in storage.reports_with_check('lan_audit')

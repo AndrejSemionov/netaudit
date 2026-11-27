@@ -261,6 +261,19 @@ well treat the two addresses differently.
 - Device findings (`NET-SMB-001`, `NET-VULN-*`…) are about the device itself.
   The policy never hides them.
 
+**As built in PR A:**
+
+- Every (device, port) a rule **decides** leaves `NET-SEG-001`: allowed,
+  forbidden (it becomes `NET-POL-001`) and conflict (`NET-POL-002`). The
+  same exposure is never counted twice. `NET-SEG-001` is the observation
+  for paths the owner has said nothing about.
+- The router is a destination like any device (a forbid on WinBox from the
+  guests is a violation); this machine never is.
+- A source rule is judged only when it contains the vantage address; the
+  other rules are listed as "for other places".
+- Each host gets only the extra ports of the forbid rules whose destination
+  holds it: one extra `nmap -sT` run per set of ports, no scripts.
+
 ### 3.5 What the policy cannot see
 
 - Internet exposure: "external" in this tab means **the source segment that
