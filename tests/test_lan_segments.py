@@ -363,3 +363,9 @@ def test_merge_keeps_a_label_over_an_unlabelled_later_view():
     buh = next(s for s in merged['segments'] if s['cidr'] == BUH)
     assert (buh['name'], buh['sensitive']) == ('Бухгалтерия', True)
 
+
+def test_a_mixed_segment_gets_no_kind_based_name():
+    """Browser check of PR 2: one device of each kind is not "Printers"."""
+    assert lan_audit._suggest([{'names': [], 'kind': k} for k in ('printer', 'windows', 'phone', 'nas')]) is None
+    assert lan_audit._suggest([{'names': [], 'kind': k} for k in ('printer', 'printer', 'windows')]) == 'printers'
+
