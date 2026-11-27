@@ -212,8 +212,10 @@ def osv_debian(ecosystem: str, package: str, version: str) -> tuple[dict | None,
     """({'fixed': [CVE...], 'unfixed': [CVE...]}, None) - the records
     affecting this exact Debian package version, split into fixed in a newer
     revision and not fixed yet, both by id (review #67 R1: an unfixed one is
-    reported and matched against KEV too) - or (None, why)."""
-    key = f'osvdeb2::{ecosystem}::{package}::{version}'
+    reported and matched against KEV too) - or (None, why). Only the entry
+    for this release counts: a record lists every Debian release, and a fix
+    in Debian 13 does not fix Debian 12 (review #67 R3)."""
+    key = f'osvdeb3::{ecosystem}::{package}::{version}'      # osvdeb2 ignored the release
     cached = _cached(key)
     if cached is not None:
         return cached, None
@@ -230,6 +232,7 @@ def osv_debian(ecosystem: str, package: str, version: str) -> tuple[dict | None,
         has_fix = any(isinstance(ev, dict) and ev.get('fixed')
                       for a in record.get('affected') or [] if isinstance(a, dict)
                       and (a.get('package') or {}).get('name') == package
+                      and (a.get('package') or {}).get('ecosystem') == ecosystem
                       for r in a.get('ranges') or [] if isinstance(r, dict)
                       for ev in r.get('events') or [])
         cves = [x for x in record.get('aliases') or [] if _CVE.fullmatch(str(x))]

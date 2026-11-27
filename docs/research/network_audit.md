@@ -548,7 +548,10 @@ USER 2026-11-27: «давай pr2 и потом 3». Built as §7.2 says:
   by id, low and to check by hand in Debian's security tracker (many are
   minor or need a setting), high when one is in CISA KEV; mitigation, not
   `apt upgrade`. It is reported whether or not the package also has fixable
-  ones. A record without a CVE keeps its own id (`DLA-...`).
+  ones. A record without a CVE keeps its own id (`DLA-...`). An OSV record
+  lists every Debian release it touches, each with its own ranges; only the
+  entry for the queried release decides fixed or not - a fix in Debian 13
+  does not fix Debian 12 (review #67 R3). Answers are cached per release.
 - **Router**: RouterOS CVEs from NVD as `RTR-VULN-001:<cve>` (possible).
 - **CISA KEV**: a CVE in the catalog raises the finding to at least high and
   says "exploited in the wild"; the catalog is downloaded at most once a day
