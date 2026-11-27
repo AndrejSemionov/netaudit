@@ -550,7 +550,9 @@ def _suggest(devs: list[dict]) -> str | None:
         return None
     if all(k == 'phone' for k in kinds):
         return 'guests'
-    top = max(set(kinds), key=kinds.count)
+    top = max(sorted(set(kinds)), key=kinds.count)
+    if kinds.count(top) * 2 <= len(kinds):
+        return None                     # no kind is the majority: no guess
     return {'printer': 'printers', 'server': 'servers', 'nas': 'servers', 'domain_controller': 'servers',
             'windows': 'staff'}.get(top)
 
