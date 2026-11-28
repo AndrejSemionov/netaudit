@@ -31,10 +31,12 @@ def merge(reports: list[dict]) -> dict:
     chosen = sorted(latest.values(), key=lambda item: item[0])
     if not chosen:
         return {'merged': True, 'verdict': 'not_started', 'error': 'no network audit of this client yet',
-                'vantages': [], 'segments': [], 'devices': [], 'findings': [], 'checked': []}
+                'vantages': [], 'segments': [], 'devices': [], 'findings': [], 'checked': [], 'policy': None}
 
     vantages, segments, devices, findings, checked, limits = [], {}, {}, {}, [], []
     loose = []
+    # each audit's rules context stays its own (docs/research/network_access_policy.md, review PR A A3)
+    policies, policy_paths = [], []
     for stamp, result in chosen:
         v = result.get('vantage') or {}
         subnet = _vantage_subnet(result)
@@ -59,6 +61,13 @@ def merge(reports: list[dict]) -> dict:
             else:
                 loose.append(f)
         checked += [{**c, 'detail': f"{subnet}: {c.get('detail', '')}"} for c in result.get('checked', [])]
+        policy = result.get('policy')
+        if isinstance(policy, dict):
+            policies.append({'subnet': subnet, 'source': policy.get('source'), 'timestamp': stamp,
+                             'revision': policy.get('revision'), 'rules': policy.get('rules', []),
+                             'applicable': policy.get('applicable', []), 'gaps': policy.get('gaps', [])})
+            policy_paths += [{**x, 'timestamp': stamp, 'revision': policy.get('revision')}
+                             for x in policy.get('paths', [])]
         limits += [x for x in result.get('limits', []) if x not in limits]
     last = chosen[-1][1]
     all_findings = list(findings.values()) + loose
@@ -71,6 +80,7 @@ def merge(reports: list[dict]) -> dict:
         'segments': list(segments.values()), 'devices': sorted(devices.values(), key=lambda d: d['ip']),
         'findings': all_findings, 'checked': checked, 'limits': limits,
         'stats': {'devices': len(devices)}, 'next_steps': last.get('next_steps', []),
+        'policy': {'merged': True, 'vantages': policies, 'paths': policy_paths} if policies else None,
         'score': webprobe.score(all_findings, checked), 'verdict': webprobe.verdict(all_findings, checked),
         'summary': webprobe.summary(all_findings),
     }

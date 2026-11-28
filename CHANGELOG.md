@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Network audit, access rules: per client, the owner says from where (a
+  subnet or an address) to where which service is allowed or forbidden -
+  in the tab ("Access rules") or `netaudit lan-policy show|set --client X
+  [--file rules.json]`; every save is a revision. The audit judges every
+  open port by the rules that apply from the machine it runs on: a forbidden
+  service that answers is `NET-POL-001` (access to the service, not a
+  login), two equally specific rules that disagree are `NET-POL-002`, a
+  path no rule covers stays "unknown" and keeps its isolation finding; a
+  sensitive mark alone is not a rule. Ports a forbid rule names are probed
+  on its destinations (at most 20 more a run); what the rules could not
+  check is named as not checked. Each device now records which ports were
+  probed and how they answered (open, closed, filtered). The report says
+  where the scan ran from and that the internet is not tested. Nothing is
+  ever changed on a device.
+
 ## 1.4.0 — 2026-11-27
 
 - Network audit: a new **Network audit** tab and the check `lan_audit` for

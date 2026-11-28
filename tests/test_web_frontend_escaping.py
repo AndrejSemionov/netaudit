@@ -52,6 +52,7 @@ HTML_WRITERS = {
     'runLanAudit': 'escapes',  # renderLan(): escDeep() + lanHtml() (docs/research/network_audit.md)
     'showLanDevice': 'escapes',  # LAN_VIEW: the copy renderLan()/renderResult() escaped once
     'loadLanMerged': 'escapes',  # renderLan(): escDeep() + lanHtml() of the merged view (network_audit.md §13)
+    'renderLanRules': 'escapes',  # the access rules: every value through esc() (network_access_policy.md §8)
 }
 
 # Interpolations allowed inside inline on*="..." handlers: check/tool ids from

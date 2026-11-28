@@ -18,15 +18,19 @@ from tests.test_web_wordpress_tab import INDEX, _lang_block
 CATALOGUE = (Path(__file__).resolve().parents[1] / 'docs' / 'checks' / 'finding_ids.md').read_text()
 CONTROLS = re.findall(r'^\| ((?:NET|RTR)-[A-Z]+-\d{3}) \|', CATALOGUE, re.MULTILINE)
 ITEMS = ('discovery', 'range', 'neighbours', 'services', 'broadcast', 'mndp', 'llmnr', 'router', 'router_support',
-         'level2')
-LIMITS = ('udp', 'os_detection', 'other_subnets', 'known_vulns', 'vuln_versions', 'level2')
+         'level2', 'access_policy')
+LIMITS = ('udp', 'os_detection', 'other_subnets', 'known_vulns', 'vuln_versions', 'level2', 'access_policy',
+          'access_policy_here')
 KINDS = ('router', 'this_machine', 'windows', 'printer', 'camera', 'nas', 'server', 'phone', 'network', 'unknown')
 NEXT = ('router_ssh', 'saved_hosts', 'level2', 'other_vantage')
 VERDICTS = ('ok', 'warn', 'danger', 'incomplete', 'not_started')
 
 
 def test_every_catalogued_control_is_read_by_the_tab():
-    assert len(CONTROLS) == 24       # PR 1: 18, PR 2: NET-SEG-001/002, PR 3: NET-VULN-001/002/003, RTR-VULN-001
+    # PR 1: 18, PR 2: NET-SEG-001/002, PR 3: NET-VULN-001/002/003, RTR-VULN-001,
+    # access policy PR A: NET-POL-001/002
+    assert len(CONTROLS) == 26
+    assert {'NET-POL-001', 'NET-POL-002'} <= set(CONTROLS)
 
 
 def test_tab_button_and_page():
@@ -168,3 +172,89 @@ def test_known_vulnerabilities_and_data_notices_in_the_tab():
             assert f"'{key}':" in block, (lang, key)
     view = _functions(_script())['lanHtml']
     assert 'r.notices' in view and '.notice' in view
+
+
+def test_access_rules_panel_in_the_tab():
+    """Access policy PR A (docs/research/network_access_policy.md §8): the
+    owner's rules per client, edited in the tab and saved as a revision."""
+    page = INDEX[INDEX.index('id="tab-lan"'):INDEX.index('id="tab-trends"')]
+    for part in ('id="lanRules"', 'onclick="loadLanRules()"', 'onclick="addLanRule()"', 'onclick="saveLanRules()"',
+                 'id="lanRulesStatus"', 'data-i18n="lan.rules.title"', 'data-i18n="lan.rules.hint"'):
+        assert part in page, part
+    keys = ['lan.rules.title', 'lan.rules.hint', 'lan.rules.load', 'lan.rules.add', 'lan.rules.save',
+            'lan.rules.saved', 'lan.rules.remove', 'lan.rules.empty', 'lan.rules.revision', 'lan.rules.no_secrets',
+            'lan.rules.col.source', 'lan.rules.col.destination', 'lan.rules.col.service', 'lan.rules.col.decision',
+            'lan.rules.col.note', 'lan.rules.decision.allow', 'lan.rules.decision.forbid', 'lan.rules.any']
+    for lang in ('ru', 'en'):
+        block = _lang_block(lang)
+        for key in keys:
+            assert f"'{key}':" in block, (lang, key)
+    functions = _functions(_script())
+    load = functions['loadLanRules']
+    assert "fetch('/api/lan/policy?client=' + encodeURIComponent(" in load and 'renderLanRules(' in load
+    save = functions['saveLanRules']
+    assert "fetch('/api/lan/policy'" in save and "method: 'PUT'" in save and 'innerHTML' not in save
+    assert 'readLanRules(' in save
+    render = functions['renderLanRules']
+    assert 'rules = escDeep(rules);' in render and 'removeLanRule(${i})' in render
+    assert HTML_WRITERS.get('renderLanRules') == 'escapes'
+    read = functions['readLanRules']
+    assert '.value' in read and 'innerHTML' not in read
+
+
+def test_policy_results_origin_and_arrows_in_the_tab():
+    """§8: the Policy section, where the scan starts from, what "another
+    segment" means, and violations / allowed paths on the map."""
+    keys = ['lan.policy.title', 'lan.policy.revision', 'lan.policy.from', 'lan.policy.other_places',
+            'lan.policy.decision.allow', 'lan.policy.decision.forbid', 'lan.policy.decision.conflict',
+            'lan.policy.decision.unknown', 'lan.origin', 'lan.external', 'lan.legend.violation',
+            'lan.legend.allowed']
+    for lang in ('ru', 'en'):
+        block = _lang_block(lang)
+        for key in keys:
+            assert f"'{key}':" in block, (lang, key)
+    functions = _functions(_script())
+    view = functions['lanHtml']
+    assert 'r.policy' in view and "t('lan.origin')" in view and "t('lan.external')" in view
+    svg = functions['lanMapSvg']
+    assert "'NET-POL-001'" in svg and 'f.from' in svg and 'f.segment' in svg
+    assert 'r.policy' in svg and "'allow'" in svg
+
+
+def test_the_rules_editor_saves_only_what_it_loaded():
+    """Review PR A A1: an editor that never loaded a client's rules cannot
+    save or add over them; a save names the revision it edits."""
+    for lang in ('ru', 'en'):
+        assert "'lan.rules.load_first':" in _lang_block(lang), lang
+    functions = _functions(_script())
+    save, add = functions['saveLanRules'], functions['addLanRule']
+    assert 'base_revision: LAN_RULES_REV' in save
+    assert "if (LAN_RULES_REV === null)" in save and "t('lan.rules.load_first')" in save
+    assert "if (LAN_RULES_REV === null)" in add and "t('lan.rules.load_first')" in add
+    assert 'LAN_RULES_REV = ' in functions['loadLanRules']
+
+
+def test_merged_policy_and_allowed_arrows_from_each_place():
+    """Review PR A A3: the merged view shows each audit's rules revision and
+    draws an allowed path from the segment it was seen from."""
+    functions = _functions(_script())
+    assert 'pol.vantages' in functions['lanHtml']
+    svg = functions['lanMapSvg']
+    assert 'keyOf[x.from]' in svg and 'ownSeg' not in svg
+
+
+def test_the_rules_editor_does_one_thing_at_a_time():
+    """Review PR A pass 2 (A1, async): while a load or a save is in flight
+    nothing else is loaded, added, removed or saved, the table is locked,
+    and an answer that is no longer the editor's is dropped. The runtime
+    proof is tests/test_web_lan_rules_runtime.py (node, on CI)."""
+    for lang in ('ru', 'en'):
+        assert "'lan.rules.busy':" in _lang_block(lang), lang
+    functions = _functions(_script())
+    for name in ('loadLanRules', 'saveLanRules', 'addLanRule', 'removeLanRule'):
+        assert 'if (LAN_RULES_BUSY)' in functions[name], name
+    for name in ('loadLanRules', 'saveLanRules'):
+        body = functions[name]
+        assert 'finally' in body and 'const ticket = ++LAN_RULES_TICKET;' in body, name
+        assert 'if (ticket !== LAN_RULES_TICKET) return;' in body, name
+    assert 'id="lanRulesSet"' in functions['renderLanRules']

@@ -592,6 +592,47 @@ def cmd_trend(args):
         _print_trend(trend)
 
 
+def cmd_lan_policy(args):
+    """The owner's access rules for one client's network
+    (docs/research/network_access_policy.md §7): show them, or save a JSON
+    file of rules as the next revision. Nothing is sent to any device."""
+    if args.action == 'set':
+        if not args.file:
+            print('lan-policy set needs --file with a JSON list of rules', file=sys.stderr)
+            sys.exit(2)
+        try:
+            with open(args.file, encoding='utf-8') as f:
+                rules = json.load(f)
+            before = storage.lan_policy_get(args.client)
+            saved = storage.lan_policy_save(args.client, rules, base_revision=before['revision'])
+        except (OSError, ValueError) as e:      # json.JSONDecodeError is a ValueError
+            print(f'Rules not saved: {e}', file=sys.stderr)
+            sys.exit(2)
+        if saved['revision'] == before['revision']:
+            print(f"Unchanged: {args.client} stays at revision {saved['revision']}.")
+        else:
+            old = {r['id'] for r in before['rules']}
+            new = {r['id'] for r in saved['rules']}
+            print(f"Saved {args.client}: revision {saved['revision']} ({len(saved['rules'])} rules; "
+                  f"added {', '.join(sorted(new - old)) or 'none'}, removed {', '.join(sorted(old - new)) or 'none'}).")
+        _print_lan_rules(saved)
+        return
+    current = storage.lan_policy_get(args.client)
+    if args.json:
+        print(json.dumps(current, ensure_ascii=False, indent=2))
+    elif not current['rules']:
+        print(f'No access rules for {args.client!r} yet: paths are not judged (netaudit lan-policy set).')
+    else:
+        print(f"{args.client}: revision {current['revision']}, saved {current['saved_at']}")
+        _print_lan_rules(current)
+
+
+def _print_lan_rules(policy: dict) -> None:
+    for r in policy['rules']:
+        note = f"  # {r['note']}" if r.get('note') else ''
+        print(f"  {r['id']:<5} {r['decision']:<7} {r['source']:<18} -> {r['destination']:<18} {r['service']}{note}")
+
+
 def cmd_tools(args):
     from netaudit_pkg import tools as toolsmod
     for t in toolsmod.tools_status():
@@ -851,6 +892,13 @@ def build_parser(detailed: bool = True):
     p_trend.add_argument('--key', help='Identity key (host, url, domain, ...) if the value is ambiguous')
     p_trend.add_argument('--json', action='store_true', help='Machine-readable output')
     p_trend.set_defaults(func=cmd_trend)
+
+    p_lanp = sub.add_parser('lan-policy', help="The owner's access rules for a client's network")
+    p_lanp.add_argument('action', choices=['show', 'set'], help='show the rules, or set them from a JSON file')
+    p_lanp.add_argument('--client', default='', help='Client / network name, as in the network audit')
+    p_lanp.add_argument('--file', help='set: a JSON list of rules (source, destination, service, decision, note)')
+    p_lanp.add_argument('--json', action='store_true', help='show: machine-readable output')
+    p_lanp.set_defaults(func=cmd_lan_policy)
 
     p_tools = sub.add_parser('tools', help='Status of external tools')
     p_tools.set_defaults(func=cmd_tools)
